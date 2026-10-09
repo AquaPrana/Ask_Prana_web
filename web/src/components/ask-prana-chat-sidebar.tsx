@@ -13,6 +13,7 @@ import {
 } from "react-native";
 import Feather from "@expo/vector-icons/Feather";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { createPortal } from "react-dom";
 import { useRouter } from "expo-router";
 import { useTranslation } from "react-i18next";
 import { UserAvatar } from "./user-avatar";
@@ -74,7 +75,6 @@ type Props = {
 
 type ChatHistoryContextMenuProps = {
   pinned: boolean;
-  opensUpward: boolean;
   onTogglePin: () => void;
   onEdit: () => void;
   onDelete: () => void;
@@ -82,7 +82,6 @@ type ChatHistoryContextMenuProps = {
 
 function ChatHistoryContextMenu({
   pinned,
-  opensUpward,
   onTogglePin,
   onEdit,
   onDelete,
@@ -90,8 +89,7 @@ function ChatHistoryContextMenu({
   const { t } = useTranslation();
   return (
     <View
-      nativeID="ask-prana-chat-history-menu"
-      style={[styles.itemMenu, opensUpward && styles.itemMenuUpward]}
+      style={styles.itemMenuContent}
     >
       <Pressable
         onPress={onTogglePin}
@@ -165,6 +163,9 @@ export function AskPranaChatSidebar({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [menuSessionId, setMenuSessionId] = useState<string | null>(null);
   const [menuSource, setMenuSource] = useState<"pinned" | "history" | null>(null);
+  const [menuPosition, setMenuPosition] = useState<{ left: number; top: number } | null>(null);
+  const [hoveredSessionId, setHoveredSessionId] = useState<string | null>(null);
+  const [focusedSessionId, setFocusedSessionId] = useState<string | null>(null);
   const [renamingSession, setRenamingSession] =
     useState<AskPranaSessionSummary | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -174,7 +175,54 @@ export function AskPranaChatSidebar({
   const [pinsLoaded, setPinsLoaded] = useState(false);
   const historyRequestIdRef = useRef(0);
   const historyInflightRef = useRef<Promise<void> | null>(null);
+  const menuTriggerRefs = useRef<Record<string, View | null>>({});
   const normalizedSearch = searchText.trim().toLocaleLowerCase();
+
+  const closeContextMenu = useCallback((restoreFocus = false) => {
+    const trigger = menuSessionId ? menuTriggerRefs.current[menuSessionId] : null;
+    setMenuSessionId(null);
+    setMenuSource(null);
+    setMenuPosition(null);
+    if (restoreFocus && Platform.OS === "web") {
+      setTimeout(() => {
+        (trigger as unknown as { focus?: () => void } | null)?.focus?.();
+      }, 0);
+    }
+  }, [menuSessionId]);
+
+  const openContextMenu = useCallback((sessionId: string, source: "pinned" | "history") => {
+    if (menuSessionId === sessionId && menuSource === source) {
+      closeContextMenu(true);
+      return;
+    }
+
+    setMenuSessionId(sessionId);
+    setMenuSource(source);
+    setMenuPosition(null);
+
+    const placeMenu = () => {
+      const trigger = menuTriggerRefs.current[sessionId];
+      trigger?.measureInWindow?.((x, y, width, height) => {
+        const menuWidth = 176;
+        const menuHeight = 144;
+        const gutter = 8;
+        const viewportWidth = window.innerWidth;
+        const viewportHeight = window.innerHeight;
+        const right = x + width + gutter;
+        const left = right + menuWidth <= viewportWidth - gutter
+          ? right
+          : Math.max(gutter, x - menuWidth - gutter);
+        const top = y + menuHeight <= viewportHeight - gutter
+          ? y
+          : Math.max(gutter, y + height - menuHeight);
+        setMenuPosition({ left, top });
+      });
+    };
+
+    if (Platform.OS === "web") {
+      window.requestAnimationFrame(placeMenu);
+    }
+  }, [closeContextMenu, menuSessionId, menuSource]);
 
   useEffect(() => {
     void (async () => {
@@ -195,11 +243,10 @@ export function AskPranaChatSidebar({
   useEffect(() => {
     if (!menuSessionId || Platform.OS !== "web") return;
     const closeMenu = () => {
-      setMenuSessionId(null);
-      setMenuSource(null);
+      closeContextMenu();
     };
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") closeMenu();
+      if (event.key === "Escape") closeContextMenu(true);
     };
     const closeOnPointerDown = (event: MouseEvent) => {
       const target = event.target as Element | null;
@@ -213,11 +260,19 @@ export function AskPranaChatSidebar({
     };
     window.addEventListener("keydown", closeOnEscape);
     window.addEventListener("mousedown", closeOnPointerDown);
+    window.addEventListener("scroll", closeMenu, true);
+    window.addEventListener("resize", closeMenu);
     return () => {
       window.removeEventListener("keydown", closeOnEscape);
       window.removeEventListener("mousedown", closeOnPointerDown);
+      window.removeEventListener("scroll", closeMenu, true);
+      window.removeEventListener("resize", closeMenu);
     };
-  }, [menuSessionId]);
+  }, [closeContextMenu, menuSessionId]);
+
+  useEffect(() => {
+    if (!visible) closeContextMenu();
+  }, [closeContextMenu, visible]);
 
   const loadHistory = useCallback(
     async (cursor?: string | null) => {
@@ -350,8 +405,7 @@ export function AskPranaChatSidebar({
   };
 
   const openSession = async (sessionId: string) => {
-    setMenuSessionId(null);
-    setMenuSource(null);
+    closeContextMenu();
     await openConversation(sessionId);
     if (!isDesktop) onClose();
   };
@@ -383,7 +437,7 @@ export function AskPranaChatSidebar({
       return next;
     });
     setDeletingSession(null);
-    setMenuSessionId(null);
+    closeContextMenu();
     await loadHistory();
   };
 
@@ -395,9 +449,42 @@ export function AskPranaChatSidebar({
       void AsyncStorage.setItem(PINNED_CHATS_STORAGE_KEY, JSON.stringify(next));
       return next;
     });
-    setMenuSessionId(null);
-    setMenuSource(null);
+    closeContextMenu();
   };
+
+  const menuSession = menuSessionId
+    ? sessions.find((session) => session.id === menuSessionId) ?? null
+    : null;
+  const floatingMenu = menuSession && menuPosition ? (
+    <View
+      nativeID="ask-prana-chat-history-menu"
+      style={[
+        styles.itemMenu,
+        {
+          position: "fixed",
+          left: menuPosition.left,
+          top: menuPosition.top,
+          right: undefined,
+          bottom: undefined,
+          zIndex: 1000,
+        } as unknown as ViewStyle,
+      ]}
+    >
+      <ChatHistoryContextMenu
+        pinned={pinnedSessionIds.includes(menuSession.id)}
+        onTogglePin={() => togglePinned(menuSession.id)}
+        onEdit={() => {
+          setRenamingSession(menuSession);
+          setRenameValue(getStatus(menuSession.title) === "ready" ? displayText(menuSession.title) : "");
+          closeContextMenu();
+        }}
+        onDelete={() => {
+          setDeletingSession(menuSession);
+          closeContextMenu();
+        }}
+      />
+    </View>
+  ) : null;
 
   const content = (
     <View style={[styles.sidebar, isDesktop && styles.desktopSidebar]}>
@@ -476,8 +563,12 @@ export function AskPranaChatSidebar({
           {pinnedSessions.length > 0 ? (
             <View style={styles.group}>
               <Text style={styles.groupLabel}>{t("askPrana.pinned")}</Text>
-              {pinnedSessions.map((session, index) => {
-                const menuOpensUpward = index >= pinnedSessions.length - 2;
+              {pinnedSessions.map((session) => {
+                const showMenuButton =
+                  !isDesktop ||
+                  hoveredSessionId === session.id ||
+                  focusedSessionId === session.id ||
+                  (menuSessionId === session.id && menuSource === "pinned");
                 return (
                 <View
                   key={`pinned-${session.id}`}
@@ -488,6 +579,8 @@ export function AskPranaChatSidebar({
                 >
                 <Pressable
                   onPress={() => void openSession(session.id)}
+                  onHoverIn={() => setHoveredSessionId(session.id)}
+                  onHoverOut={() => setHoveredSessionId((current) => current === session.id ? null : current)}
                   style={({ pressed, hovered }) => [
                     styles.conversationItem,
                     session.id === activeSessionId && styles.activeItem,
@@ -508,39 +601,25 @@ export function AskPranaChatSidebar({
                   </View>
                 </Pressable>
                 <Pressable
-                  onPress={() => {
-                    const closes = menuSessionId === session.id && menuSource === "pinned";
-                    setMenuSessionId(closes ? null : session.id);
-                    setMenuSource(closes ? null : "pinned");
-                  }}
+                  ref={(node) => { menuTriggerRefs.current[session.id] = node; }}
+                  onPress={() => openContextMenu(session.id, "pinned")}
+                  onHoverIn={() => setHoveredSessionId(session.id)}
+                  onFocus={() => setFocusedSessionId(session.id)}
+                  onBlur={() => setFocusedSessionId((current) => current === session.id ? null : current)}
                   style={({ hovered, pressed }) => [
                     styles.menuButton,
+                    !showMenuButton && styles.menuButtonHidden,
                     hovered && styles.menuButtonHovered,
                     pressed && styles.pressed,
                   ]}
                   hitSlop={6}
                   nativeID={`ask-prana-menu-trigger-${session.id}`}
                   accessibilityRole="button"
+                  accessibilityState={{ expanded: menuSessionId === session.id && menuSource === "pinned" }}
                   accessibilityLabel={t("askPrana.conversationOptions", { title: displayText(session.title) })}
                 >
                   <Feather name="more-horizontal" size={17} color={colors.muted} />
                 </Pressable>
-                {menuSessionId === session.id && menuSource === "pinned" ? (
-                  <ChatHistoryContextMenu
-                    pinned
-                    opensUpward={menuOpensUpward}
-                    onTogglePin={() => togglePinned(session.id)}
-                    onEdit={() => {
-                      setRenamingSession(session);
-                      setRenameValue(getStatus(session.title) === "ready" ? displayText(session.title) : "");
-                      setMenuSessionId(null);
-                    }}
-                    onDelete={() => {
-                      setDeletingSession(session);
-                      setMenuSessionId(null);
-                    }}
-                  />
-                ) : null}
                 </View>
                 );
               })}
@@ -549,8 +628,12 @@ export function AskPranaChatSidebar({
           {groupedSessions.map((group) => (
             <View key={group.label} style={styles.group}>
               <Text style={styles.groupLabel}>{group.label}</Text>
-              {group.items.map((session, index) => {
-                const menuOpensUpward = index >= group.items.length - 2;
+              {group.items.map((session) => {
+                const showMenuButton =
+                  !isDesktop ||
+                  hoveredSessionId === session.id ||
+                  focusedSessionId === session.id ||
+                  (menuSessionId === session.id && menuSource === "history");
                 return (
                 <View
                   key={session.id}
@@ -561,9 +644,12 @@ export function AskPranaChatSidebar({
                 >
                   <Pressable
                     onPress={() => void openSession(session.id)}
+                  onHoverIn={() => setHoveredSessionId(session.id)}
+                  onHoverOut={() => setHoveredSessionId((current) => current === session.id ? null : current)}
                     style={({ pressed }) => [
                       styles.conversationItem,
                       session.id === activeSessionId && styles.activeItem,
+                    hoveredSessionId === session.id && styles.hoveredItem,
                       pressed && styles.pressed,
                     ]}
                     accessibilityRole="button"
@@ -582,41 +668,25 @@ export function AskPranaChatSidebar({
                     </View>
                   </Pressable>
                   <Pressable
-                    onPress={() => {
-                      const closes = menuSessionId === session.id && menuSource === "history";
-                      setMenuSessionId(closes ? null : session.id);
-                      setMenuSource(closes ? null : "history");
-                    }}
+                    ref={(node) => { menuTriggerRefs.current[session.id] = node; }}
+                    onPress={() => openContextMenu(session.id, "history")}
+                    onHoverIn={() => setHoveredSessionId(session.id)}
+                    onFocus={() => setFocusedSessionId(session.id)}
+                    onBlur={() => setFocusedSessionId((current) => current === session.id ? null : current)}
                     style={({ hovered, pressed }) => [
                       styles.menuButton,
+                      !showMenuButton && styles.menuButtonHidden,
                       hovered && styles.menuButtonHovered,
                       pressed && styles.pressed,
                     ]}
                     hitSlop={6}
                     nativeID={`ask-prana-menu-trigger-${session.id}`}
                     accessibilityRole="button"
+                    accessibilityState={{ expanded: menuSessionId === session.id && menuSource === "history" }}
                     accessibilityLabel={t("askPrana.conversationOptions", { title: displayText(session.title) })}
                   >
                     <Feather name="more-horizontal" size={17} color={colors.muted} />
                   </Pressable>
-                  {menuSessionId === session.id && menuSource === "history" ? (
-                    <ChatHistoryContextMenu
-                      pinned={pinnedSessionIds.includes(session.id)}
-                      opensUpward={menuOpensUpward}
-                      onTogglePin={() => togglePinned(session.id)}
-                      onEdit={() => {
-                        setRenamingSession(session);
-                        setRenameValue(getStatus(session.title) === "ready" ? displayText(session.title) : "");
-                        setMenuSessionId(null);
-                        setMenuSource(null);
-                      }}
-                      onDelete={() => {
-                        setDeletingSession(session);
-                        setMenuSessionId(null);
-                        setMenuSource(null);
-                      }}
-                    />
-                  ) : null}
                 </View>
                 );
               })}
@@ -683,6 +753,10 @@ export function AskPranaChatSidebar({
           </View>
         </Modal>
       )}
+
+      {Platform.OS === "web" && typeof document !== "undefined"
+        ? createPortal(floatingMenu, document.body)
+        : floatingMenu}
 
       <Modal
         visible={renamingSession != null}
@@ -815,6 +889,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 9,
     paddingVertical: 7,
     justifyContent: "center",
+    ...(Platform.OS === "web"
+      ? ({ transitionProperty: "background-color", transitionDuration: "180ms" } as object)
+      : null),
   },
   activeItem: { backgroundColor: colors.selected },
   hoveredItem: { backgroundColor: "#242424" },
@@ -822,13 +899,26 @@ const styles = StyleSheet.create({
   itemTitleRow: { flexDirection: "row", alignItems: "center", gap: 5, minWidth: 0 },
   itemTitle: { color: colors.text, fontFamily: ASK_PRANA_FONT_FAMILY, fontSize: 14, lineHeight: 19, fontWeight: "500" },
   itemPreview: { color: colors.muted, fontFamily: ASK_PRANA_FONT_FAMILY, fontSize: 12, lineHeight: 16, fontWeight: "400" },
-  menuButton: { width: 32, height: 32, flexShrink: 0, borderRadius: 6, alignItems: "center", justifyContent: "center" },
+  menuButton: {
+    width: 32,
+    height: 32,
+    flexShrink: 0,
+    borderRadius: 6,
+    alignItems: "center",
+    justifyContent: "center",
+    ...(Platform.OS === "web"
+      ? ({ transitionProperty: "opacity, background-color", transitionDuration: "180ms" } as object)
+      : null),
+  },
+  menuButtonHidden: { opacity: 0 },
   menuButtonHovered: { backgroundColor: "#2A2A2A" },
   itemMenu: {
     position: "absolute",
     top: 36,
     right: 4,
     zIndex: 1,
+  },
+  itemMenuContent: {
     width: 168,
     minHeight: 132,
     padding: 6,

@@ -1122,6 +1122,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       voiceModeSessionStartedRef.current = false;
       void stopAskPranaSpeech();
 
+      isSendingRef.current = false;
       setIsSending(false);
       setThinkingKind(null);
       setGenerationStopped(false);
@@ -1357,6 +1358,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
     setActiveSessionId(null);
     setDraft("");
     setPendingAttachments([]);
+    isSendingRef.current = false;
     setIsSending(false);
     setIsLoadingMessages(false);
     setThinkingKind(null);
@@ -1381,6 +1383,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       sendEpochRef.current += 1;
       generationIdRef.current += 1;
       sessionCreateEpochRef.current += 1;
+      isSendingRef.current = false;
       setIsSending(false);
       setThinkingKind(null);
       const expectedPondId =
@@ -1829,10 +1832,22 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
             "Sorry — I could not finish that answer just now. Please ask again.",
         };
         setMessages((current) => [...current, normalizedMessage]);
-        await persistMessage(
-          normalizedMessage,
-          context.pondId ?? pondAtStart,
-        );
+        // The reply is complete once it is in the chat. Saving it must not
+        // keep the UI in a generating state (or show a second Thinking row)
+        // when a background persistence request is slow.
+        isSendingRef.current = false;
+        setIsSending(false);
+        setThinkingKind(null);
+        try {
+          await persistMessage(
+            normalizedMessage,
+            context.pondId ?? pondAtStart,
+          );
+        } catch (persistError) {
+          // The completed reply remains valid in the current UI. Do not add a
+          // second fallback assistant message because only persistence failed.
+          console.log("[AskPranaChat] assistant reply persistence failed:", persistError);
+        }
         return normalizedMessage.text;
       } catch (error) {
         if (requestId !== generationIdRef.current) {
@@ -1861,6 +1876,8 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
           text: toFarmerFacingAssistantError(detail),
           messageType: "text",
         };
+        isSendingRef.current = false;
+        setIsSending(false);
         setThinkingKind(null);
         setMessages((current) => [...current, fallback]);
         return null;
@@ -1875,6 +1892,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
     }
     sendEpochRef.current += 1;
     generationIdRef.current += 1;
+    isSendingRef.current = false;
     setThinkingKind(null);
     setIsSending(false);
     setGenerationStopped(true);
@@ -1896,6 +1914,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       sessionCreatePromiseRef.current = null;
       voiceModeSessionStartedRef.current = false;
       void stopAskPranaSpeech();
+      isSendingRef.current = false;
       setIsSending(false);
       setThinkingKind(null);
       setActiveSessionId(null);

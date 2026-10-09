@@ -16,6 +16,11 @@ export type AskPranaSpeakResult = {
   reason?: string;
 };
 
+type AskPranaSpeakOptions = {
+  shouldPlay?: () => boolean;
+  onPlaybackStart?: () => void;
+};
+
 let activePlayer: ReturnType<typeof createAudioPlayer> | null = null;
 let speakGeneration = 0;
 
@@ -82,7 +87,11 @@ async function hasDeviceVoiceFor(bcp47: string): Promise<boolean> {
 async function speakWithExpoSpeech(
   text: string,
   language: AskPranaSpeechLanguageCode,
+  options?: AskPranaSpeakOptions,
 ): Promise<AskPranaSpeakResult> {
+  if (options?.shouldPlay?.() === false) {
+    return { spoke: false, provider: "none", reason: "interrupted" };
+  }
   const option = getAskPranaLanguageOption(language);
   const available = await hasDeviceVoiceFor(option.bcp47);
   if (!available && language !== "en") {
@@ -108,6 +117,7 @@ async function speakWithExpoSpeech(
       resolve(result);
     };
 
+    options?.onPlaybackStart?.();
     Speech.speak(text, {
       language: option.bcp47,
       rate: 0.95,
@@ -139,6 +149,7 @@ async function speakWithExpoSpeech(
 async function speakWithOpenAiTts(
   text: string,
   language: AskPranaSpeechLanguageCode,
+  options?: AskPranaSpeakOptions,
 ): Promise<AskPranaSpeakResult> {
   const auth = await ensureValidSession();
   const accessToken = auth?.access_token;
@@ -191,6 +202,10 @@ async function speakWithOpenAiTts(
     };
   }
 
+  if (options?.shouldPlay?.() === false) {
+    return { spoke: false, provider: "none", reason: "interrupted" };
+  }
+
   const generation = speakGeneration;
   const mime = data.mimeType || "audio/mpeg";
   const dataUri = `data:${mime};base64,${data.audioBase64}`;
@@ -211,6 +226,7 @@ async function speakWithOpenAiTts(
 
   const player = createAudioPlayer({ uri: dataUri });
   activePlayer = player;
+  options?.onPlaybackStart?.();
   player.play();
 
   return await new Promise<AskPranaSpeakResult>((resolve) => {
@@ -264,6 +280,7 @@ async function speakWithOpenAiTts(
 export async function speakAskPranaText(
   text: string,
   language: AskPranaSpeechLanguageCode,
+  options?: AskPranaSpeakOptions,
 ): Promise<AskPranaSpeakResult> {
   const cleaned = text.replace(/\*\*/g, "").trim();
   if (!cleaned) {
@@ -275,10 +292,11 @@ export async function speakAskPranaText(
   // Cloud TTS first for non-English (better Telugu/Hindi quality when configured).
   if (language !== "en") {
     try {
-      const cloud = await speakWithOpenAiTts(cleaned, language);
+      const cloud = await speakWithOpenAiTts(cleaned, language, options);
       if (cloud.spoke) return cloud;
+      if (cloud.reason === "interrupted") return cloud;
       // Fall through to device TTS with reason retained if both fail.
-      const device = await speakWithExpoSpeech(cleaned, language);
+      const device = await speakWithExpoSpeech(cleaned, language, options);
       if (device.spoke) return device;
       return {
         spoke: false,
@@ -293,5 +311,5 @@ export async function speakAskPranaText(
     }
   }
 
-  return speakWithExpoSpeech(cleaned, language === "en" ? "en" : language);
+  return speakWithExpoSpeech(cleaned, language === "en" ? "en" : language, options);
 }

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -207,6 +208,11 @@ export function AskPranaVoiceModeModal({
   const stateRef = useRef<VoiceModeState>("idle");
   const isRecordingRef = useRef(false);
   const orbPressLockRef = useRef(false);
+  const bargeInStreamRef = useRef<MediaStream | null>(null);
+  const bargeInContextRef = useRef<AudioContext | null>(null);
+  const bargeInFrameRef = useRef<number | null>(null);
+  const bargeInTriggeredRef = useRef(false);
+  const speechTurnRef = useRef(0);
 
   useEffect(() => {
     stateRef.current = state;
@@ -231,12 +237,105 @@ export function AskPranaVoiceModeModal({
     ]);
   }, []);
 
+  const stopBargeInMonitor = useCallback(() => {
+    if (bargeInFrameRef.current != null && typeof window !== "undefined") {
+      window.cancelAnimationFrame(bargeInFrameRef.current);
+    }
+    bargeInFrameRef.current = null;
+    bargeInStreamRef.current?.getTracks().forEach((track) => track.stop());
+    bargeInStreamRef.current = null;
+    void bargeInContextRef.current?.close();
+    bargeInContextRef.current = null;
+    bargeInTriggeredRef.current = false;
+  }, []);
+
+  const startBargeInMonitor = useCallback(async () => {
+    // The browser's SpeechRecognition API cannot reliably listen while TTS is
+    // playing. Use a short-lived, echo-cancelled VAD stream to detect a new
+    // speaker, then hand off immediately to the existing recognizer.
+    if (
+      Platform.OS !== "web" ||
+      typeof window === "undefined" ||
+      !navigator.mediaDevices?.getUserMedia ||
+      bargeInStreamRef.current
+    ) {
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+      if (!sessionActiveRef.current || stateRef.current !== "speaking") {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+
+      const AudioContextCtor = window.AudioContext ||
+        (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!AudioContextCtor) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      const audioContext = new AudioContextCtor();
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 512;
+      audioContext.createMediaStreamSource(stream).connect(analyser);
+      const samples = new Uint8Array(analyser.fftSize);
+      const ignoreUntil = Date.now() + 700;
+      let consecutiveVoiceFrames = 0;
+
+      bargeInStreamRef.current = stream;
+      bargeInContextRef.current = audioContext;
+      const monitor = () => {
+        if (!bargeInStreamRef.current || stateRef.current !== "speaking") return;
+        analyser.getByteTimeDomainData(samples);
+        let energy = 0;
+        for (const sample of samples) {
+          const normalized = (sample - 128) / 128;
+          energy += normalized * normalized;
+        }
+        const rms = Math.sqrt(energy / samples.length);
+        // Sustained input avoids treating a short playback echo or click as a
+        // user interruption. Echo cancellation is requested at the source.
+        consecutiveVoiceFrames = Date.now() >= ignoreUntil && rms > 0.055
+          ? consecutiveVoiceFrames + 1
+          : 0;
+        if (consecutiveVoiceFrames >= 5 && !bargeInTriggeredRef.current) {
+          bargeInTriggeredRef.current = true;
+          speechTurnRef.current += 1;
+          stopBargeInMonitor();
+          void (async () => {
+            await stopAskPranaSpeech();
+            if (!sessionActiveRef.current || mutedRef.current) return;
+            setState("listening");
+            stateRef.current = "listening";
+            await onStartListening();
+          })();
+          return;
+        }
+        bargeInFrameRef.current = window.requestAnimationFrame(monitor);
+      };
+      bargeInFrameRef.current = window.requestAnimationFrame(monitor);
+    } catch (error) {
+      // Barge-in is progressive enhancement; manual orb interruption remains
+      // available when a browser declines a second mic stream.
+      console.log("[AskPranaVoice] barge-in monitor unavailable:", error);
+    }
+  }, [onStartListening, stopBargeInMonitor]);
+
   const cleanupSession = useCallback(async () => {
     sessionActiveRef.current = false;
     loopArmedRef.current = false;
+    speechTurnRef.current += 1;
+    stopBargeInMonitor();
     await stopAskPranaSpeech();
     setState("idle");
-  }, []);
+  }, [stopBargeInMonitor]);
 
   useEffect(() => {
     if (!visible) {
@@ -260,6 +359,7 @@ export function AskPranaVoiceModeModal({
 
     return () => {
       sessionActiveRef.current = false;
+      stopBargeInMonitor();
       void stopAskPranaSpeech();
     };
     // Intentionally run on visible/muted open only.
@@ -267,7 +367,7 @@ export function AskPranaVoiceModeModal({
   }, [visible]);
 
   useEffect(() => {
-    if (!visible || (state !== "listening" && state !== "speaking")) return;
+    if (!visible || (state !== "listening" && state !== "speaking" && state !== "processing")) return;
     const timer = setInterval(() => {
       setPulse((current) => (current + 1) % 3);
     }, 420);
@@ -331,7 +431,17 @@ export function AskPranaVoiceModeModal({
         setState("speaking");
         stateRef.current = "speaking";
         console.log("[AskPranaVoice] speak started", { replyLanguage });
-        const spoken = await speakAskPranaText(cleanedAnswer, replyLanguage);
+        const speechTurn = ++speechTurnRef.current;
+        const spoken = await speakAskPranaText(cleanedAnswer, replyLanguage, {
+          shouldPlay: () =>
+            sessionActiveRef.current &&
+            !mutedRef.current &&
+            speechTurn === speechTurnRef.current,
+          onPlaybackStart: () => {
+            void startBargeInMonitor();
+          },
+        });
+        stopBargeInMonitor();
         if (!sessionActiveRef.current) return;
         if (mutedRef.current || spoken.reason === "interrupted") {
           setErrorText(null);
@@ -376,6 +486,8 @@ export function AskPranaVoiceModeModal({
       onAsk,
       onStartListening,
       requestContext,
+      startBargeInMonitor,
+      stopBargeInMonitor,
     ],
   );
 
@@ -436,6 +548,8 @@ export function AskPranaVoiceModeModal({
     orbPressLockRef.current = true;
     try {
       if (current === "speaking") {
+        speechTurnRef.current += 1;
+        stopBargeInMonitor();
         await stopAskPranaSpeech();
         setState("listening");
         stateRef.current = "listening";
@@ -466,7 +580,7 @@ export function AskPranaVoiceModeModal({
     } finally {
       orbPressLockRef.current = false;
     }
-  }, [finishListeningTurn, muted, onStartListening]);
+  }, [finishListeningTurn, muted, onStartListening, stopBargeInMonitor]);
 
   const handleMuteToggle = useCallback(async () => {
     const next = !mutedRef.current;
@@ -475,6 +589,8 @@ export function AskPranaVoiceModeModal({
     setErrorText(null);
     if (next) {
       await onCancelListening();
+      speechTurnRef.current += 1;
+      stopBargeInMonitor();
       await stopAskPranaSpeech();
       setErrorText(null);
       setState("muted");
@@ -485,7 +601,7 @@ export function AskPranaVoiceModeModal({
     setState("listening");
     stateRef.current = "listening";
     await onStartListening();
-  }, [onCancelListening, onStartListening]);
+  }, [onCancelListening, onStartListening, stopBargeInMonitor]);
 
   const handleEnd = useCallback(async () => {
     await cleanupSession();
@@ -501,6 +617,8 @@ export function AskPranaVoiceModeModal({
 
       setLanguageMenuOpen(false);
       setErrorText(null);
+      speechTurnRef.current += 1;
+      stopBargeInMonitor();
       await stopAskPranaSpeech();
       await onLanguageChange(code);
       if (!sessionActiveRef.current) return;
@@ -509,13 +627,15 @@ export function AskPranaVoiceModeModal({
       stateRef.current = "listening";
       await onStartListening();
     },
-    [activeLanguage, onLanguageChange, onStartListening],
+    [activeLanguage, onLanguageChange, onStartListening, stopBargeInMonitor],
   );
 
   const handleSendTyped = useCallback(async () => {
     const text = draft.trim();
     if (!text || isSending || isTranscribing) return;
     onChangeDraft("");
+    speechTurnRef.current += 1;
+    stopBargeInMonitor();
     await stopAskPranaSpeech();
     await onCancelListening();
     await runTurnFromTranscript(text);
@@ -526,6 +646,7 @@ export function AskPranaVoiceModeModal({
     onCancelListening,
     onChangeDraft,
     runTurnFromTranscript,
+    stopBargeInMonitor,
   ]);
 
   useEffect(() => {
@@ -552,9 +673,9 @@ export function AskPranaVoiceModeModal({
   }, [visible, variant, handleMuteToggle, handleEnd, handleSendTyped, onRegisterActions]);
 
   const statusLabel = (() => {
-    if (state === "listening") return "";
-    if (state === "processing" || isTranscribing || isSending) return "";
-    if (state === "speaking") return "";
+    if (state === "listening") return "Listening…";
+    if (state === "processing" || isTranscribing || isSending) return "Thinking…";
+    if (state === "speaking") return "Speaking… Tap the orb to interrupt.";
     if (state === "muted") return "Muted";
     if (state === "reconnecting") return "Reconnecting…";
     if (state === "error") return errorText || "Something went wrong";

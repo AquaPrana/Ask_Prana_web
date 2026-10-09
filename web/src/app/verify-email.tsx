@@ -12,6 +12,7 @@ import {
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
+import Feather from "@expo/vector-icons/Feather";
 import {
   AUTH_DARK_BACKGROUND,
   PhoneLoginBackground,
@@ -92,6 +93,8 @@ export default function VerifyEmailScreen() {
   const [notice, setNotice] = useState<string | null>(null);
   const [resendSeconds, setResendSeconds] = useState(alreadySent ? RESEND_SECONDS : 0);
   const [resending, setResending] = useState(false);
+  const [backButtonHovered, setBackButtonHovered] = useState(false);
+  const [backButtonFocused, setBackButtonFocused] = useState(false);
   const requestLockRef = useRef(false);
   const verifyLockRef = useRef(false);
   const lastAutoVerifiedRef = useRef("");
@@ -296,23 +299,31 @@ export default function VerifyEmailScreen() {
       <PhoneLoginBackground waveProfile="tall" appearance="dark">
         <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === "ios" ? "padding" : undefined}>
           <SafeAreaView style={styles.flex} edges={["top", "bottom"]}>
-            <View style={styles.backRow}>
-              <Pressable
-                onPress={() => {
-                  // Email login is normally opened with push, but retain a
-                  // fallback for a directly opened verification URL.
-                  if (router.canGoBack()) router.back();
-                  else router.replace("/phone-login" as never);
-                }}
-                style={styles.backButton}
-                accessibilityRole="button"
-                accessibilityLabel="Change email or mobile number"
-                hitSlop={8}
-              >
-                <Text style={styles.backArrow}>←</Text>
-              </Pressable>
-            </View>
             <View style={styles.content}>
+              <View style={styles.backRow}>
+                <Pressable
+                  onPress={() => {
+                    // Email login is normally opened with push, but retain a
+                    // fallback for a directly opened verification URL.
+                    if (router.canGoBack()) router.back();
+                    else router.replace("/phone-login" as never);
+                  }}
+                  onHoverIn={() => setBackButtonHovered(true)}
+                  onHoverOut={() => setBackButtonHovered(false)}
+                  onFocus={() => setBackButtonFocused(true)}
+                  onBlur={() => setBackButtonFocused(false)}
+                  style={[
+                    styles.backButton,
+                    backButtonHovered && styles.backButtonHovered,
+                    backButtonFocused && styles.backButtonFocused,
+                  ]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Change email or mobile number"
+                  hitSlop={8}
+                >
+                  <Feather name="arrow-left" size={20} color={colors.text} />
+                </Pressable>
+              </View>
               <Text style={styles.eyebrow}>{loginMode ? "SECURE VERIFICATION" : "EMAIL VERIFICATION"}</Text>
               <Text style={styles.heading}>Verify your email</Text>
 
@@ -433,7 +444,7 @@ function PrimaryButton({
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.background, overflow: "hidden" },
   flex: { flex: 1 },
-  backRow: { width: "100%", maxWidth: 520, alignSelf: "center", paddingHorizontal: 20, paddingTop: 12 },
+  backRow: { alignSelf: "flex-start", marginBottom: 12 },
   backButton: {
     width: 40,
     height: 40,
@@ -444,8 +455,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  backArrow: { color: colors.text, fontSize: 22, lineHeight: 24, fontWeight: "700", marginTop: -1 },
-  content: { width: "100%", maxWidth: 520, alignSelf: "center", paddingHorizontal: 20, paddingTop: 72, gap: 12 },
+  backButtonHovered: { backgroundColor: "#173B39", borderColor: colors.teal },
+  backButtonFocused: { borderColor: colors.teal, borderWidth: 2 },
+  content: { width: "100%", maxWidth: 520, alignSelf: "center", paddingHorizontal: 20, paddingTop: 24, gap: 12 },
   eyebrow: { color: colors.teal, fontSize: 14, lineHeight: 18, fontWeight: "800", letterSpacing: 1.2 },
   heading: { color: colors.text, fontSize: 30, lineHeight: 36, fontWeight: "800" },
   sentTo: { color: colors.mutedText, fontSize: 16, lineHeight: 24, fontWeight: "600", marginBottom: 12 },
