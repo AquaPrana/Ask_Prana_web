@@ -1,0 +1,34 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "allowImportingTsExtensions": false,
+    "isolatedModules": true,
+    "noEmit": true,
+    "types": ["node", "vite/client"],
+    "paths": {
+      "@/*": ["./src/*"],
+      "@/assets/*": ["./assets/*"],
+      "expo-router": ["./src/web/shims/expo-router.tsx"],
+      "expo-image": ["./src/web/shims/expo-image.tsx"],
+      "expo-audio": ["./src/web/shims/expo-audio.ts"],
+      "expo-speech": ["./src/web/shims/expo-speech.ts"],
+      "expo-clipboard": ["./src/web/shims/expo-clipboard.ts"],
+      "expo-constants": ["./src/web/shims/expo-constants.ts"],
+      "expo-image-picker": ["./src/web/shims/expo-image-picker.ts"],
+      "expo-image-manipulator": ["./src/web/shims/expo-image-manipulator.ts"],
+      "expo-document-picker": ["./src/web/shims/expo-document-picker.ts"],
+      "@expo-google-fonts/geist": ["./src/web/shims/geist-fonts.ts"],
+      "@expo/vector-icons/Feather": ["./src/web/shims/feather.tsx"],
+      "react-native-reanimated": ["./src/web/shims/reanimated.tsx"],
+      "react-native-gesture-handler": ["./src/web/shims/gesture-handler.tsx"]
+    }
+  },
+  "include": ["src", "vite.config.ts"]
+}

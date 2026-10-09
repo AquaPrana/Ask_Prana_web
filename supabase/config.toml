@@ -1,0 +1,19 @@
+# Supabase CLI config for Ask Prana.
+# Only the settings the deploy needs. Every function does its own auth
+# (opaque "ap_" session tokens), so JWT verification is off, like the live project.
+project_id = "ask-prana"
+
+[functions.ask-prana]
+verify_jwt = false
+
+[functions.ask-prana-tts]
+verify_jwt = false
+
+[functions.ask-prana-transcribe]
+verify_jwt = false
+
+[functions.msg91-auth]
+verify_jwt = false
+
+[functions.google-auth]
+verify_jwt = false
