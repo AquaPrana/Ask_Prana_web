@@ -49,12 +49,9 @@ import {
   ASK_PRANA_LANGUAGE_OPTIONS,
   getAskPranaLanguageOption,
   loadAskPranaPreferredLanguage,
-  loadTeluguScriptPreference,
   mapToAskPranaLanguageCode,
   saveAskPranaPreferredLanguage,
-  saveTeluguScriptPreference,
   type AskPranaSpeechLanguageCode,
-  type TeluguScriptPreference,
 } from "../lib/ask-prana-language";
 import { speakAskPranaText, stopAskPranaSpeech } from "../lib/ask-prana-speech";
 import { type AskPranaRequestContext } from "../services/ask-prana";
@@ -242,8 +239,6 @@ export default function AskPranaScreen() {
     useState<AskPranaSpeechLanguageCode>(() =>
       mapToAskPranaLanguageCode(i18n.resolvedLanguage),
     );
-  const [teluguScript, setTeluguScript] =
-    useState<TeluguScriptPreference>("native");
   const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
   const attachWrapRef = useRef<View>(null);
   const [attachmentPreview, setAttachmentPreview] = useState<{
@@ -345,7 +340,6 @@ export default function AskPranaScreen() {
       );
       const allowed =
         loaded === "en" || loaded === "te" || loaded === "hi" ? loaded : "en";
-      setTeluguScript(await loadTeluguScriptPreference());
       selectAskPranaLanguageWhenReady(allowed, (language) => {
         setPreferredLanguage(language);
         void setAppLanguage(language);
@@ -1482,39 +1476,6 @@ export default function AskPranaScreen() {
                 );
               })}
             </ScrollView>
-            {preferredLanguage === "te" ? (
-              <View style={{ gap: 8, marginTop: 8 }}>
-                <Text style={styles.modalOptionMeta}>{t("askPrana.teluguTextStyle")}</Text>
-                <Pressable
-                  onPress={() => {
-                    void (async () => {
-                      await saveTeluguScriptPreference("native");
-                      setTeluguScript("native");
-                    })();
-                  }}
-                  style={[
-                    styles.modalOption,
-                    teluguScript === "native" && styles.modalOptionSelected,
-                  ]}
-                >
-                  <Text style={styles.modalOptionText}>తెలుగు script</Text>
-                </Pressable>
-                <Pressable
-                  onPress={() => {
-                    void (async () => {
-                      await saveTeluguScriptPreference("romanized");
-                      setTeluguScript("romanized");
-                    })();
-                  }}
-                  style={[
-                    styles.modalOption,
-                    teluguScript === "romanized" && styles.modalOptionSelected,
-                  ]}
-                >
-                  <Text style={styles.modalOptionText}>Romanized Telugu</Text>
-                </Pressable>
-              </View>
-            ) : null}
           </View>
         </View>
       </Modal>
