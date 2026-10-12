@@ -18,7 +18,7 @@ import { useAskPranaChat } from "../context/ask-prana-chat-context";
 import type { AskPranaSessionSummary } from "../services/ask-prana-messages";
 
 const colors = {
-  primary: "#4F8CF7",
+  primary: "#16A34A",
   white: "#F4F7FA",
   text: "#EAF1FF",
   muted: "#A1A9B8",

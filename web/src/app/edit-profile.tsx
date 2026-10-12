@@ -44,7 +44,7 @@ const colors = {
   border: "#363636",
   text: "#F5F5F5",
   muted: "#A0A0A0",
-  primary: "#4F8CF7",
+  primary: "#16A34A",
   danger: "#F87171",
   success: "#34D399",
   warning: "#FBBF24",

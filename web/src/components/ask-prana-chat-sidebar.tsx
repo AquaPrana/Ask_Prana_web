@@ -25,7 +25,7 @@ import type { AskPranaSessionSummary } from "../services/ask-prana-messages";
 import { useAskPranaDisplayTranslation } from "../lib/ask-prana-display-translation";
 
 const colors = {
-  accent: "#4F8CF7",
+  accent: "#16A34A",
   background: "#171717",
   border: "#2F2F2F",
   danger: "#F87171",

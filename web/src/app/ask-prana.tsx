@@ -61,10 +61,10 @@ import {
   useAskPranaDisplayTranslation,
 } from "../lib/ask-prana-display-translation";
 const colors = {
-  primary: "#4F8CF7",
-  primaryDark: "#2F67D6",
-  primarySoft: "#DCEBFF",
-  primaryBright: "#6BA5FF",
+  primary: "#16A34A",
+  primaryDark: "#15803D",
+  primarySoft: "#DCFCE7",
+  primaryBright: "#4ADE80",
   background: "#171717",
   white: "#F4F7FA",
   textDark: "#E9EEF6",
@@ -233,6 +233,8 @@ export default function AskPranaScreen() {
   const measuredDraftRef = useRef<string | null>(null);
   const composerEnterSubmitLockRef = useRef(false);
   const [languagePickerOpen, setLanguagePickerOpen] = useState(false);
+  const [focusedLanguageOption, setFocusedLanguageOption] = useState<string | null>(null);
+  const [hoveredLanguageOption, setHoveredLanguageOption] = useState<string | null>(null);
   const [voiceModeOpen, setVoiceModeOpen] = useState(false);
   // Start from the already-loaded UI language so nothing renders in English first.
   const [preferredLanguage, setPreferredLanguage] =
@@ -1451,8 +1453,14 @@ export default function AskPranaScreen() {
                     onPress={() => {
                       void handleSelectLanguage(option.code);
                     }}
-                    style={[
+                    onHoverIn={() => setHoveredLanguageOption(option.code)}
+                    onHoverOut={() => setHoveredLanguageOption(null)}
+                    onFocus={() => setFocusedLanguageOption(option.code)}
+                    onBlur={() => setFocusedLanguageOption(null)}
+                    style={({ pressed }) => [
                       styles.modalOption,
+                      (hoveredLanguageOption === option.code || pressed) && styles.modalOptionHovered,
+                      focusedLanguageOption === option.code && styles.modalOptionFocused,
                       selected && styles.modalOptionSelected,
                     ]}
                   >
@@ -2195,8 +2203,15 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     gap: 10,
+    borderWidth: 1,
+    borderColor: "transparent",
   },
-  modalOptionSelected: { backgroundColor: "rgba(79, 140, 247, 0.16)" },
+  modalOptionHovered: { backgroundColor: "rgba(22, 163, 74, 0.08)" },
+  modalOptionFocused: { borderColor: "rgba(22, 163, 74, 0.35)" },
+  modalOptionSelected: {
+    backgroundColor: "rgba(22, 163, 74, 0.15)",
+    borderColor: "rgba(22, 163, 74, 0.35)",
+  },
   modalOptionCopy: { flex: 1 },
   modalOptionText: { color: colors.textDark, fontFamily: ASK_PRANA_FONT_FAMILY, fontSize: 14, lineHeight: 20, fontWeight: "500" },
   modalOptionTextSelected: { color: colors.primaryBright },

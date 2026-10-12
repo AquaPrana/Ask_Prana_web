@@ -38,7 +38,7 @@ import { getAskPranaFileUrl } from "../lib/ask-prana-files";
 import { ASK_PRANA_FONT_FAMILY } from "../constants/ask-prana-typography";
 
 const colors = {
-  primary: "#4F8CF7",
+  primary: "#16A34A",
   white: "#F4F7FA",
   text: "#E6ECF5",
   textDark: "#EDF2F8",
@@ -46,7 +46,7 @@ const colors = {
   border: "#2A303C",
   bubble: "#1B2330",
   shadow: "#0B1017",
-  primarySoft: "#DCEBFF",
+  primarySoft: "#DCFCE7",
   tableHeader: "#1D2531",
   tableBorder: "#2D3746",
   viewerBg: "#0B0F15",
