@@ -714,18 +714,32 @@ function colName(index: number): string {
 
 function buildSheetXml(rows: string[][], sharedIndex: Map<string, number>): string {
   const maxCols = Math.max(1, ...rows.map((row) => row.length));
+  const widths = Array.from({ length: maxCols }, (_, column) => {
+    const longest = Math.max(...rows.map((row) => (row[column] ?? "").length));
+    // Excel's character width units. Keep structured sheets readable without
+    // creating impractically wide columns for long descriptions.
+    return Math.max(12, Math.min(column === 2 ? 52 : 30, longest + 3));
+  });
+  const columns = `<cols>${widths.map((width, index) =>
+    `<col min="${index + 1}" max="${index + 1}" width="${width}" customWidth="1"/>`
+  ).join("")}</cols>`;
   const sheetRows = rows
     .map((row, rowIdx) => {
       const cells = [];
       for (let c = 0; c < Math.max(row.length, maxCols); c += 1) {
         const value = row[c] ?? "";
+        const style = rowIdx === 0 ? " s=\"1\"" : " s=\"2\"";
+        const ref = `${colName(c)}${rowIdx + 1}`;
+        if (value.startsWith("=")) {
+          cells.push(`<c r="${ref}"${style}><f>${escapeXml(value.slice(1))}</f></c>`);
+          continue;
+        }
         let idx = sharedIndex.get(value);
         if (idx == null) {
           idx = sharedIndex.size;
           sharedIndex.set(value, idx);
         }
-        const ref = `${colName(c)}${rowIdx + 1}`;
-        cells.push(`<c r="${ref}" t="s"><v>${idx}</v></c>`);
+        cells.push(`<c r="${ref}" t="s"${style}><v>${idx}</v></c>`);
       }
       return `<row r="${rowIdx + 1}">${cells.join("")}</row>`;
     })
@@ -737,7 +751,10 @@ function buildSheetXml(rows: string[][], sharedIndex: Map<string, number>): stri
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
     `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
     `<dimension ref="A1:${lastCol}${lastRow}"/>` +
+    `<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>` +
+    columns +
     `<sheetData>${sheetRows}</sheetData>` +
+    `<autoFilter ref="A1:${lastCol}${lastRow}"/>` +
     `</worksheet>`
   );
 }
@@ -810,11 +827,11 @@ export async function buildXlsxBytes(documentBody: string): Promise<Uint8Array> 
   const stylesXml =
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
     `<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
-    `<fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>` +
-    `<fills count="1"><fill><patternFill patternType="none"/></fill></fills>` +
-    `<borders count="1"><border/></borders>` +
+    `<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Calibri"/></font></fonts>` +
+    `<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF0F766E"/><bgColor indexed="64"/></patternFill></fill></fills>` +
+    `<borders count="2"><border/><border><left style="thin"><color rgb="FFD1D5DB"/></left><right style="thin"><color rgb="FFD1D5DB"/></right><top style="thin"><color rgb="FFD1D5DB"/></top><bottom style="thin"><color rgb="FFD1D5DB"/></bottom></border></borders>` +
     `<cellStyleXfs count="1"><xf/></cellStyleXfs>` +
-    `<cellXfs count="1"><xf/></cellXfs>` +
+    `<cellXfs count="3"><xf/><xf fontId="1" fillId="1" borderId="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf><xf borderId="1" applyBorder="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf></cellXfs>` +
     `</styleSheet>`;
 
   const zip = new JSZip();
@@ -897,6 +914,43 @@ export function isUnusableDocumentAnswer(answer: string): boolean {
 }
 
 /** Fallback TSV when the model returns empty — full pond-health pack. */
+export function buildFallbackExcelForRequest(question: string): string {
+  const q = question.toLowerCase();
+  if (/checklist|check list|చెక్‌లిస్ట్|चेकलिस्ट/.test(question)) {
+    return [
+      "SHEET: Shrimp Farming Checklist",
+      "Category\tChecklist Item\tDescription\tStatus\tRemarks",
+      "Pond preparation\tCheck pond condition\tInspect pond bottom, bunds, inlet and outlet before stocking\tPending\t",
+      "Pond preparation\tPrepare pond and equipment\tClean, dry and prepare pond according to the farm plan\tPending\t",
+      "Water quality\tTest pH\tRecord the actual pH reading before stocking and daily thereafter\tPending\t",
+      "Water quality\tTest dissolved oxygen\tRecord DO at early morning and late afternoon\tPending\t",
+      "Water quality\tTest salinity and temperature\tRecord actual readings and note sudden changes\tPending\t",
+      "Seed stocking\tVerify seed quality\tCheck supplier records, PL health and acclimation readiness\tPending\t",
+      "Seed stocking\tConfirm stocking plan\tRecord actual stocking date and count only when available\tPending\t",
+      "Feed management\tCheck feed trays\tReview tray response before adjusting the next feed\tPending\t",
+      "Feed management\tRecord daily feed\tEnter actual feed quantity and feeding frequency\tPending\t",
+      "Aeration\tInspect aerators\tConfirm aerators are operating and backup power is ready\tPending\t",
+      "Shrimp health\tObserve shrimp behavior\tCheck feeding response, swimming, gut and visible signs\tPending\t",
+      "Biosecurity\tInspect biosecurity controls\tClean equipment and restrict unnecessary pond access\tPending\t",
+      "Daily operations\tRecord mortality and observations\tEnter actual counts and observations; do not estimate\tPending\t",
+      "Harvest preparation\tReview harvest readiness\tConfirm market, labour, ice, transport and harvest equipment\tPending\t",
+    ].join("\n");
+  }
+  if (/feed|feeding|feed management/.test(q)) {
+    return ["SHEET: Daily Feed Management", "Date\tPond\tFeed Type\tFeed Quantity (kg)\tFeeding Time\tTray Left %\tRemarks", "\t\t\t\t\t\t"].join("\n");
+  }
+  if (/expense|cost|budget/.test(q)) {
+    return ["SHEET: Shrimp Farm Expenses", "Date\tCategory\tDescription\tAmount\tPayment Method\tRemarks", "\t\t\t\t\t"].join("\n");
+  }
+  if (/growth.*calcul|calcul.*growth/.test(q)) {
+    return ["SHEET: Shrimp Growth Calculator", "Input\tValue\tUnit\tNotes", "Stocking Count\t\tshrimp\tEnter actual count", "Survival %\t\t%\tEnter actual percentage", "Average Body Weight\t\tg\tEnter actual sample average", "Estimated Biomass\t=B2*B3*B4/100000\tkg\tCalculated from inputs"].join("\n");
+  }
+  if (/water quality|water.*report|pond.*readings/.test(q)) {
+    return ["SHEET: Water Quality Readings", "Date\tTime\tDissolved Oxygen\tpH\tTemperature\tSalinity\tAmmonia\tNitrite\tRemarks", "\t\t\t\t\t\t\t\t"].join("\n");
+  }
+  return "SHEET: Requested Spreadsheet\nItem\tDetails\tStatus\n\t\tPending";
+}
+
 export function buildFallbackEstimationDocumentBody(): string {
   return [
     "SHEET: Pond Summary",

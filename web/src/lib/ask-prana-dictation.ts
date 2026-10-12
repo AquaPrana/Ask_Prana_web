@@ -35,8 +35,14 @@ export type WebDictationHandlers = {
   onUtteranceEnd?: (text: string) => void;
 };
 
-/** Pause after real speech before a voice-mode turn sends itself. */
-const UTTERANCE_PAUSE_MS = 800;
+/**
+ * A turn should only be sent after a deliberate pause.  800 ms treated normal
+ * breaths and clause breaks as the end of a question, which cut off the rest
+ * of long voice turns.  Keep the recognizer open through short pauses.
+ */
+const UTTERANCE_PAUSE_MS = 2200;
+const RESTART_DELAY_MS = 120;
+const STOP_FINAL_RESULT_GRACE_MS = 5000;
 
 export type WebDictationSession = {
   stop: () => Promise<string>;
@@ -115,12 +121,16 @@ export function startWebDictation(
   recognition.maxAlternatives = 1;
 
   let committedText = "";
-  let sessionFinal = "";
-  let interimText = "";
+  // SpeechRecognition returns a mutable result list.  Keep each result slot
+  // rather than repeatedly merging the entire list, otherwise a restart or an
+  // interim-to-final update can duplicate or discard earlier words.
+  const finalSegments = new Map<number, string>();
+  const interimSegments = new Map<number, string>();
   let settled = false;
   let stopRequested = false;
   let utteranceSent = false;
   let pauseTimer: ReturnType<typeof setTimeout> | null = null;
+  let restartTimer: ReturnType<typeof setTimeout> | null = null;
   let resolveStop: ((value: string) => void) | null = null;
 
   const clearPause = () => {
@@ -128,6 +138,23 @@ export function startWebDictation(
       clearTimeout(pauseTimer);
       pauseTimer = null;
     }
+  };
+
+  const clearRestart = () => {
+    if (restartTimer) {
+      clearTimeout(restartTimer);
+      restartTimer = null;
+    }
+  };
+
+  const sessionTranscript = () => {
+    const indexes = new Set([...finalSegments.keys(), ...interimSegments.keys()]);
+    return [...indexes]
+      .sort((left, right) => left - right)
+      .reduce((text, index) => {
+        const segment = finalSegments.get(index) ?? interimSegments.get(index) ?? "";
+        return mergeTranscript(text, segment);
+      }, "");
   };
 
   const armUtterancePause = () => {
@@ -145,8 +172,7 @@ export function startWebDictation(
   };
 
   const currentTranscript = () => {
-    const spoken = mergeTranscript(committedText, sessionFinal);
-    return interimText ? mergeTranscript(spoken, interimText) : spoken;
+    return mergeTranscript(committedText, sessionTranscript());
   };
 
   const emitPartial = () => {
@@ -154,17 +180,17 @@ export function startWebDictation(
   };
 
   recognition.onresult = (event) => {
-    let finals = "";
-    let interim = "";
-    for (let i = 0; i < event.results.length; i += 1) {
+    for (let i = event.resultIndex; i < event.results.length; i += 1) {
       const result = event.results[i];
       const piece = result?.[0]?.transcript?.trim() ?? "";
       if (!piece) continue;
-      if (result.isFinal) finals = mergeTranscript(finals, piece);
-      else interim = mergeTranscript(interim, piece);
+      if (result.isFinal) {
+        finalSegments.set(i, piece);
+        interimSegments.delete(i);
+      } else {
+        interimSegments.set(i, piece);
+      }
     }
-    sessionFinal = finals;
-    interimText = interim;
     emitPartial();
     armUtterancePause();
   };
@@ -193,15 +219,24 @@ export function startWebDictation(
     if (settled) return;
     if (!stopRequested) {
       committedText = currentTranscript();
-      sessionFinal = "";
-      interimText = "";
-      // Browser sometimes ends mid-session — restart while still recording.
-      try {
-        recognition.start();
-        return;
-      } catch {
-        // fall through and settle
-      }
+      finalSegments.clear();
+      interimSegments.clear();
+      // Chromium can end a continuous recognition session unexpectedly. Delay
+      // the restart one task so the engine has fully released its prior state.
+      clearRestart();
+      restartTimer = setTimeout(() => {
+        restartTimer = null;
+        if (settled || stopRequested) return;
+        try {
+          recognition.start();
+        } catch (error) {
+          console.log("[AskPranaDictation] recognition restart failed:", error);
+          settled = true;
+          resolveStop?.(currentTranscript());
+          resolveStop = null;
+        }
+      }, RESTART_DELAY_MS);
+      return;
     }
     settled = true;
     const text = currentTranscript();
@@ -225,6 +260,7 @@ export function startWebDictation(
         }
         stopRequested = true;
         clearPause();
+        clearRestart();
         resolveStop = resolve;
         try {
           recognition.stop();
@@ -243,11 +279,12 @@ export function startWebDictation(
             }
             resolve(currentTranscript());
           }
-        }, 2500);
+        }, STOP_FINAL_RESULT_GRACE_MS);
       }),
     cancel: () => {
       stopRequested = true;
       clearPause();
+      clearRestart();
       settled = true;
       resolveStop?.("");
       resolveStop = null;

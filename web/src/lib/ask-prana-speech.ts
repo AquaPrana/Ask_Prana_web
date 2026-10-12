@@ -19,6 +19,8 @@ export type AskPranaSpeakResult = {
 type AskPranaSpeakOptions = {
   shouldPlay?: () => boolean;
   onPlaybackStart?: () => void;
+  /** Voice mode keeps its capture path alive while the reply is playing. */
+  keepMicrophoneActive?: boolean;
 };
 
 let activePlayer: ReturnType<typeof createAudioPlayer> | null = null;
@@ -104,7 +106,7 @@ async function speakWithExpoSpeech(
 
   const generation = speakGeneration;
   await setAudioModeAsync({
-    allowsRecording: false,
+    allowsRecording: Boolean(options?.keepMicrophoneActive),
     playsInSilentMode: true,
   });
   resumeWebSpeech();
@@ -211,7 +213,7 @@ async function speakWithOpenAiTts(
   const dataUri = `data:${mime};base64,${data.audioBase64}`;
 
   await setAudioModeAsync({
-    allowsRecording: false,
+    allowsRecording: Boolean(options?.keepMicrophoneActive),
     playsInSilentMode: true,
   });
 

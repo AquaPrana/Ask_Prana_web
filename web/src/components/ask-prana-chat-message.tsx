@@ -37,6 +37,29 @@ import type {
 import { getAskPranaFileUrl } from "../lib/ask-prana-files";
 import { ASK_PRANA_FONT_FAMILY } from "../constants/ask-prana-typography";
 
+async function downloadGeneratedFile(url: string, fileName: string) {
+  if (Platform.OS !== "web" || typeof document === "undefined") {
+    await Linking.openURL(url);
+    return;
+  }
+  // Fetching the signed object first avoids browser navigation and preserves
+  // the original Unicode filename even when storage is cross-origin.
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Download failed (${response.status})`);
+  const blob = await response.blob();
+  if (!blob.size) throw new Error("Downloaded file was empty.");
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = fileName;
+  anchor.rel = "noopener";
+  anchor.style.display = "none";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+}
+
 const colors = {
   primary: "#16A34A",
   white: "#F4F7FA",
@@ -1211,6 +1234,7 @@ function AskPranaChatMessageBubbleComponent({
                 try {
                   const refreshed = await getAskPranaFileUrl(
                     message.filePath ?? null,
+                    message.fileName,
                   );
                   const stored =
                     openUri && !openUri.includes("/aquagpt-files/") ? openUri : null;
@@ -1222,7 +1246,10 @@ function AskPranaChatMessageBubbleComponent({
                     );
                     return;
                   }
-                  await Linking.openURL(target);
+                  await downloadGeneratedFile(
+                    target,
+                    message.fileName?.trim() || "ask-prana-document",
+                  );
                 } catch {
                   Alert.alert(
                     t("askPrana.downloadUnavailable"),

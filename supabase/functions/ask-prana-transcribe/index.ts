@@ -116,7 +116,9 @@ function normalizeOpenAIAudio(
 
 function mapSttLanguage(raw: string): "en" | "te" | "hi" | null {
   const value = raw.trim().toLowerCase();
-  if (!value) return null;
+  // Automatic detection is important for mixed Telugu/Hindi/English voice
+  // turns. A language hint makes Whisper less likely to retain English terms.
+  if (!value || value === "auto" || value === "multilingual") return null;
   if (value === "te" || value.includes("telugu")) return "te";
   if (value === "hi" || value.includes("hindi")) return "hi";
   if (value === "en" || value.includes("english")) return "en";

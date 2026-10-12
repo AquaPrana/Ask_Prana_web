@@ -22,6 +22,7 @@ import {
   type NativeSyntheticEvent,
   type TextInputContentSizeChangeEventData,
   type TextInputSelectionChangeEventData,
+  type TextStyle,
 } from "react-native";
 import { Image } from "expo-image";
 import Feather from "@expo/vector-icons/Feather";
@@ -229,6 +230,7 @@ export default function AskPranaScreen() {
   const { width } = useWindowDimensions();
   const isDesktop = Platform.OS === "web" && width >= 1024;
   const listRef = useRef<FlatList<ChatMessage>>(null);
+  const listNearBottomRef = useRef(true);
   const composerInputRef = useRef<TextInput>(null);
   const measuredDraftRef = useRef<string | null>(null);
   const composerEnterSubmitLockRef = useRef(false);
@@ -288,6 +290,7 @@ export default function AskPranaScreen() {
     attachmentError,
     isRecording,
     isTranscribing,
+    voiceAudioLevel,
     isLoadingMessages,
     isAuthLoading,
     thinkingKind,
@@ -457,7 +460,7 @@ export default function AskPranaScreen() {
   }, [attachmentMenuOpen]);
 
   const sidebarVisible = sidebarOpen;
-  const desktopVoice = voiceModeOpen && isDesktop;
+  const voiceInline = voiceModeOpen;
   const voiceActionsRef = useRef<{
     toggleMute: () => void;
     end: () => void;
@@ -507,6 +510,7 @@ export default function AskPranaScreen() {
 
   useEffect(() => {
     if (messages.length === 0 && !thinkingVisible && !generationStopped) return;
+    if (!listNearBottomRef.current) return;
     const timer = setTimeout(() => {
       listRef.current?.scrollToEnd({ animated: true });
     }, 80);
@@ -849,6 +853,7 @@ export default function AskPranaScreen() {
 
   const canExpandDraft =
     Boolean(draft.trim()) && composerInputHeight >= composerInputMaxHeight;
+  const composerAtMaxHeight = composerInputHeight >= composerInputMaxHeight;
 
   return (
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
@@ -930,8 +935,17 @@ export default function AskPranaScreen() {
               style={styles.chatList}
               data={displayConversationMessages}
               keyExtractor={(item) => item.id}
-              contentContainerStyle={styles.chatContent}
+              contentContainerStyle={[
+                styles.chatContent,
+                voiceInline && styles.chatContentWithVoiceDock,
+              ]}
               showsVerticalScrollIndicator={false}
+              onScroll={(event) => {
+                const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+                listNearBottomRef.current =
+                  contentSize.height - (contentOffset.y + layoutMeasurement.height) < 96;
+              }}
+              scrollEventThrottle={100}
               keyboardShouldPersistTaps="handled"
               keyboardDismissMode="interactive"
               ListHeaderComponent={
@@ -990,14 +1004,15 @@ export default function AskPranaScreen() {
               )}
             />
           )}
-          {desktopVoice ? (
+          {voiceInline ? (
             <AskPranaVoiceModeModal
               visible={voiceModeOpen}
-              variant="overlay"
+                variant="overlay"
               language={preferredLanguage}
               requestContext={requestContext}
               isRecording={isRecording}
               isTranscribing={isTranscribing}
+              audioLevel={voiceAudioLevel}
               isSending={isSending}
               draft={draft}
               onChangeDraft={setDraft}
@@ -1025,7 +1040,7 @@ export default function AskPranaScreen() {
 
           {editingMessageId ? null : (
           <View style={styles.composerArea}>
-            {conversationMessages.length === 0 && !desktopVoice ? (
+            {conversationMessages.length === 0 && !voiceInline ? (
               <ScrollView
                 style={styles.suggestionsScroll}
                 horizontal
@@ -1123,8 +1138,8 @@ export default function AskPranaScreen() {
               </ScrollView>
             ) : null}
 
-            <View style={[styles.inputRow, desktopVoice && styles.inputRowVoice]}>
-              <View style={[styles.inputShell, isDesktop && styles.inputShellDesktop, desktopVoice && styles.inputShellVoice]}>
+            <View style={[styles.inputRow, voiceInline && styles.inputRowVoice]}>
+              <View style={[styles.inputShell, isDesktop && styles.inputShellDesktop, voiceInline && styles.inputShellVoice]}>
                 <View
                   ref={attachWrapRef}
                   nativeID="ask-prana-attach-wrap"
@@ -1171,11 +1186,14 @@ export default function AskPranaScreen() {
                   ref={composerInputRef}
                   value={draft}
                   onChangeText={setDraft}
-                  placeholder={desktopVoice ? "Type" : placeholder}
+                  placeholder={voiceInline ? "Type" : placeholder}
                   placeholderTextColor={colors.muted}
                   style={[
                     styles.textInput,
                     !isDesktop && styles.textInputMobile,
+                    composerAtMaxHeight
+                      ? styles.textInputScrollable
+                      : styles.textInputAutoGrowing,
                     {
                       height: isDesktop
                         ? composerInputHeight
@@ -1215,7 +1233,7 @@ export default function AskPranaScreen() {
                   returnKeyType="send"
                   submitBehavior="submit"
                   onSubmitEditing={() => {
-                    if (desktopVoice) {
+                    if (voiceInline) {
                       voiceActionsRef.current?.submitTyped();
                       return;
                     }
@@ -1224,17 +1242,17 @@ export default function AskPranaScreen() {
                   onKeyPress={(event) => {
                     if (event.nativeEvent.key !== "Enter") return;
                     event.preventDefault();
-                    if (desktopVoice) {
+                    if (voiceInline) {
                       voiceActionsRef.current?.submitTyped();
                       return;
                     }
                     handleComposerEnter();
                   }}
                   enablesReturnKeyAutomatically
-                  scrollEnabled={composerInputHeight >= composerInputMaxHeight}
+                  scrollEnabled={composerAtMaxHeight}
                   onContentSizeChange={handleComposerContentSizeChange}
                 />
-                {desktopVoice ? null : (
+                {voiceInline ? null : (
                 <>
                 <Pressable
                   onPress={handleMicPress}
@@ -1300,7 +1318,7 @@ export default function AskPranaScreen() {
                 </>
                 )}
               </View>
-              {desktopVoice ? (
+              {voiceInline ? (
                 <>
                   <Pressable
                     onPress={() => voiceActionsRef.current?.toggleMute()}
@@ -1384,47 +1402,6 @@ export default function AskPranaScreen() {
             ) : null}
           </View>
           )}
-
-          {voiceModeOpen && !isDesktop ? (
-            <View style={styles.mobileVoiceCover}>
-              <AskPranaVoiceModeModal
-                visible
-                variant="screen"
-                language={preferredLanguage}
-                requestContext={requestContext}
-                isRecording={isRecording}
-                isTranscribing={isTranscribing}
-                isSending={isSending}
-                draft={draft}
-                onChangeDraft={setDraft}
-                onClose={() => {
-                  setVoiceModeOpen(false);
-                  setVoiceMuted(false);
-                  void stopAskPranaSpeech();
-                  void cancelAudioRecording();
-                }}
-                onStartListening={() =>
-                  startAudioRecording({ source: "voice", throwOnFailure: true })
-                }
-                onCancelListening={cancelAudioRecording}
-                onStopListeningToTranscript={stopAudioRecordingToTranscript}
-                onAsk={async (question, context) => askFromVoiceMode(question, context)}
-                onLanguageChange={async (code) => {
-                  await cancelAudioRecording();
-                  await handleSelectLanguage(code);
-                }}
-                onOpenMenu={() => setSidebarOpen(true)}
-                onAddImage={() => {
-                  void sendImageAttachment(requestContext);
-                }}
-                onAddFile={() => {
-                  void sendDocumentAttachment(requestContext);
-                }}
-                addImageLabel={t("askPrana.addImage")}
-                addFileLabel={t("askPrana.addFile")}
-              />
-            </View>
-          ) : null}
 
             </View>
           </View>
@@ -1710,6 +1687,11 @@ const styles = StyleSheet.create({
     gap: 14,
     backgroundColor: colors.background,
   },
+  // The voice orb is positioned over the message column. Reserve its dock so
+  // the newest bubble never sits beneath the orb or its status label.
+  chatContentWithVoiceDock: {
+    paddingBottom: 156,
+  },
   emptyChat: {
     flex: 1,
     width: "100%",
@@ -1972,7 +1954,16 @@ const styles = StyleSheet.create({
     margin: 0,
     outlineStyle: "none",
     outlineWidth: 0,
+    overflow: "hidden",
   },
+  // React Native Web otherwise exposes a permanent native textarea scrollbar
+  // while the controlled height is still growing after a paste.
+  textInputAutoGrowing: {
+    overflow: "hidden",
+  },
+  textInputScrollable: Platform.OS === "web"
+    ? ({ overflowY: "auto", scrollbarWidth: "thin" } as unknown as TextStyle)
+    : { overflow: "scroll" },
   textInputMobile: {
     lineHeight: 22,
     minHeight: 22,

@@ -205,7 +205,9 @@ const MIN_VOICE_DURATION_SEC = 0.6;
 const VOICE_SPEECH_DB = -32;
 /** dBFS below this, after speech, counts as a pause. */
 const VOICE_SILENCE_DB = -45;
-const VOICE_SILENCE_MS = 800;
+// Do not submit a voice turn on a brief breath or between sentences.  The old
+// 800 ms VAD timeout was the native equivalent of the web cutoff.
+const VOICE_SILENCE_MS = 2200;
 const VOICE_SPEECH_HOLD_MS = 280;
 
 let voiceAutoStopListener: (() => void) | null = null;
@@ -589,6 +591,8 @@ type AskPranaChatContextValue = {
   attachmentError: string | null;
   isRecording: boolean;
   isTranscribing: boolean;
+  /** Normalized live input level for the voice orb; 0 when capture is idle. */
+  voiceAudioLevel: number;
   isLoadingMessages: boolean;
   isAuthLoading: boolean;
   thinkingKind: AskPranaThinkingKind | null;
@@ -732,6 +736,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
+  const [voiceAudioLevel, setVoiceAudioLevel] = useState(0);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [thinkingKind, setThinkingKind] = useState<AskPranaThinkingKind | null>(
     null,
@@ -773,6 +778,10 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
   const webDictationRef = useRef<WebDictationSession | null>(null);
   const webDictationBaseDraftRef = useRef("");
   const webDictationSourceRef = useRef<"composer" | "voice">("composer");
+  // Voice conversation uses recorded audio + server transcription on web so
+  // the recognizer can detect Telugu/Hindi/English code switching. Composer
+  // dictation intentionally keeps the low-latency browser recognizer.
+  const audioRecordingSourceRef = useRef<"composer" | "voice">("composer");
   const draftRef = useRef("");
   const messagesRef = useRef<ChatMessage[]>([]);
   const welcomeReadyRef = useRef(false);
@@ -837,6 +846,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       clearInterval(voiceSilenceWatchRef.current);
       voiceSilenceWatchRef.current = null;
     }
+    setVoiceAudioLevel(0);
   }, []);
 
   const startVoiceSilenceWatch = useCallback(() => {
@@ -850,6 +860,12 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       }
       const level = audioRecorderRef.current?.getStatus()?.metering;
       if (typeof level !== "number") return;
+      // Expo reports dBFS. Smoothly map normal voice range (-60..-20 dBFS)
+      // into 0..1 for animation without affecting VAD thresholds.
+      setVoiceAudioLevel((current) => {
+        const next = Math.max(0, Math.min(1, (level + 60) / 40));
+        return Math.abs(next - current) > 0.025 ? next : current;
+      });
       const now = Date.now();
       if (level >= VOICE_SPEECH_DB) {
         if (!speechStartedAt) speechStartedAt = now;
@@ -2504,6 +2520,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
   }) => {
     clearStuckRecordingFlag();
     const source = options?.source ?? "composer";
+    audioRecordingSourceRef.current = source;
 
     // Lock immediately (before any await) so double-taps cannot overlap.
     if (
@@ -2528,7 +2545,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
     webDictationSourceRef.current = source;
 
     // Web: use browser SpeechRecognition — does not need OpenAI credits.
-    if (Platform.OS === "web" && isWebDictationAvailable()) {
+    if (Platform.OS === "web" && source === "composer" && isWebDictationAvailable()) {
       try {
         recordingGuardUntilRef.current = Date.now() + 4000;
         const preferredLanguage = await loadAskPranaPreferredLanguage();
@@ -2804,7 +2821,13 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
           blob,
           mimeType: audioMeta.mimeType,
           fileName: audioMeta.fileName,
-          language: preferredLanguage,
+          // Do not constrain voice conversation to the response language:
+          // Whisper's automatic language detection handles code-switched
+          // Telugu/Hindi/English and short English aquaculture terms.
+          language:
+            audioRecordingSourceRef.current === "voice"
+              ? "auto"
+              : preferredLanguage,
         });
       } catch (error) {
         console.log("[AskPranaChat] transcription error:", error);
@@ -2901,6 +2924,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       attachmentError,
       isRecording,
       isTranscribing,
+      voiceAudioLevel,
       isLoadingMessages,
       isAuthLoading: authLoading,
       thinkingKind,
@@ -2947,6 +2971,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       attachmentError,
       isRecording,
       isTranscribing,
+      voiceAudioLevel,
       isLoadingMessages,
       authLoading,
       thinkingKind,

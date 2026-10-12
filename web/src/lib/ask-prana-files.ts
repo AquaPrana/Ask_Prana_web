@@ -46,6 +46,9 @@ function mimeFromExtension(extension: string) {
       return "text/csv";
     case "docx":
       return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    case "xlsx":
+    case "xls":
+      return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
     case "m4a":
       return "audio/m4a";
     case "mp3":
@@ -218,15 +221,23 @@ export async function uploadAskPranaFile({
   }
 }
 
-export async function getAskPranaFileUrl(filePath: string | null) {
+export async function getAskPranaFileUrl(
+  filePath: string | null,
+  downloadFileName?: string | null,
+) {
   if (!filePath) {
     return null;
   }
-
-  const { data } = supabase.storage.from(ASK_PRANA_FILES_BUCKET).getPublicUrl(filePath);
-  const url = data.publicUrl ?? "";
-  if (!url || url.includes("/aquagpt-files/")) {
+  // A signed attachment URL is required: public URLs let PDF/document viewers
+  // navigate instead of downloading. The client also downloads a Blob below
+  // for browsers that ignore cross-origin anchor download attributes.
+  const { data, error } = await supabase.storage
+    .from(ASK_PRANA_FILES_BUCKET)
+    .createSignedUrl(filePath, 60 * 60, {
+      download: downloadFileName?.trim() || true,
+    });
+  if (error || !data?.signedUrl || data.signedUrl.includes("/aquagpt-files/")) {
     return null;
   }
-  return url;
+  return data.signedUrl;
 }

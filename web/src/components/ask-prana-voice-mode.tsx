@@ -21,6 +21,7 @@ import {
   speakAskPranaText,
   stopAskPranaSpeech,
 } from "../lib/ask-prana-speech";
+import { transcribeAskPranaAudio } from "../services/ask-prana";
 import { setVoiceAutoStopListener } from "../context/ask-prana-chat-context";
 
 const colors = {
@@ -65,6 +66,7 @@ type Props = {
   requestContext: AskPranaRequestContext;
   isRecording: boolean;
   isTranscribing: boolean;
+  audioLevel?: number;
   isSending: boolean;
   draft: string;
   onChangeDraft: (value: string) => void;
@@ -100,7 +102,7 @@ function mixHex(from: string, to: string, amount: number) {
   return `rgb(${channel[0]}, ${channel[1]}, ${channel[2]})`;
 }
 
-function VoiceSkyOrb({ size, scale }: { size: number; scale: number }) {
+function VoiceSkyOrb({ size, scale, intensity = 0 }: { size: number; scale: number; intensity?: number }) {
   const bands = 40;
   return (
     <View
@@ -111,6 +113,10 @@ function VoiceSkyOrb({ size, scale }: { size: number; scale: number }) {
         overflow: "hidden",
         transform: [{ scale }],
         backgroundColor: "#0F766E",
+        shadowColor: "#2DD4BF",
+        shadowOpacity: 0.22 + intensity * 0.45,
+        shadowRadius: 10 + intensity * 24,
+        elevation: 2 + Math.round(intensity * 8),
       }}
     >
       {Array.from({ length: bands }, (_, index) => {
@@ -175,6 +181,7 @@ export function AskPranaVoiceModeModal({
   requestContext,
   isRecording,
   isTranscribing,
+  audioLevel: recorderAudioLevel = 0,
   isSending,
   draft,
   onChangeDraft,
@@ -199,6 +206,8 @@ export function AskPranaVoiceModeModal({
   const [errorText, setErrorText] = useState<string | null>(null);
   const [lines, setLines] = useState<TranscriptLine[]>([]);
   const [pulse, setPulse] = useState(0);
+  const [audioLevel, setAudioLevel] = useState(0);
+  const [reducedMotion, setReducedMotion] = useState(false);
   const [languageMenuOpen, setLanguageMenuOpen] = useState(false);
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const [activeLanguage, setActiveLanguage] =
@@ -212,6 +221,9 @@ export function AskPranaVoiceModeModal({
   const bargeInContextRef = useRef<AudioContext | null>(null);
   const bargeInFrameRef = useRef<number | null>(null);
   const bargeInTriggeredRef = useRef(false);
+  const bargeRecorderRef = useRef<MediaRecorder | null>(null);
+  const bargeChunksRef = useRef<Blob[]>([]);
+  const runTurnRef = useRef<(transcript: string) => Promise<void>>(async () => {});
   const speechTurnRef = useRef(0);
 
   useEffect(() => {
@@ -228,6 +240,16 @@ export function AskPranaVoiceModeModal({
     }
   }, [visible, language]);
 
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof window === "undefined") return;
+    const query = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+    if (!query) return;
+    const update = () => setReducedMotion(query.matches);
+    update();
+    query.addEventListener?.("change", update);
+    return () => query.removeEventListener?.("change", update);
+  }, []);
+
   const appendLine = useCallback((role: "user" | "assistant", text: string) => {
     const trimmed = text.trim();
     if (!trimmed) return;
@@ -242,6 +264,12 @@ export function AskPranaVoiceModeModal({
       window.cancelAnimationFrame(bargeInFrameRef.current);
     }
     bargeInFrameRef.current = null;
+    const recorder = bargeRecorderRef.current;
+    bargeRecorderRef.current = null;
+    if (recorder?.state === "recording") {
+      try { recorder.stop(); } catch { /* ignore */ }
+    }
+    bargeChunksRef.current = [];
     bargeInStreamRef.current?.getTracks().forEach((track) => track.stop());
     bargeInStreamRef.current = null;
     void bargeInContextRef.current?.close();
@@ -250,9 +278,10 @@ export function AskPranaVoiceModeModal({
   }, []);
 
   const startBargeInMonitor = useCallback(async () => {
-    // The browser's SpeechRecognition API cannot reliably listen while TTS is
-    // playing. Use a short-lived, echo-cancelled VAD stream to detect a new
-    // speaker, then hand off immediately to the existing recognizer.
+    // Keep one echo-cancelled capture stream open while TTS plays. When real
+    // user speech is detected, this same stream is recorded and transcribed;
+    // no second SpeechRecognition listener is started and no words are lost
+    // during the handoff.
     if (
       Platform.OS !== "web" ||
       typeof window === "undefined" ||
@@ -288,11 +317,59 @@ export function AskPranaVoiceModeModal({
       const samples = new Uint8Array(analyser.fftSize);
       const ignoreUntil = Date.now() + 700;
       let consecutiveVoiceFrames = 0;
+      let speechSeen = false;
+      let silenceSince = 0;
+
+      const Recorder = window.MediaRecorder;
+      if (!Recorder) {
+        stream.getTracks().forEach((track) => track.stop());
+        void audioContext.close();
+        return;
+      }
+      const mimeType = Recorder.isTypeSupported?.("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : "";
+      const recorder = new Recorder(stream, mimeType ? { mimeType } : undefined);
+      bargeRecorderRef.current = recorder;
+      recorder.ondataavailable = (event) => {
+        if (event.data?.size) bargeChunksRef.current.push(event.data);
+      };
+      recorder.onstop = () => {
+        const chunks = bargeChunksRef.current;
+        bargeChunksRef.current = [];
+        // The interrupted reply has already returned. The next reply is a
+        // normal turn and may install a fresh barge-in monitor.
+        bargeInTriggeredRef.current = false;
+        if (bargeRecorderRef.current === recorder) bargeRecorderRef.current = null;
+        if (!chunks.length || !sessionActiveRef.current || mutedRef.current) return;
+        const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+        void (async () => {
+          try {
+            const transcript = await transcribeAskPranaAudio({
+              uri: "voice-barge-in.webm",
+              blob,
+              mimeType: blob.type,
+              fileName: "voice-barge-in.webm",
+              language: "auto",
+            });
+            if (transcript.trim() && sessionActiveRef.current && !mutedRef.current) {
+              await runTurnRef.current(transcript.trim());
+            }
+          } catch (error) {
+            console.log("[AskPranaVoice] barge-in transcription failed:", error);
+            if (sessionActiveRef.current) {
+              setState("listening");
+              stateRef.current = "listening";
+              await onStartListening();
+            }
+          }
+        })();
+      };
 
       bargeInStreamRef.current = stream;
       bargeInContextRef.current = audioContext;
       const monitor = () => {
-        if (!bargeInStreamRef.current || stateRef.current !== "speaking") return;
+        if (!bargeInStreamRef.current) return;
         analyser.getByteTimeDomainData(samples);
         let energy = 0;
         for (const sample of samples) {
@@ -300,6 +377,7 @@ export function AskPranaVoiceModeModal({
           energy += normalized * normalized;
         }
         const rms = Math.sqrt(energy / samples.length);
+        setAudioLevel((current) => Math.abs(current - rms) > 0.012 ? rms : current);
         // Sustained input avoids treating a short playback echo or click as a
         // user interruption. Echo cancellation is requested at the source.
         consecutiveVoiceFrames = Date.now() >= ignoreUntil && rms > 0.055
@@ -308,15 +386,34 @@ export function AskPranaVoiceModeModal({
         if (consecutiveVoiceFrames >= 5 && !bargeInTriggeredRef.current) {
           bargeInTriggeredRef.current = true;
           speechTurnRef.current += 1;
-          stopBargeInMonitor();
           void (async () => {
+            // Start capture before waiting for TTS teardown so the beginning
+            // of a short interruption is retained.
+            bargeChunksRef.current = [];
+            recorder.start(250);
+            speechSeen = true;
             await stopAskPranaSpeech();
             if (!sessionActiveRef.current || mutedRef.current) return;
             setState("listening");
             stateRef.current = "listening";
-            await onStartListening();
           })();
-          return;
+        }
+        if (speechSeen) {
+          if (rms > 0.025) {
+            silenceSince = 0;
+          } else if (!silenceSince) {
+            silenceSince = Date.now();
+          } else if (Date.now() - silenceSince >= 2200) {
+            if (recorder.state === "recording") recorder.stop();
+            // Keep the chunks until MediaRecorder.onstop creates the blob.
+            if (bargeInFrameRef.current != null) window.cancelAnimationFrame(bargeInFrameRef.current);
+            bargeInFrameRef.current = null;
+            bargeInStreamRef.current?.getTracks().forEach((track) => track.stop());
+            bargeInStreamRef.current = null;
+            void bargeInContextRef.current?.close();
+            bargeInContextRef.current = null;
+            return;
+          }
         }
         bargeInFrameRef.current = window.requestAnimationFrame(monitor);
       };
@@ -333,9 +430,12 @@ export function AskPranaVoiceModeModal({
     loopArmedRef.current = false;
     speechTurnRef.current += 1;
     stopBargeInMonitor();
+    // The parent also cancels on its close handler, but keeping teardown here
+    // makes modal unmounts and route changes release the microphone promptly.
+    await onCancelListening();
     await stopAskPranaSpeech();
     setState("idle");
-  }, [stopBargeInMonitor]);
+  }, [onCancelListening, stopBargeInMonitor]);
 
   useEffect(() => {
     if (!visible) {
@@ -360,9 +460,12 @@ export function AskPranaVoiceModeModal({
     return () => {
       sessionActiveRef.current = false;
       stopBargeInMonitor();
+      void onCancelListening();
       void stopAskPranaSpeech();
     };
     // Intentionally run on visible/muted open only.
+    // Session lifetime is tied to visibility; changing callback identities or
+    // mute state must not tear down an active microphone.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
 
@@ -440,7 +543,12 @@ export function AskPranaVoiceModeModal({
           onPlaybackStart: () => {
             void startBargeInMonitor();
           },
+          keepMicrophoneActive: true,
         });
+        // A detected barge-in owns the microphone until its recorded utterance
+        // reaches the transcription callback. Do not restart the ordinary
+        // turn recorder or clear its chunks while this reply is being stopped.
+        if (bargeInTriggeredRef.current) return;
         stopBargeInMonitor();
         if (!sessionActiveRef.current) return;
         if (mutedRef.current || spoken.reason === "interrupted") {
@@ -490,6 +598,10 @@ export function AskPranaVoiceModeModal({
       stopBargeInMonitor,
     ],
   );
+
+  useEffect(() => {
+    runTurnRef.current = runTurnFromTranscript;
+  }, [runTurnFromTranscript]);
 
   const finishListeningTurn = useCallback(async () => {
     if (!sessionActiveRef.current || mutedRef.current) return;
@@ -681,7 +793,16 @@ export function AskPranaVoiceModeModal({
     if (state === "error") return errorText || "Something went wrong";
     return "";
   })();
-  const orbScale = state === "speaking" ? 1.06 + pulse * 0.03 : state === "listening" ? 1 + pulse * 0.025 : 1;
+  const effectiveAudioLevel = Math.max(audioLevel, recorderAudioLevel);
+  const orbScale = reducedMotion
+    ? 1
+    : state === "speaking"
+      ? 1.02 + Math.min(effectiveAudioLevel * 1.4, 0.13)
+      : state === "listening"
+        ? 1 + Math.min(effectiveAudioLevel * 0.9, 0.07)
+        : state === "processing"
+          ? 1 + pulse * 0.012
+          : 1;
   const orb = (
     <Pressable
       onPress={() => {
@@ -690,7 +811,11 @@ export function AskPranaVoiceModeModal({
       accessibilityRole="button"
       accessibilityLabel="Voice conversation"
     >
-      <VoiceSkyOrb size={variant === "overlay" ? 88 : 200} scale={orbScale} />
+      <VoiceSkyOrb
+        size={variant === "overlay" ? 88 : 200}
+        scale={orbScale}
+        intensity={reducedMotion ? 0 : Math.min(effectiveAudioLevel * 3, 1)}
+      />
     </Pressable>
   );
 

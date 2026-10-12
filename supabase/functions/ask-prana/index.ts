@@ -14,6 +14,7 @@ import {
   buildDocumentFileName,
   findPreviousAnswerForExport,
   buildFallbackDiseasePrecautionsDocumentBody,
+  buildFallbackExcelForRequest,
   buildFallbackEstimationDocumentBody,
   chatCaptionForGeneratedFile,
   isDocumentExportQuestion,
@@ -174,6 +175,9 @@ Document / file export requests (PDF, DOCX, Word, Excel/XLSX/spreadsheet, downlo
 • Do NOT invent a "Suggested filename". Do NOT pretend a download link exists. Do NOT wrap the answer as casual chat.
 • Use ONLY pond/crop values present in Application Context / latest logs / conversation. Never invent missing numbers. Missing = Not available; Status = Available|Required|Not available as appropriate.
 • Prefer completeness over brevity for exports. Include every required row even when Value is Not available.
+• For Excel requests, output TSV only, beginning with "SHEET: <relevant name>". Build the workbook for the farmer's stated purpose—not a generic pond summary.
+• Checklist requests use practical checklist rows and editable Pending / In Progress / Completed status cells. Feed, expense, tracker and calculator requests use only their relevant columns and sheets.
+• Include actual pond readings only when the farmer explicitly asks to export pond data and those readings are in Application Context. Never add unrelated pond-summary sheets or placeholder measurements.
 
 Document / file export — DISEASE RISKS & PRECAUTIONS (Excel/XLSX):
 When the farmer asks for diseases, disease risks, precautions, prevention, "disease name = precautions", or similar AND wants Excel/download:
@@ -2885,16 +2889,18 @@ If this is a normal water/feed question with no prior health context, do not men
     // Packages an export answer into the requested file and returns the reply.
     const packageDocumentExport = async (answer: string): Promise<Response> => {
       // Always attempt packaging for export requests — never return "No response received."
+      const format = requestedDocumentFormat ??
+        resolveRequestedDocumentFormat(farmerQuestion);
       let documentBody = answer;
       if (isUnusableDocumentAnswer(documentBody) || !documentBody.trim()) {
         documentBody = diseasePrecautionsExport
           ? buildFallbackDiseasePrecautionsDocumentBody()
-          : buildFallbackEstimationDocumentBody();
+          : format === "xlsx"
+            ? buildFallbackExcelForRequest(farmerQuestion)
+            : buildFallbackEstimationDocumentBody();
       }
 
       try {
-        const format = requestedDocumentFormat ??
-          resolveRequestedDocumentFormat(farmerQuestion);
         const mimeType = mimeForFormat(format);
         const fileName = buildDocumentFileName(
           documentBody,
@@ -3135,7 +3141,9 @@ If this is a normal water/feed question with no prior health context, do not men
         requestedDocumentFormat,
         rawPreview: rawAnswer.slice(0, 80),
       });
-      answer = buildEmptyModelAnswerFallback(configuredLanguage, {
+      answer = requestedDocumentFormat === "xlsx"
+        ? buildFallbackExcelForRequest(farmerQuestion)
+        : buildEmptyModelAnswerFallback(configuredLanguage, {
         documentExport: documentExportQuestion,
         format: requestedDocumentFormat,
         diseasePrecautions: diseasePrecautionsExport,
