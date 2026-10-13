@@ -9,6 +9,14 @@ import {
   parseOpenAIError,
 } from "../_shared/openai-responses.ts";
 import {
+  isTextInLanguage,
+  translateMany,
+  TranslationError,
+  translationLang,
+  TRANSLATION_LANGS,
+  type TranslationLang,
+} from "../_shared/translate-openai.ts";
+import {
   buildDocumentBytes,
   buildEmptyModelAnswerFallback,
   buildDocumentFileName,
@@ -48,7 +56,6 @@ const MAX_IMAGE_BYTES = 12_000_000;
 const MAX_FILE_BYTES = 20_000_000;
 const MIN_IMAGE_BYTES = 32;
 const MAX_TEXT_CHARS = 80_000;
-let translationStructuredOutput = false;
 
 const IMAGE_PROCESSING_ERROR =
   "Image could not be processed. Please try uploading it again.";
@@ -1379,6 +1386,224 @@ async function listConversationsWithoutPreview(
   });
 }
 
+// ---------------------------------------------------------------------------
+// Stored display translations (chat_message_translations /
+// chat_session_translations). chat_messages.content is never modified.
+// ---------------------------------------------------------------------------
+
+declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void } | undefined;
+
+/** Runs after the response is sent. Errors are logged only. */
+function runInBackground(label: string, task: () => Promise<void>) {
+  const promise = task().catch((error) => {
+    console.error(`[ask-prana] ${label} failed`, error instanceof Error ? error.message : error);
+  });
+  if (typeof EdgeRuntime !== "undefined") EdgeRuntime.waitUntil(promise);
+}
+
+/** Per-request cap on history rows translated in the background. */
+const BACKGROUND_TRANSLATION_LIMIT = 20;
+
+type TranslatableMessage = { id: string; content: string };
+type SessionTexts = { id: string; title: string; preview: string };
+type SessionTranslationRow = {
+  session_id: string;
+  title: string | null;
+  preview: string | null;
+  updated_at: string;
+};
+
+/** Same rule as the web chat: file-only rows whose text is just the file name are not translated. */
+function isTranslatableRow(row: { content?: string | null; file_path?: string | null; file_name?: string | null }) {
+  const content = (row.content ?? "").trim();
+  if (!content) return false;
+  return !(row.file_path && row.file_name && content === row.file_name.trim());
+}
+
+function needsTranslationInto(text: string | null | undefined, lang: TranslationLang) {
+  return Boolean(text?.trim()) && !isTextInLanguage(text ?? "", lang);
+}
+
+/** Translates messages into `lang` and stores the results. Returns id → translation. */
+async function storeMessageTranslations(
+  supabase: SupabaseClient,
+  messages: TranslatableMessage[],
+  lang: TranslationLang,
+) {
+  const stored = new Map<string, string>();
+  const todo = messages.filter((message) => needsTranslationInto(message.content, lang));
+  if (!todo.length) return stored;
+  const translated = await translateMany(supabase, todo.map((message) => message.content), lang);
+  const rows = todo.flatMap((message, index) => {
+    const content = translated[index];
+    if (!content || content.trim() === message.content.trim()) return [];
+    stored.set(message.id, content);
+    return [{ message_id: message.id, lang, content }];
+  });
+  if (rows.length) {
+    const { error } = await supabase.from("chat_message_translations").upsert(rows);
+    if (error) console.warn("[ask-prana] message translation store failed", error.code ?? error.message);
+  }
+  return stored;
+}
+
+/**
+ * Translates session titles/previews into `lang` and stores complete rows.
+ * A field already in `lang` is stored as null (the original is shown).
+ */
+async function storeSessionTranslations(
+  supabase: SupabaseClient,
+  sessions: SessionTexts[],
+  lang: TranslationLang,
+) {
+  if (!sessions.length) return;
+  const texts = sessions.flatMap((session) => [session.title, session.preview]);
+  const translated = await translateMany(supabase, texts, lang);
+  const updatedAt = new Date().toISOString();
+  const rows = sessions.flatMap((session, index) => {
+    const title = needsTranslationInto(session.title, lang) ? translated[index * 2] : null;
+    const preview = needsTranslationInto(session.preview, lang) ? translated[index * 2 + 1] : null;
+    // Store only complete rows, so a failed field is retried on the next list.
+    if (needsTranslationInto(session.title, lang) && !title) return [];
+    if (needsTranslationInto(session.preview, lang) && !preview) return [];
+    return [{
+      session_id: session.id,
+      lang,
+      title,
+      preview: preview ? sessionPreviewText(preview) : null,
+      updated_at: updatedAt,
+    }];
+  });
+  if (rows.length) {
+    const { error } = await supabase.from("chat_session_translations").upsert(rows);
+    if (error) console.warn("[ask-prana] session translation store failed", error.code ?? error.message);
+  }
+}
+
+/** The preview string exactly as sessionSummary shows it (the client's cache key). */
+function sessionPreviewText(value: string | null | undefined) {
+  const text = (value ?? "").replace(/\s+/g, " ").trim();
+  return text.length > 80 ? `${text.slice(0, 77)}...` : text;
+}
+
+async function readMessageTranslations(supabase: SupabaseClient, ids: string[], lang: TranslationLang) {
+  const found = new Map<string, string>();
+  if (!ids.length) return found;
+  const { data, error } = await supabase
+    .from("chat_message_translations")
+    .select("message_id, content")
+    .eq("lang", lang)
+    .in("message_id", ids);
+  if (error) console.warn("[ask-prana] message translation read failed", error.code ?? error.message);
+  for (const row of data ?? []) found.set(String(row.message_id), String(row.content));
+  return found;
+}
+
+async function readSessionTranslations(supabase: SupabaseClient, ids: string[], lang: TranslationLang) {
+  const found = new Map<string, SessionTranslationRow>();
+  if (!ids.length) return found;
+  const { data, error } = await supabase
+    .from("chat_session_translations")
+    .select("session_id, title, preview, updated_at")
+    .eq("lang", lang)
+    .in("session_id", ids);
+  if (error) console.warn("[ask-prana] session translation read failed", error.code ?? error.message);
+  for (const row of (data ?? []) as SessionTranslationRow[]) found.set(String(row.session_id), row);
+  return found;
+}
+
+/**
+ * Attaches `translated_content` to message rows (null when missing) and, in
+ * the background, translates the missing ones newest first so the next load
+ * is complete.
+ */
+async function withMessageTranslations<T extends { id: string; content?: string | null; file_path?: string | null; file_name?: string | null }>(
+  supabase: SupabaseClient,
+  rows: T[],
+  lang: TranslationLang | null,
+): Promise<(T & { translated_content: string | null })[]> {
+  if (!lang) return rows.map((row) => ({ ...row, translated_content: null }));
+  const found = await readMessageTranslations(supabase, rows.map((row) => row.id), lang);
+  const missing = rows
+    .filter((row) => !found.has(row.id) && isTranslatableRow(row) && needsTranslationInto(row.content, lang))
+    .map((row) => ({ id: row.id, content: row.content ?? "" }));
+  if (missing.length) {
+    const newestFirst = missing.reverse().slice(0, BACKGROUND_TRANSLATION_LIMIT);
+    runInBackground("history translation fill", async () => {
+      await storeMessageTranslations(supabase, newestFirst, lang);
+    });
+  }
+  return rows.map((row) => ({ ...row, translated_content: found.get(row.id) ?? null }));
+}
+
+type SessionSummaryRow = ReturnType<typeof sessionSummary>;
+
+/**
+ * Attaches `translatedTitle`/`translatedPreview`. A stored row older than the
+ * session's last update is stale (new message or rename) and is refreshed in
+ * the background.
+ */
+async function withSessionTranslations(
+  supabase: SupabaseClient,
+  sessions: (SessionSummaryRow & { updatedAt: string })[],
+  lang: TranslationLang | null,
+) {
+  const plain = (session: SessionSummaryRow & { updatedAt: string }) => {
+    const { updatedAt: _updatedAt, ...summary } = session;
+    return summary;
+  };
+  if (!lang) return sessions.map((session) => ({ ...plain(session), translatedTitle: null, translatedPreview: null }));
+  const found = await readSessionTranslations(supabase, sessions.map((session) => session.id), lang);
+  const stale: SessionTexts[] = [];
+  const result = sessions.map((session) => {
+    const needsWork = needsTranslationInto(session.title, lang) || needsTranslationInto(session.preview, lang);
+    const row = found.get(session.id);
+    const fresh = row && new Date(row.updated_at).getTime() >= new Date(session.updatedAt).getTime();
+    if (needsWork && !fresh) stale.push({ id: session.id, title: session.title, preview: session.preview });
+    return {
+      ...plain(session),
+      translatedTitle: fresh ? row.title : null,
+      translatedPreview: fresh ? row.preview : null,
+    };
+  });
+  if (stale.length) {
+    runInBackground("session translation fill", async () => {
+      await storeSessionTranslations(supabase, stale.slice(0, BACKGROUND_TRANSLATION_LIMIT), lang);
+    });
+  }
+  return result;
+}
+
+/** Write-time translation of a newly saved message and its session into the other languages. */
+function translateSavedMessage(
+  supabase: SupabaseClient,
+  message: { id: string; content: string; file_path?: string | null; file_name?: string | null },
+  session: SessionTexts,
+) {
+  runInBackground("write-time translation", async () => {
+    const startedAt = Date.now();
+    // The source language needs nothing (needsTranslationInto is false), so
+    // this translates into the two other languages, one OpenAI call each.
+    const outcomes = await Promise.allSettled(TRANSLATION_LANGS.map(async (lang) => {
+      if (isTranslatableRow(message)) {
+        await storeMessageTranslations(supabase, [{ id: message.id, content: message.content }], lang);
+      }
+      if (needsTranslationInto(session.title, lang) || needsTranslationInto(session.preview, lang)) {
+        await storeSessionTranslations(supabase, [session], lang);
+      }
+    }));
+    const failed = outcomes.filter((outcome) => outcome.status === "rejected") as PromiseRejectedResult[];
+    for (const outcome of failed) {
+      console.error("[ask-prana] write-time translation failed", outcome.reason instanceof Error ? outcome.reason.message : outcome.reason);
+    }
+    console.info("[ask-prana] write-time translation", {
+      messageId: message.id,
+      ms: Date.now() - startedAt,
+      failed: failed.length,
+    });
+  });
+}
+
 async function handleConversations(
   supabase: SupabaseClient,
   userId: string,
@@ -1389,6 +1614,56 @@ async function handleConversations(
     return jsonResponse({ error: "Invalid session." }, 403);
   }
   const op = typeof body.op === "string" ? body.op : "";
+  // Display language for stored translations; absent means originals only.
+  const lang = translationLang(body.lang);
+
+  if (op === "translations") {
+    // Language switch: one DB read for everything already on screen.
+    if (!lang) return jsonResponse({ error: "A target language of en, hi, or te is required." }, 400);
+    const messageIds = (Array.isArray(body.messageIds) ? body.messageIds : []).filter(isValidUuid).slice(0, 200);
+    const sessionIds = (Array.isArray(body.sessionIds) ? body.sessionIds : []).filter(isValidUuid).slice(0, 100);
+    const [messageResult, sessionResult] = await Promise.all([
+      messageIds.length
+        ? supabase
+          .from("chat_messages")
+          .select("id, content, file_path, file_name, created_at")
+          .eq("user_id", userId)
+          .in("id", messageIds)
+          .order("created_at", { ascending: true })
+        : Promise.resolve({ data: [], error: null }),
+      sessionIds.length
+        ? supabase
+          .from("chat_sessions")
+          .select("id, title, created_at, updated_at, preview, last_message_at")
+          .eq("user_id", userId)
+          .in("id", sessionIds)
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+    if (messageResult.error || sessionResult.error) {
+      return jsonResponse({ error: "Unable to load translations." }, 500);
+    }
+    const messages = await withMessageTranslations(
+      supabase,
+      (messageResult.data ?? []) as { id: string; content: string | null; file_path: string | null; file_name: string | null }[],
+      lang,
+    );
+    const sessions = await withSessionTranslations(
+      supabase,
+      ((sessionResult.data ?? []) as Parameters<typeof sessionSummary>[0][]).map((session) => ({
+        ...sessionSummary(session),
+        updatedAt: session.updated_at,
+      })),
+      lang,
+    );
+    return jsonResponse({
+      messages: messages.map((row) => ({
+        id: row.id,
+        content: row.content,
+        translated_content: row.translated_content,
+      })),
+      sessions,
+    });
+  }
 
   if (op === "list") {
     const limitRaw = Number(body.limit);
@@ -1414,11 +1689,13 @@ async function handleConversations(
     const rows = sessions ?? [];
     const page = rows.slice(0, limit);
     const nextCursor = rows.length > limit ? page[page.length - 1]?.last_message_at ?? null : null;
-    console.info("[ask-prana] conversation page", { ms: Date.now() - started, count: page.length });
-    return jsonResponse({
-      sessions: page.map((session) => sessionSummary(session)),
-      nextCursor,
-    });
+    const summaries = await withSessionTranslations(
+      supabase,
+      page.map((session) => ({ ...sessionSummary(session), updatedAt: session.updated_at })),
+      lang,
+    );
+    console.info("[ask-prana] conversation page", { ms: Date.now() - started, count: page.length, lang });
+    return jsonResponse({ sessions: summaries, nextCursor });
   }
 
   if (op === "latest") {
@@ -1479,7 +1756,8 @@ async function handleConversations(
     if (error) return jsonResponse({ error: "Unable to open the conversation." }, 500);
     const rows = data ?? [];
     const hasMore = rows.length > limit;
-    return jsonResponse({ messages: rows.slice(0, limit).reverse(), hasMore });
+    const messages = await withMessageTranslations(supabase, rows.slice(0, limit).reverse(), lang);
+    return jsonResponse({ messages, hasMore });
   }
 
   if (op === "save") {
@@ -1526,6 +1804,12 @@ async function handleConversations(
         .eq("id", sessionId)
         .eq("user_id", userId);
     }
+    // Background only: the save response (and the chat reply) never waits.
+    translateSavedMessage(supabase, message, {
+      id: sessionId,
+      title: nextTitle,
+      preview: sessionPreviewText(preview),
+    });
     return jsonResponse({ message });
   }
 
@@ -1538,6 +1822,15 @@ async function handleConversations(
       .eq("id", sessionId)
       .eq("user_id", userId);
     if (error) return jsonResponse({ error: "Unable to rename the conversation." }, 500);
+    const { data: renamed } = await supabase
+      .from("chat_sessions")
+      .select("preview")
+      .eq("id", sessionId)
+      .maybeSingle();
+    const session = { id: sessionId, title: title.slice(0, 120), preview: sessionPreviewText(renamed?.preview) };
+    runInBackground("rename translation", async () => {
+      await Promise.allSettled(TRANSLATION_LANGS.map((target) => storeSessionTranslations(supabase, [session], target)));
+    });
     return jsonResponse({ success: true });
   }
 
@@ -2198,8 +2491,14 @@ serve(async (req) => {
     });
 
     if (task === "translate-history") {
-      const target = translationTargetLanguage(language);
-      if (!target) return jsonResponse({ error: "A target language of English, Hindi, or Telugu is required." }, 400);
+      // Live fallback for text the stored translations do not cover yet.
+      const targetLang = translationLang(
+        translationTargetLanguage(language) === "Telugu" ? "te"
+          : translationTargetLanguage(language) === "Hindi" ? "hi"
+          : translationTargetLanguage(language) === "English" ? "en"
+          : null,
+      );
+      if (!targetLang) return jsonResponse({ error: "A target language of English, Hindi, or Telugu is required." }, 400);
       const rawTexts = Array.isArray(texts) ? texts : null;
       if (!rawTexts || rawTexts.length === 0 || rawTexts.length > 80) {
         return jsonResponse({ error: "Translation requires 1 to 80 texts." }, 400);
@@ -2208,128 +2507,41 @@ serve(async (req) => {
       if (sourceTexts.some((text) => !text.trim() || text.length > 24000)) {
         return jsonResponse({ error: "Each translation text must be non-empty and at most 24000 characters." }, 400);
       }
-      const apiKey = Deno.env.get("OPENAI_API_KEY");
-      if (!apiKey) return jsonResponse({ error: "LLM API key is missing." }, 500);
-      const script = target === "Telugu" ? "Telugu script" : target === "Hindi" ? "Devanagari" : "English";
-      const translationStartedAt = performance.now();
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 40_000);
-      // Translation is deterministic transformation work. Asking the model to
-      // reason adds avoidable latency without improving the returned text.
-      // Keep the permissive JSON parser below for compatibility with existing
-      // model output, rather than adding structured-output overhead.
-      let includeSchema = translationStructuredOutput;
-      let rateLimitRetries = 0;
-      const tried = new Set<string>();
+      let translated: (string | null)[];
       try {
-        while (tried.size < 3) {
-          const attemptKey = `${includeSchema}`;
-          if (tried.has(attemptKey)) break;
-          tried.add(attemptKey);
-          const translationSchema = includeSchema
-            ? {
-              type: "json_schema",
-              name: "ask_prana_translations",
-              strict: true,
-              schema: {
-                type: "object",
-                additionalProperties: false,
-                properties: {
-                  items: { type: "array", items: { type: "string" } },
-                },
-                required: ["items"],
-              },
-            }
-            : undefined;
-          const response = await fetch(OPENAI_RESPONSES_URL, {
-            method: "POST",
-            signal: controller.signal,
-            headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-            body: JSON.stringify({
-              model: Deno.env.get("ASK_PRANA_TRANSLATION_MODEL") || OPENAI_MODEL,
-              instructions: `Translate every item fully into ${target} (${script}). Preserve meaning, numbers, markdown, line breaks, and order. Keep pH, DO, FCR, DOC, Vannamei, biomass, salinity, mg/L, and ppm in Latin script. Return a JSON array of exactly ${sourceTexts.length} strings.`,
-              input: JSON.stringify(sourceTexts),
-              reasoning: { effort: "low" },
-              // Translation should be close to source size; this prevents a
-              // tiny visible batch from reserving a 16k-token generation.
-              max_output_tokens: Math.min(
-                12_000,
-                Math.max(600, Math.ceil(sourceTexts.join("\n").length * 1.6)),
-              ),
-              ...(translationSchema ? { text: { format: translationSchema } } : {}),
-            }),
-          });
-          const data = await response.json() as Record<string, unknown>;
-          const described = JSON.stringify(data);
-          console.log("[ask-prana] history translation response", {
-            target,
-            items: sourceTexts.length,
-            sourceChars: sourceTexts.reduce((total, text) => total + text.length, 0),
-            elapsedMs: Math.round(performance.now() - translationStartedAt),
-            status: response.status,
-          });
-          if (response.status === 400 && includeSchema && /schema|text\.format|json_schema/i.test(described)) {
-            console.error("[ask-prana] history translation schema rejected", describeOpenAIResponse(data));
-            translationStructuredOutput = false;
-            includeSchema = false;
-            continue;
-          }
-          if (response.status === 429) {
-            const openaiError = (data as { error?: { code?: unknown; type?: unknown } }).error;
-            const code = String(openaiError?.code ?? openaiError?.type ?? "");
-            // Short rate-limit bursts (several translation batches at once) clear in
-            // a second or two: wait as OpenAI asks and retry inside this request so
-            // the farmer's screen does not fall back to English. Quota errors are final.
-            if (rateLimitRetries < 3 && !/insufficient_quota/i.test(code)) {
-              const headerMs = Number(response.headers.get("retry-after-ms")) ||
-                Number(response.headers.get("retry-after")) * 1000 || 0;
-              const waitMs = Math.min(Math.max(headerMs, 800 * (rateLimitRetries + 1)), 6000);
-              rateLimitRetries += 1;
-              console.warn("[ask-prana] history translation rate limited, retrying", { code, waitMs, attempt: rateLimitRetries });
-              await new Promise((resolve) => setTimeout(resolve, waitMs));
-              tried.delete(attemptKey);
-              continue;
-            }
-            console.error("[ask-prana] history translation rate limit final", { code, retries: rateLimitRetries });
-          }
-          if (!response.ok) {
-            const parsed = parseOpenAIError(response.status, data);
-            console.error("[ask-prana] history translation openai", response.status, parsed.message);
-            return jsonResponse({ error: parsed.message, status: parsed.httpStatus === 402 ? 402 : response.status }, parsed.httpStatus);
-          }
-          const outputText = extractOpenAIOutputText(data).replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
-          let parsedOutput: unknown;
-          try {
-            parsedOutput = JSON.parse(outputText);
-          } catch (parseError) {
-            console.error("[ask-prana] history translation parse failed", describeOpenAIResponse(data), parseError);
-            return jsonResponse({ error: "Translation response could not be parsed." }, 502);
-          }
-          const translated = Array.isArray(parsedOutput)
-            ? parsedOutput
-            : parsedOutput && typeof parsedOutput === "object" && Array.isArray((parsedOutput as { items?: unknown }).items)
-              ? (parsedOutput as { items: unknown[] }).items
-              : parsedOutput && typeof parsedOutput === "object" && Array.isArray((parsedOutput as { translations?: unknown }).translations)
-                ? (parsedOutput as { translations: unknown[] }).translations
-                : null;
-          if (
-            !translated ||
-            translated.length !== sourceTexts.length ||
-            !translated.every((text) => typeof text === "string" && text.trim())
-          ) {
-            console.error("[ask-prana] history translation incomplete", describeOpenAIResponse(data));
-            return jsonResponse({ error: "Translation response was incomplete." }, 502);
-          }
-          return jsonResponse({ translations: translated });
-        }
-        return jsonResponse({ error: "Translation request was rejected." }, 502);
+        translated = await translateMany(supabase, sourceTexts, targetLang);
       } catch (error) {
-        if (controller.signal.aborted) return jsonResponse({ error: "Translation timed out." }, 504);
-        console.error("[ask-prana] history translation failed", error);
-        return jsonResponse({ error: "Translation response could not be parsed." }, 502);
-      } finally {
-        clearTimeout(timer);
+        const status = error instanceof TranslationError ? error.status : 502;
+        const message = error instanceof Error ? error.message : "Translation failed.";
+        console.error("[ask-prana] history translation failed", status, message);
+        return jsonResponse({ error: message, status }, status);
       }
+
+      // Optional message ids (parallel to texts): persist results per message
+      // so other devices and later visits read them from the database.
+      const ids = Array.isArray(body.ids) ? body.ids : [];
+      const claimed = sourceTexts
+        .map((text, index) => ({ id: ids[index], text, value: translated[index] }))
+        .filter((item): item is { id: string; text: string; value: string } =>
+          isValidUuid(item.id) && Boolean(item.value) && item.value!.trim() !== item.text.trim());
+      if (claimed.length) {
+        const { data: owned } = await supabase
+          .from("chat_messages")
+          .select("id, content")
+          .eq("user_id", authUser.id)
+          .in("id", claimed.map((item) => item.id));
+        const contentById = new Map((owned ?? []).map((row) => [String(row.id), String(row.content ?? "").trim()]));
+        // Only store a translation for the exact text of a message this user owns.
+        const rows = claimed
+          .filter((item) => contentById.get(item.id) === item.text.trim())
+          .map((item) => ({ message_id: item.id, lang: targetLang, content: item.value }));
+        if (rows.length) {
+          const { error } = await supabase.from("chat_message_translations").upsert(rows);
+          if (error) console.warn("[ask-prana] fallback translation store failed", error.code ?? error.message);
+        }
+      }
+      // Failed items come back empty; the client keeps the original for them.
+      return jsonResponse({ translations: translated.map((value) => value ?? "") });
     }
 
     if (!questionText && incomingAttachments.length === 0) {
