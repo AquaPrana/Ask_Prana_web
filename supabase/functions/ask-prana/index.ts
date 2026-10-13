@@ -19,6 +19,7 @@ import {
   buildFallbackEstimationDocumentBody,
   chatCaptionForGeneratedFile,
   isDocumentExportQuestion,
+  isSpreadsheetBodyMismatchedForRequest,
   isUnusableDocumentAnswer,
   mimeForFormat,
   resolveRequestedDocumentFormat,
@@ -172,6 +173,7 @@ Rules:
 const DOCUMENT_EXPORT_RULES = `
 Document / file export requests (PDF, DOCX, Word, Excel/XLSX/spreadsheet, downloadable file, "in a document", "as a document", "don't give in text"):
 • The backend packages your reply into a REAL downloadable PDF, DOCX, or Excel (.xlsx) file. Write ONLY the document body that belongs inside that file.
+• Scope gate: the disease and pond-summary templates below are conditional examples ONLY. Never use their water-quality, health, estimation or pond-summary sheets unless the farmer explicitly asks for that exact report. A feeding chart, budget, inventory, schedule, calculation, comparison or other spreadsheet must contain only its own relevant sheets and columns.
 • When the farmer asks for a "document" / Word / DOCX (and does NOT say Excel/spreadsheet), write a complete Word-document body answering their question: clear headings, numbered checkpoints, and checklists. Do NOT use SHEET: TSV markers for Word/PDF.
 • Never refuse. Never say you cannot attach, generate, or provide a file.
 • Do NOT invent a "Suggested filename". Do NOT pretend a download link exists. Do NOT wrap the answer as casual chat.
@@ -2894,7 +2896,23 @@ If this is a normal water/feed question with no prior health context, do not men
         ? buildReferenceExcelForRequest(farmerQuestion)
         : null;
       let documentBody = referenceXlsxBody ?? answer;
-      if (isUnusableDocumentAnswer(documentBody) || !documentBody.trim()) {
+      const mismatchedSpreadsheet =
+        format === "xlsx" &&
+        !referenceXlsxBody &&
+        !diseasePrecautionsExport &&
+        !pondOverallSummaryExport &&
+        isSpreadsheetBodyMismatchedForRequest(documentBody, farmerQuestion);
+      if (
+        isUnusableDocumentAnswer(documentBody) ||
+        !documentBody.trim() ||
+        mismatchedSpreadsheet
+      ) {
+        if (mismatchedSpreadsheet) {
+          console.warn("[ask-prana] replacing mismatched spreadsheet export", {
+            question: farmerQuestion.slice(0, 160),
+            preview: documentBody.slice(0, 240),
+          });
+        }
         documentBody = diseasePrecautionsExport
           ? buildFallbackDiseasePrecautionsDocumentBody()
           : format === "xlsx"

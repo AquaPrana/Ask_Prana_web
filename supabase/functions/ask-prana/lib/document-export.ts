@@ -961,6 +961,37 @@ export function isUnusableDocumentAnswer(answer: string): boolean {
   return false;
 }
 
+/**
+ * Guard the file packager from a known model failure mode: returning one of
+ * the pond/water templates for a differently-scoped spreadsheet request.
+ * This is intentionally narrow; unfamiliar requests still keep the model's
+ * purpose-specific workbook instead of being forced into a local template.
+ */
+export function isSpreadsheetBodyMismatchedForRequest(
+  documentBody: string,
+  question: string,
+): boolean {
+  const body = documentBody.toLowerCase();
+  const q = question.toLowerCase();
+  if (!/^\s*(?:sheet|tab)\s*[:\-]/im.test(documentBody)) return true;
+
+  const requestNeeds: Array<{ question: RegExp; body: RegExp }> = [
+    { question: /\b(blind\s+feed(?:ing)?|feed(?:ing)?\s+(?:chart|schedule|plan)|feed\s+table)\b/, body: /\bfeed(?:ing)?\b/ },
+    { question: /\b(feed\s+inventory|inventory\s+(?:of\s+)?feed|feed\s+stock)\b/, body: /\b(feed\s+inventory|opening\s+stock|closing\s+stock)\b/ },
+    { question: /\b(expense|expenses|budget|cost(?:s)?|cash\s*flow)\b/, body: /\b(expense|budget|cost|cash\s*flow|amount)\b/ },
+    { question: /\b(water\s+quality|do\s+(?:log|tracker)|ammonia\s+(?:log|tracker))\b/, body: /\b(water\s+quality|dissolved\s+oxygen|ammonia|nitrite)\b/ },
+    { question: /\b(inventory|stock\s+register)\b/, body: /\b(inventory|opening\s+stock|closing\s+stock)\b/ },
+  ];
+
+  const expected = requestNeeds.find((entry) => entry.question.test(q));
+  if (expected && !expected.body.test(body)) return true;
+
+  const asksForWater = /\b(water\s+quality|dissolved\s+oxygen|\bdo\b|ammonia|nitrite|salinity|ph)\b/.test(q);
+  const asksForPondReport = /\bpond\s+(?:summary|health|condition|status)|overall\s+pond\s+(?:summary|report)\b/.test(q);
+  const bodyIsWaterOrPondTemplate = /\b(latest\s+water\s+quality|water\s+quality\s+management|pond\s+summary|recent\s+changes)\b/.test(body);
+  return !asksForWater && !asksForPondReport && bodyIsWaterOrPondTemplate;
+}
+
 /** A narrow, verified reference workbook for a common feed-chart request. */
 function isVannameiBlindFeedingChartRequest(question: string): boolean {
   const q = question.toLowerCase();
@@ -1016,6 +1047,15 @@ export function buildFallbackExcelForRequest(question: string): string {
   const q = question.toLowerCase();
   const referenceWorkbook = buildReferenceExcelForRequest(question);
   if (referenceWorkbook) return referenceWorkbook;
+  if (/\b(blind\s+feed(?:ing)?|feed(?:ing)?\s+(?:chart|schedule|plan))\b/.test(q)) {
+    return [
+      "SHEET: Blind Feeding Chart",
+      "TITLE: Vannamei Blind Feeding Chart",
+      "Day\tSpecies\tStocking count\tFeed quantity (kg/lakh/day)\tTotal daily feed (kg)\tFeedings per day\tFeed per feeding (kg)\tRemarks",
+      "1\tLitopenaeus vannamei\tEnter stocking count\tEnter farm-approved rate\t\tEnter frequency\t\tProvide stocking count, feed brand/chart and target culture day for a calculated schedule.",
+      "NOTE: This fallback intentionally does not invent blind-feeding rates when the request does not provide a validated farm reference or the required stocking inputs.",
+    ].join("\n");
+  }
   if (/checklist|check list|చెక్‌లిస్ట్|चेकलिस्ट/.test(question)) {
     return [
       "SHEET: Shrimp Farming Checklist",
@@ -1284,6 +1324,19 @@ function titleFromDocumentBody(body: string): string | null {
   return null;
 }
 
+/** Spreadsheet titles use TITLE: when present, otherwise the first sheet name. */
+function titleFromSpreadsheetBody(body: string): string | null {
+  let sheetName: string | null = null;
+  for (const rawLine of body.replace(/\r\n/g, "\n").split("\n")) {
+    const line = rawLine.trim();
+    const title = line.match(/^TITLE\s*:\s*(.+)$/i)?.[1]?.trim();
+    if (title) return title;
+    const sheet = line.match(/^(?:SHEET|TAB)\s*[:\-]\s*(.+)$/i)?.[1]?.trim();
+    if (sheet && !sheetName) sheetName = sheet;
+  }
+  return sheetName;
+}
+
 /** Topic keywords (English/Telugu/Hindi) for bodies without a Latin title. */
 const TOPIC_FILE_NAMES: Array<[RegExp, string]> = [
   [/disease|వ్యాధి|రోగ|रोग|बीमारी/i, "Diseases and Precautions"],
@@ -1317,7 +1370,9 @@ export function buildDocumentFileName(
   format: DocumentFormat,
   pondName?: string | null,
 ): string {
-  const title = format === "xlsx" ? null : titleFromDocumentBody(documentBody);
+  const title = format === "xlsx"
+    ? titleFromSpreadsheetBody(documentBody)
+    : titleFromDocumentBody(documentBody);
   let base = title ? sanitizeDisplayFileName(toTitleCase(title)) : "";
   if (!base) {
     const haystack = `${question}\n${documentBody.slice(0, 600)}`;

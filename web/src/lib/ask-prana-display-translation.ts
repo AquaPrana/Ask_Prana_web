@@ -42,17 +42,23 @@ type Job = { language: Language; priority: AskPranaTranslationPriority; texts: s
 // small so the newest visible messages repaint as soon as their own request
 // completes instead of waiting behind older conversation history.
 const BATCH_LIMITS: Record<AskPranaTranslationPriority, { items: number; chars: number }> = {
-  visible: { items: 4, chars: 3_000 },
+  // Keep foreground work small enough that a long assistant answer cannot
+  // hold the newest visible turns behind a large history batch.
+  visible: { items: 3, chars: 2_400 },
   background: { items: 24, chars: 2400 },
   prefetch: { items: 8, chars: 1400 },
 };
-const MAX_CONCURRENT_REQUESTS = 6;
+// Six concurrent model translations looked fast locally, but a language
+// switch can queue an entire chat plus the sidebar and trigger rate limits.
+// Three requests keep the first visible content responsive and let the queue
+// make steady progress for every stored conversation.
+const MAX_CONCURRENT_REQUESTS = 3;
 /** Caps per lower priority so the visible chat always has free request slots. */
 const MAX_CONCURRENT_BY_PRIORITY: Record<AskPranaTranslationPriority, number> = {
   visible: MAX_CONCURRENT_REQUESTS,
   // History titles/previews are independent. Two background batches keep a
   // large conversation list moving without taking slots from the active chat.
-  background: 2,
+  background: 1,
   prefetch: 1,
 };
 /** After an OpenAI rate limit: retry the screen quickly, keep low-priority work paused longer. */
@@ -65,6 +71,10 @@ const STORAGE_PREFIX = "ask-prana:display-translations:v1:";
 const MAX_PERSISTED_PER_LANGUAGE = 2_000;
 const PERSIST_DEBOUNCE_MS = 800;
 const LANGUAGES: Language[] = ["en", "hi", "te"];
+// Long answers were previously one translation job. A single detailed answer
+// could therefore keep its original language on screen until a slow model call
+// completed. Splitting is display-only; original message data is untouched.
+const TRANSLATION_SEGMENT_MAX_CHARS = 1_600;
 
 const store: Record<Language, Map<string, Entry>> = {
   en: new Map(),
@@ -227,13 +237,52 @@ function needsTranslation(text: string, language: Language) {
   return Boolean(text?.trim()) && !isTextInAskPranaLanguage(text, language);
 }
 
+/** Split only long display text, preferring paragraph/line/sentence boundaries. */
+function translationUnits(text: string): string[] {
+  const source = text.trim();
+  if (source.length <= TRANSLATION_SEGMENT_MAX_CHARS) return [source];
+
+  const units: string[] = [];
+  let remaining = source;
+  while (remaining.length > TRANSLATION_SEGMENT_MAX_CHARS) {
+    const window = remaining.slice(0, TRANSLATION_SEGMENT_MAX_CHARS + 1);
+    const candidates = [
+      window.lastIndexOf("\n\n"),
+      window.lastIndexOf("\n"),
+      Math.max(window.lastIndexOf(". "), window.lastIndexOf("? "), window.lastIndexOf("! ")) + 1,
+      window.lastIndexOf(" "),
+    ];
+    const cut = candidates.find((index) => index >= Math.floor(TRANSLATION_SEGMENT_MAX_CHARS * 0.45)) ?? TRANSLATION_SEGMENT_MAX_CHARS;
+    const unit = remaining.slice(0, cut).trim();
+    if (!unit) break;
+    units.push(unit);
+    remaining = remaining.slice(cut).trimStart();
+  }
+  if (remaining.trim()) units.push(remaining.trim());
+  return units.length ? units : [source];
+}
+
 /** One cache entry per message, title, or preview. The original stays until that whole string is ready. */
 function resolveText(text: string, language: Language): Resolved {
   if (!needsTranslation(text, language)) return { status: "ready", text };
-  const entry = store[language].get(text.trim());
-  if (entry?.status === "ready" && entry.value) return { status: "ready", text: entry.value };
-  if (entry?.status === "error") return { status: "error", text };
-  if (entry?.status === "loading") return { status: "loading", text };
+  const source = text.trim();
+  const wholeEntry = store[language].get(source);
+  // Keep already-persisted single-message translations usable after upgrading
+  // to segmented translation.
+  if (wholeEntry?.status === "ready" && wholeEntry.value) return { status: "ready", text: wholeEntry.value };
+  if (wholeEntry?.status === "error") return { status: "error", text };
+  if (wholeEntry?.status === "loading") return { status: "loading", text };
+
+  const units = translationUnits(source);
+  const entries = units.map((unit) => store[language].get(unit));
+  if (entries.every((entry) => entry?.status === "ready" && entry.value)) {
+    return {
+      status: "ready",
+      text: entries.map((entry) => entry?.value.trim() ?? "").join("\n\n"),
+    };
+  }
+  if (entries.some((entry) => entry?.status === "loading")) return { status: "loading", text };
+  if (entries.some((entry) => entry?.status === "error")) return { status: "error", text };
   return { status: "not_loaded", text };
 }
 
@@ -490,18 +539,27 @@ export function requestAskPranaDisplayTranslations(
   const seen = new Set(bucket.units);
   let added = false;
   for (const text of texts) {
-    const key = text?.trim();
-    if (!key || !needsTranslation(text, language) || seen.has(key)) continue;
-    seen.add(key);
-    const entry = cache.get(key);
-    if (!shouldSendTranslation(entry?.status, isRetryable(entry, timestamp))) {
-      if (entry?.status === "ready" && __DEV__ && !isPrefetch && metrics?.to === language) metrics.cached += 1;
+    const source = text?.trim();
+    if (!source || !needsTranslation(text, language)) continue;
+    const wholeEntry = cache.get(source);
+    // A cached full-message result from an earlier version wins over chunks.
+    if (wholeEntry?.status === "ready") {
+      if (__DEV__ && !isPrefetch && metrics?.to === language) metrics.cached += 1;
       continue;
     }
-    cache.set(key, { status: "loading", attempts: entry?.attempts });
-    bucket.units.push(key);
-    if (__DEV__ && !isPrefetch && metrics?.to === language) metrics.needTranslation += 1;
-    added = true;
+    for (const key of translationUnits(source)) {
+      if (!key || !needsTranslation(key, language) || seen.has(key)) continue;
+      seen.add(key);
+      const entry = cache.get(key);
+      if (!shouldSendTranslation(entry?.status, isRetryable(entry, timestamp))) {
+        if (entry?.status === "ready" && __DEV__ && !isPrefetch && metrics?.to === language) metrics.cached += 1;
+        continue;
+      }
+      cache.set(key, { status: "loading", attempts: entry?.attempts });
+      bucket.units.push(key);
+      if (__DEV__ && !isPrefetch && metrics?.to === language) metrics.needTranslation += 1;
+      added = true;
+    }
   }
   if (added) {
     pendingUnits.set(bucketKey, bucket);

@@ -439,6 +439,10 @@ export default function AskPranaScreen() {
   // Originals in `messages` are never modified; only the rendered copy changes.
   const { displayText: displayMessageText, contentPhase } =
     useAskPranaDisplayTranslation(translationSources, "visible", {
+      // The source list is newest-first. Translate the active end of a chat
+      // immediately; older turns continue through the shared background queue
+      // rather than starving the latest reply or triggering API rate limits.
+      priorityCount: 9,
       // Once the current conversation is settled, warm Hindi/Telugu/English
       // cache entries in the background so later language switches are local.
       prefetchOtherLanguages: true,

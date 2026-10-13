@@ -356,7 +356,9 @@ export function AskPranaChatSidebar({
   const { displayText, getStatus } = useAskPranaDisplayTranslation(
     sessions.flatMap((session) => [session.title, session.preview].filter(Boolean)),
     "visible",
-    { priorityCount: 20, prefetchOtherLanguages: true },
+    // Keep room for the open conversation's newest messages. Remaining
+    // history rows still translate in the shared background queue.
+    { priorityCount: 10, prefetchOtherLanguages: true },
   );
 
   const visibleSessions = useMemo(() => {
