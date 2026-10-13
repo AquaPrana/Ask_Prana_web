@@ -1,3 +1,4 @@
+import { createClient } from "@supabase/supabase-js";
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
 const corsHeaders = {
@@ -125,6 +126,46 @@ function mapSttLanguage(raw: string): "en" | "te" | "hi" | null {
   return "en";
 }
 
+/**
+ * Deployed with verify_jwt = false because Ask Prana issues opaque `ap_`
+ * session tokens, so authenticate here the same way the ask-prana function
+ * does. Without this the endpoint would spend OpenAI credits for anyone.
+ */
+async function authenticate(req: Request): Promise<string | null> {
+  const authorization = req.headers.get("Authorization");
+  if (!authorization?.startsWith("Bearer ")) return null;
+  const supabaseUrl = Deno.env.get("SUPABASE_URL");
+  const serviceKey =
+    Deno.env.get("SERVICE_ROLE_KEY") ??
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if (!supabaseUrl || !serviceKey) {
+    console.error("[ask-prana-transcribe] Missing SUPABASE_URL or service role key");
+    return null;
+  }
+  const supabase = createClient(supabaseUrl, serviceKey);
+  const accessToken = authorization.replace(/^Bearer\s+/i, "").trim();
+
+  if (accessToken.startsWith("ap_")) {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(accessToken));
+    const tokenHash = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+    const { data: appSession } = await supabase
+      .from("user_sessions")
+      .select("user_id, expires_at, revoked_at")
+      .eq("token_hash", tokenHash)
+      .maybeSingle();
+    const expiresAt = appSession?.expires_at ? new Date(String(appSession.expires_at)).getTime() : 0;
+    if (!appSession || appSession.revoked_at || expiresAt <= Date.now()) return null;
+    return String(appSession.user_id);
+  }
+
+  const { data: { user }, error } = await supabase.auth.getUser(accessToken);
+  if (error || !user) {
+    console.error("[ask-prana-transcribe] JWT validation failed:", error?.message);
+    return null;
+  }
+  return user.id;
+}
+
 async function readMultipartAudio(req: Request) {
   const formData = await req.formData();
   const audio = formData.get("file");
@@ -215,6 +256,11 @@ serve(async (req) => {
   }
 
   try {
+    const userId = await authenticate(req);
+    if (!userId) {
+      return jsonResponse({ error: "Invalid JWT or user not authenticated." }, 401);
+    }
+
     const contentType = req.headers.get("content-type") ?? "";
     if (!contentType.toLowerCase().includes("multipart/form-data")) {
       console.error("[ask-prana-transcribe] expected multipart/form-data, got:", contentType);

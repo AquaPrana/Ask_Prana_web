@@ -240,6 +240,7 @@ export default function AskPranaScreen() {
   const [hoveredLanguageOption, setHoveredLanguageOption] = useState<string | null>(null);
   const [voiceModeOpen, setVoiceModeOpen] = useState(false);
   const [recordingElapsedSec, setRecordingElapsedSec] = useState(0);
+  const failedRecordingIntentRef = useRef<"composer" | "send">("composer");
   // Start from the already-loaded UI language so nothing renders in English first.
   const [preferredLanguage, setPreferredLanguage] =
     useState<AskPranaSpeechLanguageCode>(() =>
@@ -313,6 +314,9 @@ export default function AskPranaScreen() {
     startAudioRecording,
     stopAudioRecordingToComposer,
     stopAudioRecordingToTranscript,
+    hasFailedRecording,
+    retryFailedRecording,
+    discardFailedRecording,
     cancelAudioRecording,
     stopGeneration,
     openConversation,
@@ -684,9 +688,11 @@ export default function AskPranaScreen() {
     }
     if (isRecording) {
       // Dictate into composer for review — never auto-send.
+      failedRecordingIntentRef.current = "composer";
       void stopAudioRecordingToComposer();
       return;
     }
+    discardFailedRecording();
     void startAudioRecording({ source: "composer" });
   };
 
@@ -694,7 +700,34 @@ export default function AskPranaScreen() {
     if (!isRecording || isTranscribing) {
       return;
     }
+    failedRecordingIntentRef.current = "composer";
     void stopAudioRecordingToComposer();
+  };
+
+  // Draft is read-only while recording, so the press-time draft is current.
+  const sendWithTranscript = (transcript: string) => {
+    const existing = draft.trim();
+    handleSend(existing ? `${existing} ${transcript}` : transcript);
+  };
+
+  const handleSendDictation = async () => {
+    if (!isRecording || isTranscribing || isSending) {
+      return;
+    }
+    failedRecordingIntentRef.current = "send";
+    const transcript = await stopAudioRecordingToTranscript();
+    if (transcript) sendWithTranscript(transcript);
+  };
+
+  const handleRetryFailedRecording = async () => {
+    const transcript = await retryFailedRecording();
+    if (!transcript) return;
+    if (failedRecordingIntentRef.current === "send") {
+      sendWithTranscript(transcript);
+      return;
+    }
+    const existing = draft.trim();
+    setDraft(existing ? `${existing} ${transcript}` : transcript);
   };
 
   const handleCancelDictation = () => {
@@ -1145,6 +1178,20 @@ export default function AskPranaScreen() {
                 >
                   <View style={styles.recordingStopSquare} />
                 </Pressable>
+                <Pressable
+                  onPress={() => { void handleSendDictation(); }}
+                  disabled={isSending}
+                  style={({ pressed }) => [
+                    styles.sendButton,
+                    styles.recordingSendButton,
+                    isSending && styles.sendButtonDisabled,
+                    pressed && styles.pressed,
+                  ]}
+                  accessibilityRole="button"
+                  accessibilityLabel={t("askPrana.send")}
+                >
+                  <Feather name="arrow-up" size={18} color={colors.white} />
+                </Pressable>
               </View>
             </View>
             ) : (
@@ -1429,6 +1476,29 @@ export default function AskPranaScreen() {
               <Text style={styles.recordingHint}>
                 {t("askPrana.transcribingHint")}
               </Text>
+            ) : hasFailedRecording && !isRecording ? (
+              <View style={styles.failedRecordingRow}>
+                <Text style={styles.failedRecordingText}>
+                  Voice message couldn't be processed.
+                </Text>
+                <Pressable
+                  onPress={() => { void handleRetryFailedRecording(); }}
+                  disabled={isSending}
+                  style={({ pressed }) => [styles.failedRecordingAction, pressed && styles.pressed]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Retry voice message"
+                >
+                  <Text style={styles.failedRecordingRetryText}>Retry</Text>
+                </Pressable>
+                <Pressable
+                  onPress={discardFailedRecording}
+                  style={({ pressed }) => [styles.failedRecordingAction, pressed && styles.pressed]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Discard voice message"
+                >
+                  <Text style={styles.failedRecordingDiscardText}>Discard</Text>
+                </Pressable>
+              </View>
             ) : null}
           </View>
           )}
@@ -2117,6 +2187,43 @@ const styles = StyleSheet.create({
     height: 13,
     borderRadius: 3,
     backgroundColor: colors.white,
+  },
+  recordingSendButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    marginBottom: 0,
+  },
+  failedRecordingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    flexWrap: "wrap",
+    gap: 12,
+  },
+  failedRecordingText: {
+    color: colors.muted,
+    fontFamily: ASK_PRANA_FONT_FAMILY,
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  failedRecordingAction: {
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+  },
+  failedRecordingRetryText: {
+    color: "#14B8A6",
+    fontFamily: ASK_PRANA_FONT_FAMILY,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: "600",
+  },
+  failedRecordingDiscardText: {
+    color: colors.muted,
+    fontFamily: ASK_PRANA_FONT_FAMILY,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: "500",
   },
   recordingHint: {
     color: "#0F766E",

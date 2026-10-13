@@ -686,6 +686,10 @@ type AskPranaChatContextValue = {
   stopAudioRecordingToComposer: () => Promise<string | null>;
   /** Stop mic and return transcript only (for voice conversation turns). */
   stopAudioRecordingToTranscript: () => Promise<string | null>;
+  /** A composer recording whose transcription failed and can be retried. */
+  hasFailedRecording: boolean;
+  retryFailedRecording: () => Promise<string | null>;
+  discardFailedRecording: () => void;
   /** Discard in-progress dictation recording/transcription; preserves draft. */
   cancelAudioRecording: () => Promise<void>;
   stopGeneration: () => void;
@@ -771,6 +775,8 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [voiceAudioLevel, setVoiceAudioLevel] = useState(0);
+  const [hasFailedRecording, setHasFailedRecording] = useState(false);
+  const failedRecordingRef = useRef<Parameters<typeof transcribeAskPranaAudio>[0] | null>(null);
   const [voiceLiveTranscript, setVoiceLiveTranscript] = useState("");
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [thinkingKind, setThinkingKind] = useState<AskPranaThinkingKind | null>(
@@ -2970,25 +2976,32 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       }
 
       const preferredLanguage = await loadAskPranaPreferredLanguage();
+      const transcribeInput = {
+        uri,
+        blob,
+        mimeType: audioMeta.mimeType,
+        fileName: audioMeta.fileName,
+        // Do not constrain voice conversation to the response language:
+        // Whisper's automatic language detection handles code-switched
+        // Telugu/Hindi/English and short English aquaculture terms.
+        language:
+          audioRecordingSourceRef.current === "voice"
+            ? "auto"
+            : preferredLanguage,
+      };
       let transcript = "";
       try {
-        transcript = await transcribeAskPranaAudio({
-          uri,
-          blob,
-          mimeType: audioMeta.mimeType,
-          fileName: audioMeta.fileName,
-          // Do not constrain voice conversation to the response language:
-          // Whisper's automatic language detection handles code-switched
-          // Telugu/Hindi/English and short English aquaculture terms.
-          language:
-            audioRecordingSourceRef.current === "voice"
-              ? "auto"
-              : preferredLanguage,
-        });
+        transcript = await transcribeAskPranaAudio(transcribeInput);
       } catch (error) {
         console.log("[AskPranaChat] transcription error:", error);
         if (epochAtStart !== dictationEpochRef.current) {
           return null;
+        }
+        // Keep the composer recording so a network/server failure does not
+        // force the user to speak again.
+        if (audioRecordingSourceRef.current !== "voice") {
+          failedRecordingRef.current = transcribeInput;
+          setHasFailedRecording(true);
         }
         Alert.alert("Transcription failed", voiceErrorMessage(error));
         return null;
@@ -3023,6 +3036,34 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       await releaseRecordingResources();
     }
   }, [audioRecorder, clearStuckRecordingFlag, clearVoiceSilenceWatch, releaseRecordingResources]);
+
+  const discardFailedRecording = useCallback(() => {
+    failedRecordingRef.current = null;
+    setHasFailedRecording(false);
+  }, []);
+
+  const retryFailedRecording = useCallback(async (): Promise<string | null> => {
+    const failed = failedRecordingRef.current;
+    if (!failed || isTranscribingRef.current || isRecordingRef.current) return null;
+    isTranscribingRef.current = true;
+    setIsTranscribing(true);
+    try {
+      const transcript = (await transcribeAskPranaAudio(failed)).trim();
+      discardFailedRecording();
+      if (!transcript) {
+        Alert.alert("Couldn't understand", voiceErrorMessage("VOICE_EMPTY"));
+        return null;
+      }
+      return transcript;
+    } catch (error) {
+      console.log("[AskPranaChat] transcription retry error:", error);
+      Alert.alert("Transcription failed", voiceErrorMessage(error));
+      return null;
+    } finally {
+      isTranscribingRef.current = false;
+      setIsTranscribing(false);
+    }
+  }, [discardFailedRecording]);
 
   const stopAudioRecordingToTranscript = useCallback(async () => {
     if (webDictationRef.current) {
@@ -3106,6 +3147,9 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       stopAudioRecordingAndSend,
       stopAudioRecordingToComposer,
       stopAudioRecordingToTranscript,
+      hasFailedRecording,
+      retryFailedRecording,
+      discardFailedRecording,
       cancelAudioRecording,
       stopGeneration,
       refreshPonds,
@@ -3154,6 +3198,9 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       stopAudioRecordingAndSend,
       stopAudioRecordingToComposer,
       stopAudioRecordingToTranscript,
+      hasFailedRecording,
+      retryFailedRecording,
+      discardFailedRecording,
       cancelAudioRecording,
       stopGeneration,
       refreshPonds,
