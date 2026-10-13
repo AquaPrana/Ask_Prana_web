@@ -129,8 +129,8 @@ function guessExtension(
   return "bin";
 }
 
-async function fileToBase64(uri: string): Promise<string> {
-  const response = await fetch(uri);
+async function fileToBase64(uri: string, signal?: AbortSignal): Promise<string> {
+  const response = await fetch(uri, { signal });
   const bytes = new Uint8Array(await response.arrayBuffer());
   let binary = "";
   const chunkSize = 0x8000;
@@ -159,12 +159,15 @@ export async function uploadAskPranaFile({
   folder,
   fileName,
   mimeType,
+  signal,
 }: {
   uri: string;
   folder: AskPranaFileFolder;
   fileName?: string | null;
   mimeType?: string | null;
   userId?: string | null;
+  /** Lets a removed attachment cancel its local read and network upload. */
+  signal?: AbortSignal;
 }): Promise<{ data: UploadedAskPranaFile | null; error: string | null }> {
   const extension = guessExtension(uri, mimeType, fileName);
   const safeName = sanitizeFileName(
@@ -174,13 +177,18 @@ export async function uploadAskPranaFile({
     return { data: null, error: "Choose an image or document to upload." };
   }
 
+  const timeoutController = new AbortController();
+  const timeout = setTimeout(() => timeoutController.abort(), 60_000);
+  const abort = () => timeoutController.abort();
+  signal?.addEventListener("abort", abort, { once: true });
+
   try {
     const session = await ensureValidSession();
     const accessToken = session?.access_token ?? "";
     if (!accessToken.startsWith("ap_")) {
       return { data: null, error: "Your session has expired. Please log in again." };
     }
-    const fileBase64 = await fileToBase64(uri);
+    const fileBase64 = await fileToBase64(uri, timeoutController.signal);
     const resolvedMime = resolveMimeType(uri, safeName, mimeType, null);
     const { data, error } = await supabase.functions.invoke("ask-prana", {
       body: {
@@ -191,6 +199,7 @@ export async function uploadAskPranaFile({
         fileBase64,
       },
       headers: { Authorization: `Bearer ${accessToken}` },
+      signal: timeoutController.signal,
     });
     const payload = data as {
       success?: boolean;
@@ -214,10 +223,21 @@ export async function uploadAskPranaFile({
       error: null,
     };
   } catch (error) {
+    if (timeoutController.signal.aborted) {
+      return {
+        data: null,
+        error: signal?.aborted
+          ? "Attachment upload was cancelled."
+          : "Attachment upload timed out. Please retry.",
+      };
+    }
     return {
       data: null,
       error: error instanceof Error ? error.message : "The selected file could not be read.",
     };
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener("abort", abort);
   }
 }
 

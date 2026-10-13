@@ -65,11 +65,14 @@ import {
 export type AskPranaPendingAttachment = {
   id: string;
   kind: "image" | "file";
+  status: "preparing" | "ready" | "failed";
+  error?: string | null;
   filePath: string;
   fileUrl: string;
   localUri?: string | null;
   fileName: string;
   mimeType: string;
+  fileSize?: number | null;
 };
 
 export type ChatRole = "assistant" | "user";
@@ -629,6 +632,7 @@ type AskPranaChatContextValue = {
   setDraft: (value: string) => void;
   setSelectedPondId: (pondId: string) => void;
   removePendingAttachment: (id: string) => void;
+  retryPendingAttachment: (id: string) => void;
   sendQuestion: (
     question: string,
     requestContext?: AskPranaRequestContext,
@@ -822,6 +826,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
   const pondLoadEpochRef = useRef(0);
   const selectedPondIdRef = useRef<string | null>(null);
   const pendingAttachmentsRef = useRef<AskPranaPendingAttachment[]>([]);
+  const pendingAttachmentUploadsRef = useRef(new Map<string, AbortController>());
   const isSendingRef = useRef(false);
   const isRecordingRef = useRef(false);
   const isTranscribingRef = useRef(false);
@@ -843,7 +848,13 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     pendingAttachmentsRef.current = pendingAttachments;
+    setIsUploading(pendingAttachments.some((item) => item.status === "preparing"));
   }, [pendingAttachments]);
+
+  useEffect(() => () => {
+    pendingAttachmentUploadsRef.current.forEach((controller) => controller.abort());
+    pendingAttachmentUploadsRef.current.clear();
+  }, []);
 
   useEffect(() => {
     isSendingRef.current = isSending;
@@ -2037,16 +2048,21 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         return null;
       }
 
-      if (
-        !fromVoiceMode &&
-        (isRecordingRef.current ||
-          isTranscribingRef.current ||
-          isUploadingRef.current)
-      ) {
+      const attachmentStillPreparing = pendingSnapshot.some(
+        (attachment) => attachment.status === "preparing",
+      );
+      const attachmentFailed = pendingSnapshot.some(
+        (attachment) => attachment.status === "failed",
+      );
+      if (!fromVoiceMode && (isRecordingRef.current || isTranscribingRef.current || attachmentStillPreparing || attachmentFailed)) {
+        if (attachmentFailed) {
+          setAttachmentError("An attachment could not be prepared. Retry it or remove it before sending.");
+        }
         console.log("[AskPranaChat] send blocked: composer busy", {
           isRecording: isRecordingRef.current,
           isTranscribing: isTranscribingRef.current,
-          isUploading: isUploadingRef.current,
+          isUploading: attachmentStillPreparing,
+          attachmentFailed,
         });
         return null;
       }
@@ -2445,17 +2461,66 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
     ],
   );
 
-  const removePendingAttachment = useCallback((id: string) => {
-    setPendingAttachments((current) =>
-      current.filter((item) => item.id !== id),
-    );
+  const uploadPendingAttachment = useCallback(async (attachment: AskPranaPendingAttachment) => {
+    const uri = attachment.localUri;
+    if (!uri) return;
+
+    pendingAttachmentUploadsRef.current.get(attachment.id)?.abort();
+    const controller = new AbortController();
+    pendingAttachmentUploadsRef.current.set(attachment.id, controller);
+    setAttachmentError(null);
+    setPendingAttachments((current) => current.map((item) =>
+      item.id === attachment.id
+        ? { ...item, status: "preparing", error: null }
+        : item,
+    ));
+
+    const upload = await uploadAskPranaFile({
+      uri,
+      folder: attachment.kind === "image" ? "images" : "documents",
+      fileName: attachment.fileName,
+      mimeType: attachment.mimeType,
+      signal: controller.signal,
+    });
+    if (pendingAttachmentUploadsRef.current.get(attachment.id) !== controller) return;
+    pendingAttachmentUploadsRef.current.delete(attachment.id);
+
+    setPendingAttachments((current) => current.map((item) => {
+      if (item.id !== attachment.id) return item;
+      if (upload.data?.filePath) {
+        return {
+          ...item,
+          status: "ready",
+          error: null,
+          filePath: upload.data.filePath,
+          fileUrl: upload.data.fileUrl,
+          localUri: upload.data.localUri ?? uri,
+          fileName: upload.data.fileName,
+          mimeType: upload.data.mimeType,
+        };
+      }
+      return {
+        ...item,
+        status: "failed",
+        error: upload.error ?? "The selected file could not be prepared.",
+      };
+    }));
   }, []);
+
+  const removePendingAttachment = useCallback((id: string) => {
+    pendingAttachmentUploadsRef.current.get(id)?.abort();
+    pendingAttachmentUploadsRef.current.delete(id);
+    setPendingAttachments((current) => current.filter((item) => item.id !== id));
+  }, []);
+
+  const retryPendingAttachment = useCallback((id: string) => {
+    const attachment = pendingAttachmentsRef.current.find((item) => item.id === id);
+    if (attachment) void uploadPendingAttachment(attachment);
+  }, [uploadPendingAttachment]);
 
   const sendImageAttachment = useCallback(
     async (_requestContext?: AskPranaRequestContext) => {
-      if (isSending || isUploading || isRecording || isTranscribing) {
-        return;
-      }
+      if (isSending || isRecording || isTranscribing) return;
 
       const pickAndUpload = async (source: "camera" | "gallery") => {
         const remainingSlots = MAX_ATTACHMENT_COUNT - pendingAttachmentsRef.current.length;
@@ -2463,156 +2528,58 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
           setAttachmentError(`You can attach up to ${MAX_ATTACHMENT_COUNT} files.`);
           return;
         }
-
-        let resolvedImages: Awaited<ReturnType<typeof pickMultipleImages>> = null;
-        if (source === "camera") {
-          const single = await pickSingleImage("camera");
-          resolvedImages = single ? [single] : null;
-        } else {
-          resolvedImages = await pickMultipleImages(remainingSlots);
-        }
-        if (!resolvedImages?.length) return;
-
-        const chosen = resolvedImages.filter((picked) =>
-          isSupportedImageAttachment(picked.fileName, picked.mimeType),
-        );
-        if (chosen.length === 0) {
+        const resolvedImages = source === "camera"
+          ? (() => pickSingleImage("camera").then((single) => single ? [single] : null))()
+          : pickMultipleImages(remainingSlots);
+        const images = await resolvedImages;
+        if (!images?.length) return;
+        const chosen = images.filter((picked) => isSupportedImageAttachment(picked.fileName, picked.mimeType));
+        if (!chosen.length) {
           setAttachmentError(UNSUPPORTED_FILE_MESSAGE);
           return;
         }
-
         const localItems: AskPranaPendingAttachment[] = chosen.map((picked, index) => ({
           id: `pending-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
-          kind: "image",
-          filePath: "",
-          fileUrl: "",
+          kind: "image", status: "preparing", error: null, filePath: "", fileUrl: "",
           localUri: picked.uri,
-          fileName: picked.fileName,
-          mimeType: picked.mimeType,
+          fileName: picked.fileName ?? `image-${index + 1}.jpg`,
+          mimeType: picked.mimeType ?? "image/jpeg",
         }));
         setAttachmentError(null);
-        setPendingAttachments((current) =>
-          [...current, ...localItems].slice(0, MAX_ATTACHMENT_COUNT),
-        );
-        setIsUploading(true);
-        try {
-          for (let index = 0; index < chosen.length; index += 1) {
-            const picked = chosen[index];
-            const localItem = localItems[index];
-            const upload = await uploadAskPranaFile({
-              uri: picked.uri,
-              folder: "images",
-              fileName: picked.fileName,
-              mimeType: picked.mimeType,
-            });
-            if (!upload.data?.filePath) {
-              setPendingAttachments((current) => current.filter((item) => item.id !== localItem.id));
-              setAttachmentError(upload.error ?? "The selected file could not be read.");
-              continue;
-            }
-            setPendingAttachments((current) =>
-              current.map((item) =>
-                item.id === localItem.id
-                  ? {
-                      ...item,
-                      filePath: upload.data!.filePath,
-                      fileUrl: upload.data!.fileUrl,
-                      localUri: upload.data!.localUri ?? picked.uri,
-                      fileName: upload.data!.fileName,
-                      mimeType: upload.data!.mimeType,
-                    }
-                  : item,
-              ),
-            );
-          }
-        } finally {
-          setIsUploading(false);
-        }
+        setPendingAttachments((current) => [...current, ...localItems].slice(0, MAX_ATTACHMENT_COUNT));
+        void Promise.all(localItems.map(uploadPendingAttachment));
       };
-
-      promptImageSource((source) => {
-        void pickAndUpload(source);
-      });
+      promptImageSource((source) => { void pickAndUpload(source); });
     },
-    [isSending, isUploading, isRecording, isTranscribing],
+    [isSending, isRecording, isTranscribing, uploadPendingAttachment],
   );
 
   const sendDocumentAttachment = useCallback(
     async (_requestContext?: AskPranaRequestContext) => {
-      if (isSending || isUploading || isRecording || isTranscribing) {
-        return;
-      }
-
+      if (isSending || isRecording || isTranscribing) return;
       const remainingSlots = MAX_ATTACHMENT_COUNT - pendingAttachmentsRef.current.length;
       if (remainingSlots <= 0) {
         setAttachmentError(`You can attach up to ${MAX_ATTACHMENT_COUNT} files.`);
         return;
       }
-
-      const result = await DocumentPicker.getDocumentAsync({
-        type: DOCUMENT_MIME_TYPES,
-        copyToCacheDirectory: true,
-        multiple: true,
-      });
+      const result = await DocumentPicker.getDocumentAsync({ type: DOCUMENT_MIME_TYPES, copyToCacheDirectory: true, multiple: true });
       if (result.canceled || !result.assets?.length) return;
-
-      const assets = result.assets.slice(0, remainingSlots).filter((asset) =>
-        isSupportedDocumentAttachment(asset.name, asset.mimeType),
-      );
-      if (assets.length === 0) {
+      const assets = result.assets.slice(0, remainingSlots).filter((asset) => isSupportedDocumentAttachment(asset.name, asset.mimeType));
+      if (!assets.length) {
         setAttachmentError(UNSUPPORTED_FILE_MESSAGE);
         return;
       }
-
       const localItems: AskPranaPendingAttachment[] = assets.map((asset, index) => ({
         id: `pending-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
-        kind: "file",
-        filePath: "",
-        fileUrl: "",
-        localUri: asset.uri,
-        fileName: asset.name,
-        mimeType: asset.mimeType ?? "application/octet-stream",
+        kind: "file", status: "preparing", error: null, filePath: "", fileUrl: "",
+        localUri: asset.uri, fileName: asset.name, mimeType: asset.mimeType ?? "application/octet-stream",
+        fileSize: asset.size ?? null,
       }));
       setAttachmentError(null);
-      setPendingAttachments((current) =>
-        [...current, ...localItems].slice(0, MAX_ATTACHMENT_COUNT),
-      );
-      setIsUploading(true);
-      try {
-        for (let index = 0; index < assets.length; index += 1) {
-          const asset = assets[index];
-          const localItem = localItems[index];
-          const upload = await uploadAskPranaFile({
-            uri: asset.uri,
-            folder: "documents",
-            fileName: asset.name,
-            mimeType: asset.mimeType ?? "application/octet-stream",
-          });
-          if (!upload.data?.filePath) {
-            setPendingAttachments((current) => current.filter((item) => item.id !== localItem.id));
-            setAttachmentError(upload.error ?? "The document could not be stored.");
-            continue;
-          }
-          setPendingAttachments((current) =>
-            current.map((item) =>
-              item.id === localItem.id
-                ? {
-                    ...item,
-                    filePath: upload.data!.filePath,
-                    fileUrl: upload.data!.fileUrl,
-                    localUri: upload.data!.localUri ?? asset.uri,
-                    fileName: upload.data!.fileName,
-                    mimeType: upload.data!.mimeType,
-                  }
-                : item,
-            ),
-          );
-        }
-      } finally {
-        setIsUploading(false);
-      }
+      setPendingAttachments((current) => [...current, ...localItems].slice(0, MAX_ATTACHMENT_COUNT));
+      void Promise.all(localItems.map(uploadPendingAttachment));
     },
-    [isSending, isUploading, isRecording, isTranscribing],
+    [isSending, isRecording, isTranscribing, uploadPendingAttachment],
   );
   const startAudioRecording = useCallback(async (options?: {
     source?: "composer" | "voice";
@@ -3102,6 +3069,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       setDraft,
       setSelectedPondId,
       removePendingAttachment,
+      retryPendingAttachment,
       sendQuestion,
       editAndResendUserMessage,
       askFromVoiceMode,
@@ -3149,6 +3117,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       sessionId,
       setSelectedPondId,
       removePendingAttachment,
+      retryPendingAttachment,
       sendQuestion,
       editAndResendUserMessage,
       askFromVoiceMode,

@@ -342,13 +342,13 @@ export function AskPranaChatSidebar({
     });
   }, [conversationActivity]);
 
-  // Every loaded session (pinned, grouped and search results alike) is
-  // translated into the selected language; originals are never shown as a
-  // fallback while another language is selected.
+  // Translate the newest history entries first. Older sessions continue in
+  // the background, so changing language does not make a long chat history
+  // compete with the conversation currently on screen.
   const { displayText, getStatus } = useAskPranaDisplayTranslation(
     sessions.flatMap((session) => [session.title, session.preview].filter(Boolean)),
     "visible",
-    { prefetchOtherLanguages: false },
+    { priorityCount: 20, prefetchOtherLanguages: true },
   );
 
   const visibleSessions = useMemo(() => {

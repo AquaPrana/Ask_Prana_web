@@ -64,6 +64,7 @@ export type VoiceModeState =
   | "finalizing"
   | "processing"
   | "speaking"
+  | "interrupted"
   | "muted"
   | "reconnecting"
   | "error"
@@ -668,7 +669,9 @@ export function AskPranaVoiceModeModal({
       };
       bargeInReleaseRef.current = release;
 
-      const ignoreUntil = Date.now() + 700;
+      // The monitor is acquired before playback. Only guard the brief output
+      // route click; a longer blind window loses the opening interruption.
+      const ignoreUntil = Date.now() + 120;
       let consecutiveVoiceFrames = 0;
       let voicedMs = 0;
       let lastFrameAt = 0;
@@ -693,7 +696,7 @@ export function AskPranaVoiceModeModal({
           consecutiveVoiceFrames = now >= ignoreUntil && rms > 0.055
             ? consecutiveVoiceFrames + 1
             : 0;
-          if (consecutiveVoiceFrames >= 5 && !bargeInTriggeredRef.current) {
+          if (consecutiveVoiceFrames >= 4 && !bargeInTriggeredRef.current) {
             bargeInTriggeredRef.current = true;
             capturing = true;
             lastFrameAt = now;
@@ -707,6 +710,8 @@ export function AskPranaVoiceModeModal({
             // Retire the reply's turn: its speak() call returns "interrupted"
             // and must not restart listening on top of this handoff.
             speechTurnRef.current += 1;
+            setState("interrupted");
+            stateRef.current = "interrupted";
             void stopAskPranaSpeech();
             void interruptListeningRef.current();
           }
@@ -948,15 +953,12 @@ export function AskPranaVoiceModeModal({
             state: stateRef.current,
           });
           turnInFlightRef.current = false;
-          setErrorText(
-            "That reply was interrupted before it could be shown. Listening again.",
-          );
+          // A null result is also used when a stale request is deliberately
+          // discarded during a handoff. It is not evidence that the farmer
+          // interrupted playback, so do not show a false red failure.
+          setErrorText(null);
           const resumed = await startListeningSafely("retry");
-          if (resumed) {
-            setErrorText(
-              "That reply was interrupted before it could be shown. Listening again.",
-            );
-          }
+          if (!resumed) setErrorText("Listening could not restart. Tap the orb to try again.");
           return;
         }
         const cleanedAnswer = result.answer.trim();
@@ -998,6 +1000,9 @@ export function AskPranaVoiceModeModal({
         stateRef.current = "speaking";
         logVoiceTiming("tts-request-start", turnStartedAt, { replyLanguage });
         console.log("[AskPranaVoice] speak started", { replyLanguage });
+        // Acquire VAD and its rolling pre-buffer before output begins. The
+        // previous playback callback left a device-start gap at reply onset.
+        await startBargeInMonitor();
         const speechTurn = ++speechTurnRef.current;
         const spoken = await speakAskPranaText(cleanedAnswer, replyLanguage, {
           shouldPlay: () =>
@@ -1013,7 +1018,6 @@ export function AskPranaVoiceModeModal({
                 elapsedMs: Math.round(performance.now() - responseReceivedAt),
               });
             }
-            void startBargeInMonitor();
           },
           keepMicrophoneActive: true,
         });
@@ -1295,6 +1299,7 @@ export function AskPranaVoiceModeModal({
     if (state === "listening") return "Listening…";
     if (state === "finalizing" || state === "processing" || isTranscribing || isSending) return "Thinking…";
     if (state === "speaking") return "Speaking… Tap the orb to interrupt.";
+    if (state === "interrupted") return "Listening…";
     if (state === "muted") return "Muted";
     if (state === "reconnecting") return "Reconnecting…";
     if (state === "error") return errorText || "Something went wrong";

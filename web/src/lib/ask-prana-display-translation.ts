@@ -50,7 +50,9 @@ const MAX_CONCURRENT_REQUESTS = 6;
 /** Caps per lower priority so the visible chat always has free request slots. */
 const MAX_CONCURRENT_BY_PRIORITY: Record<AskPranaTranslationPriority, number> = {
   visible: MAX_CONCURRENT_REQUESTS,
-  background: 1,
+  // History titles/previews are independent. Two background batches keep a
+  // large conversation list moving without taking slots from the active chat.
+  background: 2,
   prefetch: 1,
 };
 /** After an OpenAI rate limit: retry the screen quickly, keep low-priority work paused longer. */

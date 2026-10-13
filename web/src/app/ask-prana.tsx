@@ -222,7 +222,14 @@ export default function AskPranaScreen() {
     sessionId?: string | string[];
   }>();
   const { width } = useWindowDimensions();
-  const isDesktop = Platform.OS === "web" && width >= 1024;
+  // React Native Web can briefly report the layout viewport width rather than
+  // the browser viewport after hydration/zoom. Prefer the larger browser
+  // measurement so desktop Voice Chat never falls into the mobile screen.
+  const browserWidth =
+    Platform.OS === "web" && typeof window !== "undefined"
+      ? window.innerWidth
+      : 0;
+  const isDesktop = Platform.OS === "web" && Math.max(width, browserWidth) >= 1024;
   const listRef = useRef<FlatList<ChatMessage>>(null);
   const listNearBottomRef = useRef(true);
   const composerInputRef = useRef<TextInput>(null);
@@ -279,7 +286,6 @@ export default function AskPranaScreen() {
     messages,
     draft,
     isSending,
-    isUploading,
     attachmentError,
     isRecording,
     isTranscribing,
@@ -296,6 +302,7 @@ export default function AskPranaScreen() {
     loadOlderMessages,
     setDraft,
     removePendingAttachment,
+    retryPendingAttachment,
     sendQuestion,
     editAndResendUserMessage,
     askFromVoiceMode,
@@ -399,7 +406,7 @@ export default function AskPranaScreen() {
       )
     : null;
   const composerBusy =
-    isSending || isUploading || isRecording || isTranscribing || isLoadingMessages;
+    isSending || isRecording || isTranscribing || isLoadingMessages;
   const conversationMessages = messages.filter((message) => message.id !== "welcome");
   const isTranslatableMessage = (message: ChatMessage) =>
     Boolean(message.text?.trim()) &&
@@ -506,7 +513,8 @@ export default function AskPranaScreen() {
     thinkingVisible ||
     (!isRecording &&
       !isTranscribing &&
-      (Boolean(draft.trim()) || pendingAttachments.length > 0));
+      !pendingAttachments.some((attachment) => attachment.status !== "ready") &&
+      (Boolean(draft.trim()) || pendingAttachments.some((attachment) => attachment.status === "ready")));
 
   useEffect(() => {
     if (Platform.OS === "web") {
@@ -1088,76 +1096,6 @@ export default function AskPranaScreen() {
               <Text style={styles.attachmentError}>{attachmentError}</Text>
             ) : null}
 
-            {pendingAttachments.length > 0 || isUploading ? (
-              <ScrollView
-                style={styles.pendingScroll}
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.pendingRow}
-              >
-                {pendingAttachments.map((item) => {
-                  const previewUri = item.localUri ?? item.fileUrl;
-                  const isImage = item.kind === "image";
-                  return (
-                    <View key={item.id} style={styles.pendingChip}>
-                      {isImage && previewUri ? (
-                        <Pressable
-                          onPress={() => setAttachmentPreview({
-                            uri: previewUri,
-                            fileName: item.fileName,
-                            mimeType: item.mimeType,
-                          })}
-                          style={styles.pendingPreviewPressable}
-                          accessibilityRole="imagebutton"
-                          accessibilityLabel={`Open uploaded image ${item.fileName}`}
-                        >
-                          <Image
-                            source={{ uri: previewUri }}
-                            style={styles.pendingImage}
-                            contentFit="cover"
-                          />
-                          <View style={styles.pendingPreviewBadge} pointerEvents="none">
-                            <Feather name="maximize-2" size={12} color={colors.white} />
-                          </View>
-                        </Pressable>
-                      ) : (
-                        <Pressable
-                          onPress={() => setAttachmentPreview({
-                            uri: previewUri,
-                            fileName: item.fileName,
-                            mimeType: item.mimeType,
-                          })}
-                          style={styles.pendingFile}
-                          accessibilityRole="button"
-                          accessibilityLabel={`Preview uploaded document ${item.fileName}`}
-                        >
-                          <Feather name="file-text" size={16} color={colors.primary} />
-                          <Text style={styles.pendingFileName} numberOfLines={1}>
-                            {item.fileName}
-                          </Text>
-                        </Pressable>
-                      )}
-                      <Pressable
-                        onPress={() => removePendingAttachment(item.id)}
-                        disabled={isSending}
-                        style={styles.pendingRemove}
-                        accessibilityRole="button"
-                        accessibilityLabel="Remove attachment"
-                      >
-                        <Feather name="x" size={12} color={colors.white} />
-                      </Pressable>
-                    </View>
-                  );
-                })}
-                {isUploading ? (
-                  <View style={styles.pendingPreparing}>
-                    <ActivityIndicator size="small" color={colors.primary} />
-                    <Text style={styles.pendingPreparingText}>{t("askPrana.preparing")}</Text>
-                  </View>
-                ) : null}
-              </ScrollView>
-            ) : null}
-
             {isRecording && !voiceModeOpen ? (
             <View style={styles.inputRow}>
               <View style={[styles.inputShell, styles.inputShellDesktop, styles.recordingShell]}>
@@ -1194,6 +1132,62 @@ export default function AskPranaScreen() {
             ) : (
             <View style={[styles.inputRow, voiceInline && styles.inputRowVoice]}>
               <View style={[styles.inputShell, isDesktop && styles.inputShellDesktop, voiceInline && styles.inputShellVoice]}>
+                {pendingAttachments.length > 0 ? (
+                  <ScrollView
+                    style={styles.pendingScroll}
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.pendingRow}
+                  >
+                    {pendingAttachments.map((item) => {
+                      const previewUri = item.localUri ?? item.fileUrl;
+                      const isImage = item.kind === "image";
+                      const isPreparing = item.status === "preparing";
+                      return (
+                        <View key={item.id} style={styles.pendingChip}>
+                          {isImage && previewUri ? (
+                            <Pressable
+                              onPress={() => setAttachmentPreview({ uri: previewUri, fileName: item.fileName, mimeType: item.mimeType })}
+                              style={styles.pendingPreviewPressable}
+                              accessibilityRole="imagebutton"
+                              accessibilityLabel={`Open selected image ${item.fileName}`}
+                            >
+                              <Image source={{ uri: previewUri }} style={styles.pendingImage} contentFit="cover" />
+                              {isPreparing ? <View style={styles.pendingLoading}><ActivityIndicator size="small" color={colors.white} /></View> : null}
+                            </Pressable>
+                          ) : (
+                            <View style={styles.pendingFile}>
+                              <Feather name="file-text" size={16} color={colors.primary} />
+                              <View style={styles.pendingFileDetails}>
+                                <Text style={styles.pendingFileName} numberOfLines={1}>{item.fileName}</Text>
+                                <Text style={styles.pendingFileMeta} numberOfLines={1}>
+                                  {(item.mimeType.split("/").pop() ?? "file").toUpperCase()}{item.fileSize ? ` · ${(item.fileSize / 1024).toFixed(item.fileSize >= 1024 * 1024 ? 1 : 0)} ${item.fileSize >= 1024 * 1024 ? "MB" : "KB"}` : ""}
+                                </Text>
+                              </View>
+                              {isPreparing ? <ActivityIndicator size="small" color={colors.primary} /> : null}
+                            </View>
+                          )}
+                          {item.status === "failed" ? (
+                            <Pressable onPress={() => retryPendingAttachment(item.id)} style={styles.pendingRetry} accessibilityRole="button" accessibilityLabel={`Retry ${item.fileName}`}>
+                              <Feather name="refresh-cw" size={11} color={colors.white} />
+                            </Pressable>
+                          ) : null}
+                          <Pressable
+                            onPress={() => removePendingAttachment(item.id)}
+                            disabled={isSending}
+                            style={styles.pendingRemove}
+                            accessibilityRole="button"
+                            accessibilityLabel="Remove attachment"
+                          >
+                            <Feather name="x" size={12} color={colors.white} />
+                          </Pressable>
+                          {item.status === "failed" && item.error ? <Text style={styles.pendingItemError} numberOfLines={2}>{item.error}</Text> : null}
+                        </View>
+                      );
+                    })}
+                  </ScrollView>
+                ) : null}
+                <View style={styles.composerControls}>
                 <View
                   ref={attachWrapRef}
                   nativeID="ask-prana-attach-wrap"
@@ -1371,6 +1365,7 @@ export default function AskPranaScreen() {
                 )}
                 </>
                 )}
+                </View>
               </View>
               {voiceInline ? (
                 <>
@@ -1785,12 +1780,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   suggestionsScroll: { width: "100%", maxWidth: 900 },
-  pendingScroll: { width: "100%", maxWidth: 900 },
+  pendingScroll: { width: "100%" },
   suggestionsRow: { gap: 8, paddingHorizontal: 4 },
   pendingRow: {
     gap: 10,
     paddingHorizontal: 4,
-    paddingBottom: 8,
+    paddingTop: 4,
+    paddingBottom: 6,
   },
   pendingChip: {
     position: "relative",
@@ -1800,8 +1796,8 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   pendingImage: {
-    width: 64,
-    height: 64,
+    width: 72,
+    height: 72,
     borderRadius: 12,
     backgroundColor: colors.primarySoft,
   },
@@ -1816,25 +1812,39 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  pendingLoading: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: "rgba(11, 31, 36, 0.46)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   pendingFile: {
-    minWidth: 120,
-    maxWidth: 180,
-    minHeight: 64,
+    minWidth: 156,
+    maxWidth: 220,
+    minHeight: 72,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.white,
     paddingHorizontal: 10,
     paddingVertical: 8,
-    justifyContent: "center",
-    gap: 6,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
   },
+  pendingFileDetails: { flexShrink: 1, gap: 2 },
   pendingFileName: {
     color: colors.textDark,
     fontFamily: ASK_PRANA_FONT_FAMILY,
     fontSize: 12,
     lineHeight: 16,
     fontWeight: "500",
+  },
+  pendingFileMeta: {
+    color: colors.muted,
+    fontFamily: ASK_PRANA_FONT_FAMILY,
+    fontSize: 10,
+    lineHeight: 14,
   },
   pendingRemove: {
     position: "absolute",
@@ -1847,17 +1857,16 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  pendingPreparing: {
-    minHeight: 64,
-    minWidth: 92,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.white,
+  pendingRetry: {
+    position: "absolute",
+    top: -6,
+    left: -6,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: "#B45309",
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 10,
-    gap: 6,
   },
   attachmentError: {
     color: "#F0A0A0",
@@ -1867,12 +1876,13 @@ const styles = StyleSheet.create({
     fontWeight: "400",
     paddingHorizontal: 4,
   },
-  pendingPreparingText: {
-    color: colors.muted,
+  pendingItemError: {
+    width: 150,
+    marginTop: 4,
+    color: "#F0A0A0",
     fontFamily: ASK_PRANA_FONT_FAMILY,
     fontSize: 11,
     lineHeight: 15,
-    fontWeight: "400",
   },
   suggestionChip: {
     backgroundColor: colors.suggestion,
@@ -1944,9 +1954,16 @@ const styles = StyleSheet.create({
     paddingLeft: 6,
     paddingRight: 8,
     paddingVertical: 6,
+    flexDirection: "column",
+    alignItems: "stretch",
+    gap: 4,
+  },
+  composerControls: {
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
+    minHeight: 40,
+    width: "100%",
   },
   inputShellDesktop: {
     borderRadius: 28,
@@ -1969,8 +1986,11 @@ const styles = StyleSheet.create({
     paddingTop: Platform.OS === "ios" ? 12 : 10,
     paddingBottom: Platform.OS === "ios" ? 12 : 10,
     margin: 0,
-    outlineStyle: "none",
-    outlineWidth: 0,
+    // React Native's TextStyle type does not include the browser-only
+    // `none` outline value, although React Native Web supports it.
+    ...(Platform.OS === "web"
+      ? ({ outlineStyle: "none", outlineWidth: 0 } as unknown as TextStyle)
+      : {}),
     overflow: "hidden",
   },
   // React Native Web otherwise exposes a permanent native textarea scrollbar
