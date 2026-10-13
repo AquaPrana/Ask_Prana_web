@@ -2219,19 +2219,19 @@ serve(async (req) => {
       const apiKey = Deno.env.get("OPENAI_API_KEY");
       if (!apiKey) return jsonResponse({ error: "LLM API key is missing." }, 500);
       const script = target === "Telugu" ? "Telugu script" : target === "Hindi" ? "Devanagari" : "English";
+      const translationStartedAt = performance.now();
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 40_000);
-      // Match the working chat call: reasoning effort "low", no json_schema.
-      // A schema rejection used to return 502 immediately, which the client
-      // stored as "Historical translation is unavailable." and left the English
-      // chat on screen. Fall back inside this same request.
+      // Translation is deterministic transformation work. Asking the model to
+      // reason adds avoidable latency without improving the returned text.
+      // Keep the permissive JSON parser below for compatibility with existing
+      // model output, rather than adding structured-output overhead.
       let includeSchema = translationStructuredOutput;
-      let includeReasoning = true;
       let rateLimitRetries = 0;
       const tried = new Set<string>();
       try {
         while (tried.size < 3) {
-          const attemptKey = `${includeSchema}|${includeReasoning}`;
+          const attemptKey = `${includeSchema}`;
           if (tried.has(attemptKey)) break;
           tried.add(attemptKey);
           const translationSchema = includeSchema
@@ -2257,22 +2257,28 @@ serve(async (req) => {
               model: Deno.env.get("ASK_PRANA_TRANSLATION_MODEL") || OPENAI_MODEL,
               instructions: `Translate every item fully into ${target} (${script}). Preserve meaning, numbers, markdown, line breaks, and order. Keep pH, DO, FCR, DOC, Vannamei, biomass, salinity, mg/L, and ppm in Latin script. Return a JSON array of exactly ${sourceTexts.length} strings.`,
               input: JSON.stringify(sourceTexts),
-              max_output_tokens: 16000,
-              ...(includeReasoning ? { reasoning: { effort: "low" } } : {}),
+              // Translation should be close to source size; this prevents a
+              // tiny visible batch from reserving a 16k-token generation.
+              max_output_tokens: Math.min(
+                12_000,
+                Math.max(600, Math.ceil(sourceTexts.join("\n").length * 1.6)),
+              ),
               ...(translationSchema ? { text: { format: translationSchema } } : {}),
             }),
           });
           const data = await response.json() as Record<string, unknown>;
           const described = JSON.stringify(data);
+          console.log("[ask-prana] history translation response", {
+            target,
+            items: sourceTexts.length,
+            sourceChars: sourceTexts.reduce((total, text) => total + text.length, 0),
+            elapsedMs: Math.round(performance.now() - translationStartedAt),
+            status: response.status,
+          });
           if (response.status === 400 && includeSchema && /schema|text\.format|json_schema/i.test(described)) {
             console.error("[ask-prana] history translation schema rejected", describeOpenAIResponse(data));
             translationStructuredOutput = false;
             includeSchema = false;
-            continue;
-          }
-          if (response.status === 400 && /reasoning|effort/i.test(described)) {
-            console.error("[ask-prana] history translation reasoning rejected", described.slice(0, 500));
-            includeReasoning = !includeReasoning;
             continue;
           }
           if (response.status === 429) {
@@ -3047,6 +3053,7 @@ If this is a normal water/feed question with no prior health context, do not men
     });
 
     let openaiResponse: Response;
+    const openaiStartedAt = performance.now();
     try {
       openaiResponse = await fetch(OPENAI_RESPONSES_URL, {
         method: "POST",
@@ -3091,6 +3098,11 @@ If this is a normal water/feed question with no prior health context, do not men
       clearTimeout(timeoutId);
     }
 
+    console.log("[ask-prana] openai response headers", {
+      elapsedMs: Math.round(performance.now() - openaiStartedAt),
+      status: openaiResponse.status,
+    });
+
     let openaiData: Record<string, unknown>;
     try {
       openaiData = await openaiResponse.json();
@@ -3101,6 +3113,10 @@ If this is a normal water/feed question with no prior health context, do not men
         502,
       );
     }
+
+    console.log("[ask-prana] openai response parsed", {
+      elapsedMs: Math.round(performance.now() - openaiStartedAt),
+    });
 
     if (!openaiResponse.ok) {
       const { message, httpStatus } = parseOpenAIError(

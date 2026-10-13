@@ -41,8 +41,10 @@ type Job = { language: Language; priority: AskPranaTranslationPriority; texts: s
 // Model latency grows with output length, so the visible chat uses small
 // batches that run in parallel; the sidebar/history uses larger ones.
 const BATCH_LIMITS: Record<AskPranaTranslationPriority, { items: number; chars: number }> = {
-  // One request for the open chat and visible sidebar. Do not slice an answer into lines.
-  visible: { items: 80, chars: 400000 },
+  // Keep each request small enough that the initial visible-language switch is
+  // not held behind a whole conversation. A message remains one unit, and the
+  // existing queue runs these batches concurrently.
+  visible: { items: 8, chars: 6_000 },
   background: { items: 24, chars: 2400 },
   prefetch: { items: 8, chars: 1400 },
 };

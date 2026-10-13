@@ -113,9 +113,21 @@ async function speakWithExpoSpeech(
 
   return await new Promise<AskPranaSpeakResult>((resolve) => {
     let settled = false;
+    // Browser speech synthesis can occasionally omit both onDone and onError
+    // after an audio-device change. Bound that failure so Voice Mode can
+    // resume recognition instead of staying in Speaking forever.
+    const safetyMs = Math.min(120_000, Math.max(30_000, text.length * 75 + 12_000));
+    const safetyTimer = setTimeout(() => {
+      finish({
+        spoke: false,
+        provider: "expo-speech",
+        reason: "Speech playback did not finish. Listening has resumed.",
+      });
+    }, safetyMs);
     const finish = (result: AskPranaSpeakResult) => {
       if (settled) return;
       settled = true;
+      clearTimeout(safetyTimer);
       resolve(result);
     };
 
@@ -291,21 +303,22 @@ export async function speakAskPranaText(
 
   await stopAskPranaSpeech();
 
-  // Cloud TTS first for non-English (better Telugu/Hindi quality when configured).
+  // A matching device voice begins immediately and avoids waiting for an entire
+  // cloud audio file. Keep cloud TTS as the fallback for devices that do not
+  // ship Telugu/Hindi voices.
   if (language !== "en") {
     try {
-      const cloud = await speakWithOpenAiTts(cleaned, language, options);
-      if (cloud.spoke) return cloud;
-      if (cloud.reason === "interrupted") return cloud;
-      // Fall through to device TTS with reason retained if both fail.
       const device = await speakWithExpoSpeech(cleaned, language, options);
       if (device.spoke) return device;
+      if (device.reason === "interrupted") return device;
+      const cloud = await speakWithOpenAiTts(cleaned, language, options);
+      if (cloud.spoke || cloud.reason === "interrupted") return cloud;
       return {
         spoke: false,
         provider: "none",
         reason:
-          cloud.reason ||
           device.reason ||
+          cloud.reason ||
           "Speech playback is not available for this language on this device.",
       };
     } catch (error) {

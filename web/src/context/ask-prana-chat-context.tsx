@@ -210,15 +210,27 @@ const VOICE_SILENCE_DB = -45;
 const VOICE_SILENCE_MS = 2200;
 const VOICE_SPEECH_HOLD_MS = 280;
 
-let voiceAutoStopListener: (() => void) | null = null;
+let voiceAutoStopListener: ((speechEndedAt: number) => void) | null = null;
+let voiceRecognitionErrorListener: ((message: string) => void) | null = null;
 
 /** Voice mode registers this so a pause can finish the turn without a tap. */
-export function setVoiceAutoStopListener(listener: (() => void) | null) {
+export function setVoiceAutoStopListener(listener: ((speechEndedAt: number) => void) | null) {
   voiceAutoStopListener = listener;
 }
 
+/** Voice Mode uses this to leave Listening when browser recognition is terminal. */
+export function setVoiceRecognitionErrorListener(
+  listener: ((message: string) => void) | null,
+) {
+  voiceRecognitionErrorListener = listener;
+}
+
 function notifyVoiceAutoStop() {
-  voiceAutoStopListener?.();
+  voiceAutoStopListener?.(performance.now());
+}
+
+function notifyVoiceRecognitionError(message: string) {
+  voiceRecognitionErrorListener?.(message);
 }
 const ANDROID_VOICE_FILE_EXTENSION = "mp4";
 const ANDROID_VOICE_MIME_TYPE = "audio/mp4";
@@ -593,6 +605,8 @@ type AskPranaChatContextValue = {
   isTranscribing: boolean;
   /** Normalized live input level for the voice orb; 0 when capture is idle. */
   voiceAudioLevel: number;
+  /** Current Voice Mode utterance. Display-only; it is never persisted here. */
+  voiceLiveTranscript: string;
   isLoadingMessages: boolean;
   isAuthLoading: boolean;
   thinkingKind: AskPranaThinkingKind | null;
@@ -737,6 +751,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [voiceAudioLevel, setVoiceAudioLevel] = useState(0);
+  const [voiceLiveTranscript, setVoiceLiveTranscript] = useState("");
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [thinkingKind, setThinkingKind] = useState<AskPranaThinkingKind | null>(
     null,
@@ -914,6 +929,9 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
     voiceStopInFlightRef.current = false;
     recordingGuardUntilRef.current = 0;
     recordingStopAllowedAtRef.current = 0;
+    if (webDictationSourceRef.current === "voice") {
+      setVoiceLiveTranscript("");
+    }
 
     const webSession = webDictationRef.current;
     webDictationRef.current = null;
@@ -921,6 +939,8 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       webSession.cancel();
       if (webDictationSourceRef.current === "composer") {
         setDraft(webDictationBaseDraftRef.current);
+      } else {
+        setVoiceLiveTranscript("");
       }
       isRecordingRef.current = false;
       isTranscribingRef.current = false;
@@ -978,6 +998,10 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
   }, [selectedPondId, cancelAudioRecording]);
 
   useEffect(() => {
+    // Browser Voice Mode owns browser-tab lifecycle through visibilitychange.
+    // React Native Web also emits AppState background events for a tab switch;
+    // handling both raced two cancellations against the same recognizer.
+    if (Platform.OS === "web") return;
     const subscription = AppState.addEventListener("change", (nextState) => {
       // Permission dialogs / brief focus loss use "inactive" — do not cancel there.
       // Only tear down when the app is truly backgrounded.
@@ -1829,6 +1853,10 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
           },
         );
         if (requestId !== generationIdRef.current) {
+          console.warn("[AskPranaChat] assistant reply discarded: generation superseded", {
+            requestId,
+            activeRequestId: generationIdRef.current,
+          });
           return null;
         }
         const pondStillSelected =
@@ -1837,6 +1865,10 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
               selectedPondIdRef.current == null
             : selectedPondIdRef.current === pondAtStart;
         if (!pondStillSelected) {
+          console.warn("[AskPranaChat] assistant reply discarded: pond changed", {
+            pondAtStart,
+            activePondId: selectedPondIdRef.current,
+          });
           return null;
         }
         setThinkingKind(null);
@@ -1867,6 +1899,10 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         return normalizedMessage.text;
       } catch (error) {
         if (requestId !== generationIdRef.current) {
+          console.warn("[AskPranaChat] failed assistant reply discarded: generation superseded", {
+            requestId,
+            activeRequestId: generationIdRef.current,
+          });
           return null;
         }
         const pondStillSelected =
@@ -1875,6 +1911,10 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
               selectedPondIdRef.current == null
             : selectedPondIdRef.current === pondAtStart;
         if (!pondStillSelected) {
+          console.warn("[AskPranaChat] failed assistant reply discarded: pond changed", {
+            pondAtStart,
+            activePondId: selectedPondIdRef.current,
+          });
           return null;
         }
         const detail =
@@ -1883,8 +1923,11 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
             : typeof error === "string"
             ? error
             : JSON.stringify(error);
-        console.log("[AskPranaChat] send error:", error);
-        console.log("[AskPranaChat] send error detail:", detail);
+        console.error("[AskPranaChat] assistant request failed", {
+          detail,
+          questionPreview: question.slice(0, 120),
+          requestId,
+        });
 
         const fallback: ChatMessage = {
           id: `assistant-${Date.now()}`,
@@ -1896,7 +1939,10 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         setIsSending(false);
         setThinkingKind(null);
         setMessages((current) => [...current, fallback]);
-        return null;
+        // The fallback is a real, visible assistant turn. Returning it keeps
+        // Voice Mode's result contract aligned with text chat, so it does not
+        // incorrectly report an empty AI response after saving this message.
+        return fallback.text;
       }
     },
     [persistMessage, requestAssistantReply, resolveContext],
@@ -2049,6 +2095,12 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
             }));
 
       setMessages((current) => [...current, ...userMessages]);
+      // The live Voice Mode bubble is derived from this display-only value.
+      // Clear it in the same update batch that inserts the real user message,
+      // so the temporary bubble is replaced rather than duplicated or saved.
+      if (fromVoiceMode) {
+        setVoiceLiveTranscript("");
+      }
       if (!fromVoiceMode) {
         setDraft("");
         setPendingAttachments([]);
@@ -2520,6 +2572,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
   }) => {
     clearStuckRecordingFlag();
     const source = options?.source ?? "composer";
+    const operationEpoch = dictationEpochRef.current;
     audioRecordingSourceRef.current = source;
 
     // Lock immediately (before any await) so double-taps cannot overlap.
@@ -2539,20 +2592,39 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         isTranscribing: isTranscribingRef.current,
         voiceBusy: voiceBusyRef.current,
       });
+      if (source === "voice" && options?.throwOnFailure) {
+        throw new Error("VOICE_RECOGNITION_BUSY");
+      }
       return;
     }
     voiceBusyRef.current = true;
     webDictationSourceRef.current = source;
+    if (source === "voice") {
+      // A new utterance replaces any cancelled display-only bubble.
+      setVoiceLiveTranscript("");
+    }
 
-    // Web: use browser SpeechRecognition — does not need OpenAI credits.
-    if (Platform.OS === "web" && source === "composer" && isWebDictationAvailable()) {
+    // Web: SpeechRecognition is the reliable continuous capture path for both
+    // composer dictation and Voice Chat. Do not route Voice Chat through the
+    // Expo recorder on web: its media/metering implementation is not a
+    // substitute for browser continuous recognition.
+    if (Platform.OS === "web" && isWebDictationAvailable()) {
       try {
         recordingGuardUntilRef.current = Date.now() + 4000;
         const preferredLanguage = await loadAskPranaPreferredLanguage();
+        // Close/cancel may happen while the language preference is loading.
+        // Never allow that stale invocation to acquire a fresh browser mic.
+        if (operationEpoch !== dictationEpochRef.current) {
+          voiceBusyRef.current = false;
+          return;
+        }
         webDictationBaseDraftRef.current = draftRef.current;
         const session = startWebDictation(preferredLanguage, {
           onPartial: (text) => {
-            if (webDictationSourceRef.current !== "composer") {
+            if (webDictationSourceRef.current === "voice") {
+              setVoiceLiveTranscript((current) =>
+                current === text ? current : text,
+              );
               return;
             }
             const base = webDictationBaseDraftRef.current.trim();
@@ -2560,7 +2632,28 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
             setDraft(next);
           },
           onError: (message) => {
-            Alert.alert("Dictation", message);
+            Alert.alert(source === "voice" ? "Voice Chat" : "Dictation", message);
+          },
+          onTerminalError: ({ message }) => {
+            // Recognition owns no usable microphone after a terminal error.
+            // Clear the shared refs before notifying the modal, otherwise the
+            // next retry is rejected as an already-active recording.
+            if (operationEpoch !== dictationEpochRef.current) return;
+            dictationEpochRef.current += 1;
+            webDictationRef.current = null;
+            isRecordingRef.current = false;
+            isTranscribingRef.current = false;
+            voiceBusyRef.current = false;
+            recordingGuardUntilRef.current = 0;
+            recordingStopAllowedAtRef.current = 0;
+            setIsRecording(false);
+            setIsTranscribing(false);
+            if (source === "voice") {
+              setVoiceLiveTranscript("");
+              notifyVoiceRecognitionError(message);
+            } else {
+              Alert.alert("Dictation", message);
+            }
           },
           onUtteranceEnd:
             source === "voice"
@@ -2590,6 +2683,9 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
           "Dictation unavailable",
           "Browser speech recognition could not start. Allow microphone access and try Chrome/Edge.",
         );
+        if (options?.throwOnFailure) {
+          throw new Error("VOICE_RECOGNITION_START_FAILED");
+        }
         return;
       }
     }
@@ -2650,12 +2746,22 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
     if (!session) {
       return null;
     }
-    if (Date.now() < recordingStopAllowedAtRef.current) {
+    // The double-tap guard is for composer dictation only. Voice Chat restarts
+    // listening after a null result, which fails while this recognizer is
+    // still live, so a voice stop always proceeds.
+    if (
+      webDictationSourceRef.current !== "voice" &&
+      Date.now() < recordingStopAllowedAtRef.current
+    ) {
       console.log("[AskPranaChat] web stop ignored: too soon after start");
       return null;
     }
 
-    const epochAtStart = dictationEpochRef.current;
+    // Retire this recognizer before awaiting stop(). Chrome can still issue a
+    // late error/end callback after stop; without a new epoch that callback
+    // could clear the refs belonging to the next voice turn.
+    const stopEpoch = dictationEpochRef.current + 1;
+    dictationEpochRef.current = stopEpoch;
     webDictationRef.current = null;
     setIsRecording(false);
     setIsTranscribing(true);
@@ -2664,13 +2770,15 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
 
     try {
       const transcript = (await session.stop()).trim();
-      if (epochAtStart !== dictationEpochRef.current) {
+      if (stopEpoch !== dictationEpochRef.current) {
         return null;
       }
       if (!transcript) {
         if (webDictationSourceRef.current === "composer") {
           setDraft(webDictationBaseDraftRef.current);
           Alert.alert("Couldn't understand", voiceErrorMessage("VOICE_EMPTY"));
+        } else {
+          setVoiceLiveTranscript("");
         }
         return null;
       }
@@ -2682,17 +2790,25 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         console.log("[AskPranaChat] draft updated from web dictation", {
           draftLength: next.length,
         });
+      } else {
+        // A browser result can be corrected between the last interim update
+        // and stop(). Keep the temporary bubble in sync with that final text.
+        setVoiceLiveTranscript(transcript);
       }
 
       return transcript;
     } finally {
-      voiceBusyRef.current = false;
-      voiceStopInFlightRef.current = false;
-      isRecordingRef.current = false;
-      isTranscribingRef.current = false;
-      setIsRecording(false);
-      setIsTranscribing(false);
-      recordingStopAllowedAtRef.current = 0;
+      // Do not clear ownership for a newer recognition session that may have
+      // started after an explicit cancellation.
+      if (stopEpoch === dictationEpochRef.current) {
+        voiceBusyRef.current = false;
+        voiceStopInFlightRef.current = false;
+        isRecordingRef.current = false;
+        isTranscribingRef.current = false;
+        setIsRecording(false);
+        setIsTranscribing(false);
+        recordingStopAllowedAtRef.current = 0;
+      }
     }
   }, [clearVoiceSilenceWatch]);
 
@@ -2925,6 +3041,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       isRecording,
       isTranscribing,
       voiceAudioLevel,
+      voiceLiveTranscript,
       isLoadingMessages,
       isAuthLoading: authLoading,
       thinkingKind,
@@ -2972,6 +3089,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       isRecording,
       isTranscribing,
       voiceAudioLevel,
+      voiceLiveTranscript,
       isLoadingMessages,
       authLoading,
       thinkingKind,

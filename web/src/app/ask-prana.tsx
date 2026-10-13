@@ -291,6 +291,7 @@ export default function AskPranaScreen() {
     isRecording,
     isTranscribing,
     voiceAudioLevel,
+    voiceLiveTranscript,
     isLoadingMessages,
     isAuthLoading,
     thinkingKind,
@@ -336,6 +337,15 @@ export default function AskPranaScreen() {
     routeOpenSessionIdRef.current = routeSessionId;
     void openConversation(routeSessionId);
   }, [activeSessionId, isAuthLoading, openConversation, routeSessionId]);
+
+  // Keep the active persisted conversation in the route. If a browser tab is
+  // discarded/reloaded while Ask Prana is in the background, this lets the
+  // existing route-opening path restore the same history instead of falling
+  // back to an in-memory welcome thread.
+  useEffect(() => {
+    if (!activeSessionId || routeSessionId === activeSessionId) return;
+    router.setParams({ sessionId: activeSessionId } as never);
+  }, [activeSessionId, routeSessionId, router]);
 
   useEffect(() => {
     void (async () => {
@@ -432,6 +442,31 @@ export default function AskPranaScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [messages, displayMessageText, displayMessageCache],
   );
+  // Voice recognition results are intentionally not added to `messages`.
+  // This gives Voice Mode one right-aligned, existing-style user bubble that
+  // updates in place until the regular voice submission inserts the saved turn.
+  const renderedConversationMessages = useMemo(() => {
+    const transcript = voiceLiveTranscript.trim();
+    if (!transcript) return displayConversationMessages;
+
+    const newestMessage = messages[messages.length - 1];
+    if (
+      newestMessage?.role === "user" &&
+      newestMessage.text.trim() === transcript
+    ) {
+      return displayConversationMessages;
+    }
+
+    return [
+      ...displayConversationMessages,
+      {
+        id: "voice-live-transcript",
+        role: "user" as const,
+        text: transcript,
+        messageType: "text" as const,
+      },
+    ];
+  }, [displayConversationMessages, messages, voiceLiveTranscript]);
   useEffect(() => {
     if (!attachmentMenuOpen || Platform.OS !== "web") return;
     if (typeof document === "undefined") return;
@@ -509,13 +544,17 @@ export default function AskPranaScreen() {
   }, []);
 
   useEffect(() => {
-    if (messages.length === 0 && !thinkingVisible && !generationStopped) return;
+    if (
+      renderedConversationMessages.length === 0 &&
+      !thinkingVisible &&
+      !generationStopped
+    ) return;
     if (!listNearBottomRef.current) return;
     const timer = setTimeout(() => {
       listRef.current?.scrollToEnd({ animated: true });
     }, 80);
     return () => clearTimeout(timer);
-  }, [messages, thinkingVisible, generationStopped]);
+  }, [renderedConversationMessages, thinkingVisible, generationStopped]);
 
   const handleSend = (question: string) => {
     void sendQuestion(question, requestContext);
@@ -933,7 +972,7 @@ export default function AskPranaScreen() {
             <FlatList
               ref={listRef}
               style={styles.chatList}
-              data={displayConversationMessages}
+              data={renderedConversationMessages}
               keyExtractor={(item) => item.id}
               contentContainerStyle={[
                 styles.chatContent,
