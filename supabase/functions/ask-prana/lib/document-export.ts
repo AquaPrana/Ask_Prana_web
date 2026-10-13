@@ -605,6 +605,8 @@ export async function buildDocxBytes(documentBody: string, context: WordDocument
 type SheetData = {
   name: string;
   rows: string[][];
+  title?: string;
+  notes?: string[];
 };
 
 function splitRowCells(line: string): string[] {
@@ -655,14 +657,20 @@ export function parseSpreadsheetSheets(documentBody: string): SheetData[] {
   const sheets: SheetData[] = [];
   let currentName = "Shrimp Estimation";
   let currentRows: string[][] = [];
+  let currentTitle: string | undefined;
+  let currentNotes: string[] = [];
 
   const flush = () => {
     if (currentRows.length === 0) return;
     sheets.push({
       name: sanitizeSheetName(currentName, sheets.length),
       rows: currentRows,
+      title: currentTitle,
+      notes: currentNotes,
     });
     currentRows = [];
+    currentTitle = undefined;
+    currentNotes = [];
   };
 
   for (const rawLine of lines) {
@@ -671,6 +679,16 @@ export function parseSpreadsheetSheets(documentBody: string): SheetData[] {
     if (sheetMatch) {
       flush();
       currentName = sheetMatch[1].trim();
+      continue;
+    }
+    const titleMatch = line.match(/^\s*TITLE\s*:\s*(.+)\s*$/i);
+    if (titleMatch) {
+      currentTitle = titleMatch[1].trim();
+      continue;
+    }
+    const noteMatch = line.match(/^\s*NOTE\s*:\s*(.+)\s*$/i);
+    if (noteMatch) {
+      currentNotes.push(noteMatch[1].trim());
       continue;
     }
     if (isMarkdownSeparator(line)) {
@@ -712,7 +730,21 @@ function colName(index: number): string {
   return name;
 }
 
-function buildSheetXml(rows: string[][], sharedIndex: Map<string, number>): string {
+function isNumericCell(value: string): boolean {
+  return /^-?(?:\d+|\d*\.\d+)$/.test(value.trim());
+}
+
+function addSharedString(value: string, sharedIndex: Map<string, number>): number {
+  let index = sharedIndex.get(value);
+  if (index == null) {
+    index = sharedIndex.size;
+    sharedIndex.set(value, index);
+  }
+  return index;
+}
+
+function buildSheetXml(sheet: SheetData, sharedIndex: Map<string, number>): string {
+  const { rows, title, notes = [] } = sheet;
   const maxCols = Math.max(1, ...rows.map((row) => row.length));
   const widths = Array.from({ length: maxCols }, (_, column) => {
     const longest = Math.max(...rows.map((row) => (row[column] ?? "").length));
@@ -723,38 +755,54 @@ function buildSheetXml(rows: string[][], sharedIndex: Map<string, number>): stri
   const columns = `<cols>${widths.map((width, index) =>
     `<col min="${index + 1}" max="${index + 1}" width="${width}" customWidth="1"/>`
   ).join("")}</cols>`;
-  const sheetRows = rows
+  const titleOffset = title ? 1 : 0;
+  const headerRowNumber = titleOffset + 1;
+  const firstDataRow = headerRowNumber + 1;
+  const dataRows = rows
     .map((row, rowIdx) => {
       const cells = [];
       for (let c = 0; c < Math.max(row.length, maxCols); c += 1) {
         const value = row[c] ?? "";
-        const style = rowIdx === 0 ? " s=\"1\"" : " s=\"2\"";
-        const ref = `${colName(c)}${rowIdx + 1}`;
+        const styleId = rowIdx === 0 ? 1 : rowIdx % 2 === 0 ? 3 : 2;
+        const style = ` s="${styleId}"`;
+        const ref = `${colName(c)}${rowIdx + titleOffset + 1}`;
         if (value.startsWith("=")) {
           cells.push(`<c r="${ref}"${style}><f>${escapeXml(value.slice(1))}</f></c>`);
           continue;
         }
-        let idx = sharedIndex.get(value);
-        if (idx == null) {
-          idx = sharedIndex.size;
-          sharedIndex.set(value, idx);
+        if (isNumericCell(value)) {
+          cells.push(`<c r="${ref}"${style}><v>${escapeXml(value.trim())}</v></c>`);
+          continue;
         }
+        const idx = addSharedString(value, sharedIndex);
         cells.push(`<c r="${ref}" t="s"${style}><v>${idx}</v></c>`);
       }
-      return `<row r="${rowIdx + 1}">${cells.join("")}</row>`;
+      return `<row r="${rowIdx + titleOffset + 1}">${cells.join("")}</row>`;
+    })
+    .join("");
+
+  const titleRow = title
+    ? `<row r="1" ht="28" customHeight="1"><c r="A1" s="4" t="s"><v>${addSharedString(title, sharedIndex)}</v></c></row>`
+    : "";
+  const noteRows = notes
+    .map((note, index) => {
+      const rowNumber = firstDataRow + Math.max(0, rows.length - 1) + index;
+      return `<row r="${rowNumber}"><c r="A${rowNumber}" s="5" t="s"><v>${addSharedString(`Note: ${note}`, sharedIndex)}</v></c></row>`;
     })
     .join("");
 
   const lastCol = colName(Math.max(0, maxCols - 1));
-  const lastRow = Math.max(1, rows.length);
+  const lastDataRow = headerRowNumber + Math.max(0, rows.length - 1);
+  const lastRow = lastDataRow + notes.length;
   return (
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
     `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
     `<dimension ref="A1:${lastCol}${lastRow}"/>` +
-    `<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>` +
+    `<sheetViews><sheetView workbookViewId="0"><pane ySplit="${headerRowNumber}" topLeftCell="A${firstDataRow}" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>` +
     columns +
-    `<sheetData>${sheetRows}</sheetData>` +
-    `<autoFilter ref="A1:${lastCol}${lastRow}"/>` +
+    `<sheetData>${titleRow}${dataRows}${noteRows}</sheetData>` +
+    (title ? `<mergeCells count="1"><mergeCell ref="A1:${lastCol}1"/></mergeCells>` : "") +
+    `<autoFilter ref="A${headerRowNumber}:${lastCol}${lastDataRow}"/>` +
     `</worksheet>`
   );
 }
@@ -762,7 +810,7 @@ function buildSheetXml(rows: string[][], sharedIndex: Map<string, number>): stri
 export async function buildXlsxBytes(documentBody: string): Promise<Uint8Array> {
   const sheets = parseSpreadsheetSheets(documentBody);
   const sharedIndex = new Map<string, number>();
-  const sheetXmls = sheets.map((sheet) => buildSheetXml(sheet.rows, sharedIndex));
+  const sheetXmls = sheets.map((sheet) => buildSheetXml(sheet, sharedIndex));
 
   const sharedOrdered = Array.from(sharedIndex.entries())
     .sort((a, b) => a[1] - b[1])
@@ -827,11 +875,11 @@ export async function buildXlsxBytes(documentBody: string): Promise<Uint8Array> 
   const stylesXml =
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
     `<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
-    `<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Calibri"/></font></fonts>` +
-    `<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF0F766E"/><bgColor indexed="64"/></patternFill></fill></fills>` +
+    `<fonts count="3"><font><sz val="11"/><name val="Calibri"/></font><font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Calibri"/></font><font><b/><color rgb="FFFFFFFF"/><sz val="16"/><name val="Calibri"/></font></fonts>` +
+    `<fills count="4"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF0F766E"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFF0FDFA"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFECFDF5"/><bgColor indexed="64"/></patternFill></fill></fills>` +
     `<borders count="2"><border/><border><left style="thin"><color rgb="FFD1D5DB"/></left><right style="thin"><color rgb="FFD1D5DB"/></right><top style="thin"><color rgb="FFD1D5DB"/></top><bottom style="thin"><color rgb="FFD1D5DB"/></bottom></border></borders>` +
     `<cellStyleXfs count="1"><xf/></cellStyleXfs>` +
-    `<cellXfs count="3"><xf/><xf fontId="1" fillId="1" borderId="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf><xf borderId="1" applyBorder="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf></cellXfs>` +
+    `<cellXfs count="6"><xf/><xf fontId="1" fillId="1" borderId="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf><xf borderId="1" applyBorder="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf><xf fillId="2" borderId="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf><xf fontId="2" fillId="1" borderId="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf><xf fillId="3" borderId="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf></cellXfs>` +
     `</styleSheet>`;
 
   const zip = new JSZip();
@@ -913,9 +961,61 @@ export function isUnusableDocumentAnswer(answer: string): boolean {
   return false;
 }
 
-/** Fallback TSV when the model returns empty — full pond-health pack. */
+/** A narrow, verified reference workbook for a common feed-chart request. */
+function isVannameiBlindFeedingChartRequest(question: string): boolean {
+  const q = question.toLowerCase();
+  return /\b(vannamei|litopenaeus\s+vannamei|white\s+shrimp)\b/.test(q) &&
+    /\b(blind\s+feed(?:ing)?|blind\s+feeding)\b/.test(q) &&
+    /\b(?:first\s+)?15[\s-]+days?\b/.test(q) &&
+    /\b(100[\s,]?000|one\s+lakh|1\s+lakh)\b/.test(q) &&
+    /\b(chart|schedule|plan|excel|xlsx|spreadsheet)\b/.test(q);
+}
+
+/**
+ * This deterministic reference is used only for the precise first-15-day,
+ * one-lakh request; all other spreadsheet requests stay dynamic and follow
+ * the farmer's prompt.
+ */
+function buildVannameiBlindFeedingChart(): string {
+  const dailyRates = [2.0, 2.4, 2.8, 3.2, 3.6, 4.0, 4.4, 4.8, 5.2, 5.6, 6.1, 6.6, 7.1, 7.6, 8.1];
+  const rows = dailyRates.map((rate, index) => {
+    const day = index + 1;
+    const sheetRow = day + 2; // title row 1, headings row 2
+    const feedings = day <= 7 ? 3 : 4;
+    return [
+      String(day),
+      rate.toFixed(1),
+      "100000",
+      `=ROUND(B${sheetRow}*C${sheetRow}/100000,2)`,
+      String(feedings),
+      `=ROUND(D${sheetRow}/E${sheetRow},2)`,
+      day <= 7 ? "Reference rate; 3 meals/day is a farm-plan assumption." : "Reference rate; 4 meals/day is a farm-plan assumption.",
+    ].join("\t");
+  });
+
+  return [
+    "SHEET: Blind Feeding Chart",
+    "TITLE: Vannamei Blind Feeding Chart — First 15 Days",
+    "Day\tFeed quantity (kg/lakh/day)\tStocking count\tTotal daily feed (kg)\tFeedings per day\tFeed per feeding (kg)\tRemarks",
+    ...rows,
+    "NOTE: Species: Litopenaeus vannamei. Stocking count: 100,000 post-larvae (one lakh).",
+    "NOTE: Daily feed rates are the ICAR-CIBA Table 4 reference for Penaeus/Litopenaeus vannamei: Day 1 = 2.0 kg/lakh PL15; Days 2–10 increase by 0.4 kg/day; Days 11–20 increase by 0.5 kg/day.",
+    "NOTE: Source: ICAR-Central Institute of Brackishwater Aquaculture, Farming of Pacific White Shrimp (Litopenaeus vannamei) in India, Table 4. https://www.ciba.res.in/wp-content/uploads/2022/03/Final-manual.pdf",
+    "NOTE: Feedings per day are clearly labeled farm-plan assumptions (3 for days 1–7, 4 for days 8–15), not a universal feeding prescription. Adjust the ration to feed response, survival, water quality, feed manufacturer's guidance and local technical advice.",
+  ].join("\n");
+}
+
+/** A verified reference chart for the precise 15-day, one-lakh request. */
+export function buildReferenceExcelForRequest(question: string): string | null {
+  return isVannameiBlindFeedingChartRequest(question)
+    ? buildVannameiBlindFeedingChart()
+    : null;
+}
+
 export function buildFallbackExcelForRequest(question: string): string {
   const q = question.toLowerCase();
+  const referenceWorkbook = buildReferenceExcelForRequest(question);
+  if (referenceWorkbook) return referenceWorkbook;
   if (/checklist|check list|చెక్‌లిస్ట్|चेकलिस्ट/.test(question)) {
     return [
       "SHEET: Shrimp Farming Checklist",
@@ -934,6 +1034,13 @@ export function buildFallbackExcelForRequest(question: string): string {
       "Biosecurity\tInspect biosecurity controls\tClean equipment and restrict unnecessary pond access\tPending\t",
       "Daily operations\tRecord mortality and observations\tEnter actual counts and observations; do not estimate\tPending\t",
       "Harvest preparation\tReview harvest readiness\tConfirm market, labour, ice, transport and harvest equipment\tPending\t",
+    ].join("\n");
+  }
+  if (/\b(feed\s+inventory|inventory\s+(?:of\s+)?feed|feed\s+stock)\b/.test(q)) {
+    return [
+      "SHEET: Feed Inventory",
+      "Date\tFeed Product\tBag Size (kg)\tOpening Stock (kg)\tReceived (kg)\tIssued (kg)\tClosing Stock (kg)\tReorder Level (kg)\tSupplier / Remarks",
+      "\t\t\t\t\t\t=ROUND(D2+E2-F2,2)\t\t",
     ].join("\n");
   }
   if (/feed|feeding|feed management/.test(q)) {

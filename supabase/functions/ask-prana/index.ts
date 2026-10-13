@@ -15,6 +15,7 @@ import {
   findPreviousAnswerForExport,
   buildFallbackDiseasePrecautionsDocumentBody,
   buildFallbackExcelForRequest,
+  buildReferenceExcelForRequest,
   buildFallbackEstimationDocumentBody,
   chatCaptionForGeneratedFile,
   isDocumentExportQuestion,
@@ -176,8 +177,8 @@ Document / file export requests (PDF, DOCX, Word, Excel/XLSX/spreadsheet, downlo
 • Do NOT invent a "Suggested filename". Do NOT pretend a download link exists. Do NOT wrap the answer as casual chat.
 • Use ONLY pond/crop values present in Application Context / latest logs / conversation. Never invent missing numbers. Missing = Not available; Status = Available|Required|Not available as appropriate.
 • Prefer completeness over brevity for exports. Include every required row even when Value is Not available.
-• For Excel requests, output TSV only, beginning with "SHEET: <relevant name>". Build the workbook for the farmer's stated purpose—not a generic pond summary.
-• Checklist requests use practical checklist rows and editable Pending / In Progress / Completed status cells. Feed, expense, tracker and calculator requests use only their relevant columns and sheets.
+• For Excel requests, output TSV only, beginning with "SHEET: <relevant name>". Build the workbook for the farmer's stated purpose—not a generic pond summary. You may add one "TITLE: <title>" line after SHEET and one or more "NOTE: <source or assumption>" lines after the table.
+• Checklist requests use practical checklist rows and editable Pending / In Progress / Completed status cells. Feed, expense, tracker and calculator requests use only their relevant columns and sheets. Use Excel formulas (beginning with =) for totals/calculations whenever the requested sheet has calculated values.
 • Include actual pond readings only when the farmer explicitly asks to export pond data and those readings are in Application Context. Never add unrelated pond-summary sheets or placeholder measurements.
 
 Document / file export — DISEASE RISKS & PRECAUTIONS (Excel/XLSX):
@@ -660,37 +661,25 @@ function isDiseasePrecautionsTableChat(question: string) {
   return false;
 }
 
-/** Pond overall / health Excel should include the full multi-sheet health template. */
+/**
+ * Only an explicit pond health/summary request gets the fixed multi-sheet
+ * report. A request for an Excel file is otherwise purpose-specific.
+ */
 function isPondOverallSummaryExport(question: string) {
   const q = String(question ?? "");
   // Disease→precautions Excel has its own template.
   if (isDiseasePrecautionsExport(q)) return false;
   if (
-    /\b(overall\s+summary|pond\s+summary|pond\s+overall|condition\s+summary|health\s+summary|pond\s+health|healthy\s+condition|in\s+detail|detailed\s+(summary|excel|report|document))\b/i
+    /\b(pond\s+(?:overall\s+)?summary|pond\s+(?:health|condition)(?:\s+(?:summary|report))?|overall\s+pond\s+(?:summary|report)|pond\s+status\s+report|pond\s+health\s+report)\b/i
       .test(q)
   ) {
     return true;
   }
   if (
-    /\b(summary|report|status|condition)\b/i.test(q) &&
-    /\b(excel|xlsx|spreadsheet|document|download|file)\b/i.test(q)
-  ) {
-    return true;
-  }
-  if (
-    /(సారాంశం|హెల్త్|కండిషన్|వివరంగా|ఓవరాల్)/.test(q) &&
+    /(పాండ్|pond).{0,24}(సారాంశం|హెల్త్|కండిషన్|వివరంగా|ఓవరాల్)/i.test(q) &&
     /(ఎక్సెల్|డౌన్?\s*లోడ్|షీట్|excel|xlsx|download)/i.test(q)
   ) {
     return true;
-  }
-  // Plain Excel download without a narrow estimation-only ask → full health pack.
-  if (
-    /\b(excel|xlsx|spreadsheet)\b/i.test(q) ||
-    /ఎక్సెల్/.test(q)
-  ) {
-    if (!/\b(only\s+)?(estimation|estimate|fcr|feed\s+table)\b/i.test(q)) {
-      return true;
-    }
   }
   return false;
 }
@@ -2518,7 +2507,7 @@ Excel/XLSX POND OVERALL SUMMARY & HEALTH export requested: Ignore short chat len
 Do NOT stop after Shrimp Estimation. Do NOT omit water-quality or health sheets. Do NOT suggest a filename. Never invent numbers or disease doses. Reuse Application Context + Recent Conversation values.
 `
           : `
-Excel/XLSX export requested: Ignore the normal short chat length limit. Write ONLY TSV sheet bodies using SHEET: markers as required by Document export rules. Do NOT suggest a filename. Do NOT say you cannot attach files. Use Application Context values only; missing inputs = Not available / Required. Reuse estimation formulas and prior conversation numbers when present in context — never invent.
+Excel/XLSX export requested: Ignore the normal short chat length limit. Write ONLY TSV sheet bodies using SHEET: markers as required by Document export rules. The sheet names, columns, data and formulas must answer the farmer's exact request; do not substitute a pond-summary workbook. Use TITLE: and NOTE: lines when a title, source or assumption is needed. Do NOT suggest a filename. Do NOT say you cannot attach files. Use Application Context values only; missing inputs = Not available / Required. Reuse estimation formulas and prior conversation numbers when present in context — never invent.
 `
         : diseasePrecautionsExport
           ? `
@@ -2899,12 +2888,19 @@ If this is a normal water/feed question with no prior health context, do not men
       // Always attempt packaging for export requests — never return "No response received."
       const format = requestedDocumentFormat ??
         resolveRequestedDocumentFormat(farmerQuestion);
-      let documentBody = answer;
+      // The cited chart is deterministic only for this exact request. Every
+      // other workbook continues through the model's purpose-specific TSV.
+      const referenceXlsxBody = format === "xlsx"
+        ? buildReferenceExcelForRequest(farmerQuestion)
+        : null;
+      let documentBody = referenceXlsxBody ?? answer;
       if (isUnusableDocumentAnswer(documentBody) || !documentBody.trim()) {
         documentBody = diseasePrecautionsExport
           ? buildFallbackDiseasePrecautionsDocumentBody()
           : format === "xlsx"
-            ? buildFallbackExcelForRequest(farmerQuestion)
+            ? pondOverallSummaryExport
+              ? buildFallbackEstimationDocumentBody()
+              : buildFallbackExcelForRequest(farmerQuestion)
             : buildFallbackEstimationDocumentBody();
       }
 
