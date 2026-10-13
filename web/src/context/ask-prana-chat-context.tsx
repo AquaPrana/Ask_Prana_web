@@ -879,7 +879,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
     let silenceStartedAt = 0;
     let armed = false;
     voiceSilenceWatchRef.current = setInterval(() => {
-      if (webDictationSourceRef.current !== "voice" || !isRecordingRef.current) {
+      if (!isRecordingRef.current) {
         return;
       }
       const level = audioRecorderRef.current?.getStatus()?.metering;
@@ -890,6 +890,9 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         const next = Math.max(0, Math.min(1, (level + 60) / 40));
         return Math.abs(next - current) > 0.025 ? next : current;
       });
+      // Composer dictation only needs the level for its waveform; silence
+      // auto-stop is a Voice Chat behaviour.
+      if (webDictationSourceRef.current !== "voice") return;
       const now = Date.now();
       if (level >= VOICE_SPEECH_DB) {
         if (!speechStartedAt) speechStartedAt = now;
@@ -2761,9 +2764,8 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       recordingStopAllowedAtRef.current = Date.now() + 700;
       recordingGuardUntilRef.current = Date.now() + 2500;
       voiceBusyRef.current = false;
-      if (source === "voice") {
-        startVoiceSilenceWatch();
-      }
+      // Drives the composer waveform too; VAD auto-stop only runs for voice.
+      startVoiceSilenceWatch();
       console.log("[AskPranaChat] recording started");
     } catch (error) {
       console.log("[AskPranaChat] start recording failed:", error);

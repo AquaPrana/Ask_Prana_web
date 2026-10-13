@@ -44,6 +44,7 @@ import {
 } from "../components/ask-prana-chat-message";
 import { AskPranaChatSidebar } from "../components/ask-prana-chat-sidebar";
 import { AskPranaLogo } from "../components/ask-prana-logo";
+import { AskPranaRecordingWaveform } from "../components/ask-prana-recording-waveform";
 import { AskPranaVoiceModeModal } from "../components/ask-prana-voice-mode";
 import { useAskPranaChat, type ChatMessage } from "../context/ask-prana-chat-context";
 import {
@@ -210,13 +211,6 @@ function getPreviousRouteName(state: NavStateLike | undefined): string | null {
   return previous;
 }
 
-function formatRecordingClock(totalSeconds: number) {
-  const safe = Math.max(0, Math.floor(totalSeconds));
-  const minutes = Math.floor(safe / 60);
-  const seconds = safe % 60;
-  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-}
-
 export default function AskPranaScreen() {
   const { t, i18n } = useTranslation();
   const router = useRouter();
@@ -251,7 +245,6 @@ export default function AskPranaScreen() {
     mimeType: string;
   } | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(isDesktop);
-  const [recordingElapsedSec, setRecordingElapsedSec] = useState(0);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [composerInputHeight, setComposerInputHeight] = useState(
     COMPOSER_INPUT_MIN_HEIGHT,
@@ -514,19 +507,6 @@ export default function AskPranaScreen() {
     (!isRecording &&
       !isTranscribing &&
       (Boolean(draft.trim()) || pendingAttachments.length > 0));
-
-  useEffect(() => {
-    if (!isRecording) {
-      setRecordingElapsedSec(0);
-      return;
-    }
-
-    setRecordingElapsedSec(0);
-    const timer = setInterval(() => {
-      setRecordingElapsedSec((current) => current + 1);
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [isRecording]);
 
   useEffect(() => {
     if (Platform.OS === "web") {
@@ -1178,6 +1158,40 @@ export default function AskPranaScreen() {
               </ScrollView>
             ) : null}
 
+            {isRecording && !voiceModeOpen ? (
+            <View style={styles.inputRow}>
+              <View style={[styles.inputShell, styles.inputShellDesktop, styles.recordingShell]}>
+                <Pressable
+                  onPress={handleCancelDictation}
+                  style={({ pressed }) => [
+                    styles.recordingCircleButton,
+                    pressed && styles.pressed,
+                  ]}
+                  accessibilityRole="button"
+                  accessibilityLabel={t("askPrana.cancelRecording")}
+                >
+                  <Feather name="x" size={18} color={colors.white} />
+                </Pressable>
+                <AskPranaRecordingWaveform
+                  level={voiceAudioLevel}
+                  quietColor="rgba(255,255,255,0.35)"
+                  activeColor={colors.white}
+                />
+                <Pressable
+                  onPress={handleStopDictation}
+                  style={({ pressed }) => [
+                    styles.recordingCircleButton,
+                    styles.recordingStopCircle,
+                    pressed && styles.pressed,
+                  ]}
+                  accessibilityRole="button"
+                  accessibilityLabel={t("askPrana.stopRecording")}
+                >
+                  <View style={styles.recordingStopSquare} />
+                </Pressable>
+              </View>
+            </View>
+            ) : (
             <View style={[styles.inputRow, voiceInline && styles.inputRowVoice]}>
               <View style={[styles.inputShell, isDesktop && styles.inputShellDesktop, voiceInline && styles.inputShellVoice]}>
                 <View
@@ -1379,6 +1393,7 @@ export default function AskPranaScreen() {
                 </>
               ) : null}
             </View>
+            )}
 
               {canExpandDraft ? (
                 <View style={styles.composerSecondaryActions}>
@@ -1397,45 +1412,7 @@ export default function AskPranaScreen() {
                 </View>
               ) : null}
 
-            {isRecording && !voiceModeOpen ? (
-              <View style={styles.recordingControls}>
-                <Text style={styles.recordingHint}>
-                  {t("askPrana.recordingTimer", {
-                    time: formatRecordingClock(recordingElapsedSec),
-                  })}
-                </Text>
-                <View style={styles.recordingActions}>
-                  <Pressable
-                    onPress={handleCancelDictation}
-                    style={({ pressed }) => [
-                      styles.recordingActionButton,
-                      styles.recordingCancelButton,
-                      pressed && styles.pressed,
-                    ]}
-                    accessibilityRole="button"
-                    accessibilityLabel={t("askPrana.cancelRecording")}
-                  >
-                    <Text style={styles.recordingCancelText}>
-                      {t("askPrana.cancelRecording")}
-                    </Text>
-                  </Pressable>
-                  <Pressable
-                    onPress={handleStopDictation}
-                    style={({ pressed }) => [
-                      styles.recordingActionButton,
-                      styles.recordingStopButton,
-                      pressed && styles.pressed,
-                    ]}
-                    accessibilityRole="button"
-                    accessibilityLabel={t("askPrana.stopRecording")}
-                  >
-                    <Text style={styles.recordingStopText}>
-                      {t("askPrana.stopRecording")}
-                    </Text>
-                  </Pressable>
-                </View>
-              </View>
-            ) : isTranscribing ? (
+            {isTranscribing ? (
               <Text style={styles.recordingHint}>
                 {t("askPrana.transcribingHint")}
               </Text>
@@ -2067,45 +2044,27 @@ const styles = StyleSheet.create({
     borderRadius: 2,
     backgroundColor: colors.white,
   },
-  recordingControls: {
-    gap: 8,
-    alignItems: "center",
-  },
-  recordingActions: {
-    flexDirection: "row",
+  recordingShell: {
+    paddingHorizontal: 8,
     gap: 10,
+  },
+  recordingCircleButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.18)",
     alignItems: "center",
     justifyContent: "center",
   },
-  recordingActionButton: {
-    minWidth: 96,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 18,
-    alignItems: "center",
+  recordingStopCircle: {
+    backgroundColor: "#3A3A3A",
   },
-  recordingCancelButton: {
-    // Dark like the chat background, so the light label stays readable.
-    backgroundColor: colors.background,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  recordingStopButton: {
-    backgroundColor: "#0F766E",
-  },
-  recordingCancelText: {
-    color: colors.textDark,
-    fontFamily: ASK_PRANA_FONT_FAMILY,
-    fontSize: 13,
-    lineHeight: 18,
-    fontWeight: "500",
-  },
-  recordingStopText: {
-    color: colors.white,
-    fontFamily: ASK_PRANA_FONT_FAMILY,
-    fontSize: 13,
-    lineHeight: 18,
-    fontWeight: "600",
+  recordingStopSquare: {
+    width: 13,
+    height: 13,
+    borderRadius: 3,
+    backgroundColor: colors.white,
   },
   recordingHint: {
     color: "#0F766E",
