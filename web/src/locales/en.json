@@ -197,12 +197,11 @@
     "staleLogBanner": "Your last log is {{days}} day(s) old. My advice may not reflect current pond conditions. Please log today first.",
     "preferredLanguage": "Preferred language", "language": "Language", "teluguTextStyle": "Telugu text style", "yourAquacultureAssistant": "Your aquaculture assistant", "emptyChatDescription": "Ask about your pond, water quality, feeding, FCR, survival, biomass or harvest.", "openHistory": "Open conversation history", "searchChats": "Search chats", "noConversationsFound": "No conversations found", "pinned": "Pinned", "pinChat": "Pin chat", "unpinChat": "Unpin chat", "edit": "Edit", "conversationFallback": "Ask Prana conversation", "historyPrevious7Days": "Previous 7 Days", "historyPrevious30Days": "Previous 30 Days", "historyOlder": "Older", "copy": "Copy", "copied": "Copied", "share": "Share", "readAloud": "Read aloud", "like": "Like", "dislike": "Dislike", "regenerate": "Regenerate", "more": "More", "copyFailed": "Copy failed", "copyFailedBody": "Unable to copy this message.", "nothingToShare": "Nothing to share", "nothingToShareBody": "This message has no text to share.", "cannotRegenerate": "Cannot regenerate", "noQuestionToRegenerate": "The previous question has no text to resend.", "noEarlierQuestion": "No earlier user question was found for this reply.", "speechUnavailable": "Speech unavailable", "stoppedGenerating": "Stopped generating", "stopGenerating": "Stop generating", "preparing": "Preparing…", "startVoiceConversation": "Start voice conversation", "expandMessage": "Expand message", "collapse": "Collapse",
     "suggestions": {
-      "ammonia": "Why is Ammonia high?",
-      "harvest": "Should I harvest now?",
-      "fcr": "How is my FCR trend?",
-      "survival": "What is the survival outlook?",
-      "quality": "Is water quality stable?",
-      "feed": "When should I reduce feed?"
+      "whatIsAquaculture": "What is aquaculture?",
+      "typesOfAquaculture": "Types of aquaculture",
+      "startAquaculture": "How to start aquaculture?",
+      "commonDiseases": "What are common aquaculture diseases?",
+      "bestPractices": "Best practices in aquaculture"
     }
   },
   "home": {

@@ -38,13 +38,11 @@ type Entry = {
 
 type Job = { language: Language; priority: AskPranaTranslationPriority; texts: string[] };
 
-// Model latency grows with output length, so the visible chat uses small
-// batches that run in parallel; the sidebar/history uses larger ones.
+// Model latency grows with output length. Keep the foreground batches very
+// small so the newest visible messages repaint as soon as their own request
+// completes instead of waiting behind older conversation history.
 const BATCH_LIMITS: Record<AskPranaTranslationPriority, { items: number; chars: number }> = {
-  // Keep each request small enough that the initial visible-language switch is
-  // not held behind a whole conversation. A message remains one unit, and the
-  // existing queue runs these batches concurrently.
-  visible: { items: 8, chars: 6_000 },
+  visible: { items: 4, chars: 3_000 },
   background: { items: 24, chars: 2400 },
   prefetch: { items: 8, chars: 1400 },
 };
@@ -528,15 +526,16 @@ export function setAskPranaDisplayLanguage(language: Language) {
   }
   const texts = visibleAskPranaTexts();
   if (texts.length) requestAskPranaDisplayTranslations(texts, language, "visible");
-  revealPaintedLanguage();
+  // Paint the selected language now. Cached entries render in this update;
+  // uncached entries keep their source text only until their own small batch
+  // completes. Do not hold the entire chat behind the slowest message.
+  paintedLanguage = language;
   version += 1;
   for (const listener of listeners) listener();
   checkSwitchMetrics();
 }
 
 function revealPaintedLanguage() {
-  if (visibleTextSets.size === 0) return;
-  if (!isAskPranaDisplayLanguageReady(activeLanguage)) return;
   if (paintedLanguage === activeLanguage) return;
   paintedLanguage = activeLanguage;
   version += 1;
@@ -610,8 +609,8 @@ function flushPendingLanguageSwap() {
 notifyLanguageSwap = flushPendingLanguageSwap;
 
 /**
- * Labels switch immediately. Cached chat text paints in the same turn.
- * Missing text is one visible request, then the chat and sidebar change together.
+ * Labels and cached chat text switch immediately. Missing messages repaint
+ * individually as their foreground translation batches return.
  */
 export function selectAskPranaLanguageWhenReady(
   language: Language,
@@ -622,6 +621,7 @@ export function selectAskPranaLanguageWhenReady(
     startSwitchMetrics(activeLanguage, language);
     activeLanguage = language;
   }
+  paintedLanguage = language;
   apply(language);
   const request = () => {
     if (activeLanguage !== language) return;

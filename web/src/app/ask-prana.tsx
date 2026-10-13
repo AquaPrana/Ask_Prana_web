@@ -383,12 +383,11 @@ export default function AskPranaScreen() {
 
   const suggestionQuestions = useMemo(
     () => [
-      t("askPrana.suggestions.ammonia"),
-      t("askPrana.suggestions.harvest"),
-      t("askPrana.suggestions.fcr"),
-      t("askPrana.suggestions.survival"),
-      t("askPrana.suggestions.quality"),
-      t("askPrana.suggestions.feed"),
+      t("askPrana.suggestions.whatIsAquaculture"),
+      t("askPrana.suggestions.typesOfAquaculture"),
+      t("askPrana.suggestions.startAquaculture"),
+      t("askPrana.suggestions.commonDiseases"),
+      t("askPrana.suggestions.bestPractices"),
     ],
     [t],
   );
@@ -419,7 +418,9 @@ export default function AskPranaScreen() {
   // Originals in `messages` are never modified; only the rendered copy changes.
   const { displayText: displayMessageText, contentPhase } =
     useAskPranaDisplayTranslation(translationSources, "visible", {
-      prefetchOtherLanguages: false,
+      // Once the current conversation is settled, warm Hindi/Telugu/English
+      // cache entries in the background so later language switches are local.
+      prefetchOtherLanguages: true,
     });
   // Reuse the previous display object when a message's shown text is unchanged,
   // so the memoized bubbles only re-render for messages whose translation landed.
@@ -1046,7 +1047,7 @@ export default function AskPranaScreen() {
           {voiceInline ? (
             <AskPranaVoiceModeModal
               visible={voiceModeOpen}
-                variant="overlay"
+                variant={isDesktop ? "overlay" : "screen"}
               language={preferredLanguage}
               requestContext={requestContext}
               isRecording={isRecording}

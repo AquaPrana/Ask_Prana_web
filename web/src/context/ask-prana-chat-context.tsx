@@ -102,6 +102,15 @@ export const GENERIC_ASSISTANT_LABEL = "Generic Assistant";
 export const isGenericAssistantId = (pondId: string | null | undefined) =>
   !pondId || pondId === GENERIC_ASSISTANT_ID;
 
+const SIMPLE_GREETING = /^(?:hi|hello|hey|good\s+(?:morning|afternoon|evening))\s*[!.?]*$/i;
+
+function isSimpleGreeting(question: string) {
+  return SIMPLE_GREETING.test(question.trim());
+}
+
+const GREETING_REPLY =
+  "Hi! I'm Ask Prana, your aquaculture assistant. How can I help you today?";
+
 const DOCUMENT_MIME_TYPES = [
   "application/pdf",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -1715,9 +1724,18 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       requestContext?: AskPranaRequestContext,
     ): Promise<ChatMessage> => {
       const context = resolveContext(requestContext);
-      const recentMessages = messagesRef.current
-        .filter((message) => message.id !== "welcome")
-        .slice(-8);
+      const historyMessages = messagesRef.current.filter(
+        (message) => message.id !== "welcome",
+      );
+      // The current question is sent separately below. Keep it out of the
+      // history payload so the model does not process the same turn twice.
+      const latestMessage = historyMessages[historyMessages.length - 1];
+      const recentMessages = (
+        latestMessage?.role === "user" &&
+        historyTextForMessage(latestMessage).trim() === question.trim()
+          ? historyMessages.slice(0, -1)
+          : historyMessages
+      ).slice(-8);
       const history = recentMessages.map((message) => ({
         role: message.role,
         text: historyTextForMessage(message),
@@ -2094,7 +2112,14 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
               pondName,
             }));
 
-      setMessages((current) => [...current, ...userMessages]);
+      setMessages((current) => {
+        const next = [...current, ...userMessages];
+        // Keep the request history in sync with the optimistic user bubble.
+        // Previously the latest question was not available until its database
+        // write completed, which delayed/duplicated context handling.
+        messagesRef.current = next;
+        return next;
+      });
       // The live Voice Mode bubble is derived from this display-only value.
       // Clear it in the same update batch that inserts the real user message,
       // so the temporary bubble is replaced rather than duplicated or saved.
@@ -2124,34 +2149,36 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
           }
         }
 
-        const sessionId = await ensureSession();
-        if (epoch !== sendEpochRef.current) {
-          return null;
-        }
+        // Session creation is required for both persistence and the AI request,
+        // but saving the optimistic user bubble must never sit in front of
+        // time-to-first-response. Both consumers share ensureSession's single
+        // in-flight promise, avoiding a duplicate create request.
+        const sessionPromise = ensureSession();
+        void (async () => {
+          await sessionPromise;
+          for (const userMessage of userMessages) {
+            const savedUserMessage = await persistMessage(
+              userMessage,
+              scopedContext.pondId,
+            );
+            setMessages((current) => {
+              const next = current.map((message) =>
+                message.id === userMessage.id ? savedUserMessage : message,
+              );
+              messagesRef.current = next;
+              return next;
+            });
+          }
+        })().catch((persistError) => {
+          console.log("[AskPranaChat] user message persistence failed:", persistError);
+        });
+
         console.log("[AskPranaChat] ask started", {
           fromVoiceMode,
-          sessionId,
           pondId: scopedContext.pondId,
           questionPreview: apiQuestion.slice(0, 120),
           attachmentCount: mappedAttachments.length,
         });
-
-        for (const userMessage of userMessages) {
-          const savedUserMessage = await persistMessage(
-            userMessage,
-            scopedContext.pondId,
-          );
-          setMessages((current) =>
-            current.map((message) =>
-              message.id === userMessage.id ? savedUserMessage : message,
-            ),
-          );
-        }
-
-        if (epoch !== sendEpochRef.current) {
-          console.log("[AskPranaChat] ask cancelled after persist");
-          return null;
-        }
 
         const pondStillSelected =
           sendPondId == null
@@ -2161,6 +2188,24 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         if (!pondStillSelected) {
           console.log("[AskPranaChat] ask cancelled: pond changed");
           return null;
+        }
+
+        if (isSimpleGreeting(apiQuestion)) {
+          const greeting: ChatMessage = {
+            id: `assistant-${Date.now()}`,
+            role: "assistant",
+            text: GREETING_REPLY,
+            messageType: "text",
+          };
+          setMessages((current) => {
+            const next = [...current, greeting];
+            messagesRef.current = next;
+            return next;
+          });
+          void persistMessage(greeting, scopedContext.pondId).catch((persistError) => {
+            console.log("[AskPranaChat] greeting persistence failed:", persistError);
+          });
+          return greeting.text;
         }
 
         const answer = await appendAssistantReply(apiQuestion, {

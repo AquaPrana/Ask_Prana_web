@@ -69,6 +69,7 @@ export default function EditProfileScreen() {
   const { t } = useTranslation();
   const { applyProfileUpdate, applyAvatarUpdate } = useProfile();
   const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
+  const [logoutHovered, setLogoutHovered] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const [logoutError, setLogoutError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -480,7 +481,13 @@ export default function EditProfileScreen() {
               setLogoutError(null);
               setLogoutConfirmOpen(true);
             }}
-            style={({ pressed, hovered }) => [styles.logoutButton, hovered && styles.logoutButtonHovered, pressed && styles.logoutButtonPressed]}
+            style={({ pressed }) => [
+              styles.logoutButton,
+              logoutHovered && styles.logoutButtonHovered,
+              pressed && styles.logoutButtonPressed,
+            ]}
+            onHoverIn={() => setLogoutHovered(true)}
+            onHoverOut={() => setLogoutHovered(false)}
             accessibilityRole="button"
             accessibilityLabel={t("profile.logout")}
           >

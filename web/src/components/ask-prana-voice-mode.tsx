@@ -8,6 +8,7 @@ import {
   Text,
   TextInput,
   View,
+  type ViewStyle,
 } from "react-native";
 import Feather from "@expo/vector-icons/Feather";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -499,6 +500,7 @@ export function AskPranaVoiceModeModal({
   const [reducedMotion, setReducedMotion] = useState(false);
   const [languageMenuOpen, setLanguageMenuOpen] = useState(false);
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
+  const [captionsVisible, setCaptionsVisible] = useState(false);
   const [activeLanguage, setActiveLanguage] =
     useState<AskPranaSpeechLanguageCode>(language);
   const loopArmedRef = useRef(false);
@@ -1382,13 +1384,21 @@ export function AskPranaVoiceModeModal({
         <View style={styles.stage}>
           {orb}
           {statusLabel ? <Text style={styles.status}>{statusLabel}</Text> : null}
+          {captionsVisible && lines.length ? (
+            <Text style={styles.caption} numberOfLines={3}>
+              {lines[lines.length - 1]?.text}
+            </Text>
+          ) : null}
           {errorText && state !== "error" ? (
             <Text style={styles.errorHint}>{errorText}</Text>
           ) : null}
         </View>
 
         <View style={styles.bottomBar}>
-          <View style={styles.composerPill}>
+          <View style={[
+            styles.composerPill,
+            variant === "screen" && styles.composerPillHidden,
+          ]}>
             <Pressable
               onPress={() => setAttachMenuOpen((open) => !open)}
               style={styles.plusBtn}
@@ -1432,6 +1442,14 @@ export function AskPranaVoiceModeModal({
             />
           </View>
           <Pressable
+            onPress={() => setCaptionsVisible((current) => !current)}
+            style={styles.roundBtn}
+            accessibilityRole="button"
+            accessibilityLabel={captionsVisible ? "Hide captions" : "Show captions"}
+          >
+            <Feather name="align-left" size={18} color={colors.white} />
+          </Pressable>
+          <Pressable
             onPress={() => void handleMuteToggle()}
             style={styles.roundBtn}
             accessibilityRole="button"
@@ -1458,6 +1476,9 @@ const styles = StyleSheet.create({
     height: "100%",
     backgroundColor: "#000000",
     paddingHorizontal: 16,
+    ...(Platform.OS === "web"
+      ? ({ position: "fixed", top: 0, right: 0, bottom: 0, left: 0, zIndex: 100 } as unknown as ViewStyle)
+      : {}),
   },
   overlayHost: {
     position: "absolute",
@@ -1567,6 +1588,7 @@ const styles = StyleSheet.create({
     paddingRight: 16,
     position: "relative",
   },
+  composerPillHidden: { display: "none" },
   plusBtn: {
     width: 36,
     height: 36,
