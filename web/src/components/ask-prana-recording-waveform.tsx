@@ -10,10 +10,12 @@ const SAMPLE_INTERVAL_MS = 70;
 const MAX_SAMPLES = 400;
 
 type Props = {
-  /** Normalized 0..1 recorder level (native). Web measures the mic itself. */
+  /** Normalized 0..1 recorder level supplied by the active recorder. */
   level?: number;
   quietColor: string;
   activeColor: string;
+  /** Only enable for capture paths that do not already own a MediaStream. */
+  useBrowserAnalyser?: boolean;
 };
 
 /**
@@ -24,6 +26,7 @@ export function AskPranaRecordingWaveform({
   level = 0,
   quietColor,
   activeColor,
+  useBrowserAnalyser = false,
 }: Props) {
   const [width, setWidth] = useState(0);
   const [samples, setSamples] = useState<number[]>([]);
@@ -31,10 +34,12 @@ export function AskPranaRecordingWaveform({
   levelRef.current = level;
   const webLevelRef = useRef<number | null>(null);
 
-  // Web dictation runs on SpeechRecognition, which exposes no audio levels,
-  // so open a lightweight analyser on a parallel mic stream.
+  // Composer recording already owns the microphone through MediaRecorder.
+  // Opening a second stream on Android can make the active recorder empty or
+  // fail. Keep this opt-in for capture paths that genuinely have no meter.
   useEffect(() => {
     if (
+      !useBrowserAnalyser ||
       Platform.OS !== "web" ||
       typeof window === "undefined" ||
       !navigator.mediaDevices?.getUserMedia
@@ -94,7 +99,7 @@ export function AskPranaRecordingWaveform({
       cancelled = true;
       release?.();
     };
-  }, []);
+  }, [useBrowserAnalyser]);
 
   useEffect(() => {
     const id = setInterval(() => {

@@ -262,6 +262,13 @@ const ASK_PRANA_VOICE_RECORDING_OPTIONS: RecordingOptions = {
     audioEncoder: "aac",
     audioSource: "voice_recognition",
   },
+  // Android Chrome and Brave both support Opus in a WebM container. The web
+  // audio shim verifies this with MediaRecorder.isTypeSupported() and falls
+  // back to another browser-supported recorder type when necessary.
+  web: {
+    mimeType: "audio/webm;codecs=opus",
+    bitsPerSecond: 128000,
+  },
 };
 
 function extensionFromUri(uri: string) {
@@ -2619,11 +2626,16 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       setVoiceLiveTranscript("");
     }
 
-    // Web: SpeechRecognition is the reliable continuous capture path for both
-    // composer dictation and Voice Chat. Do not route Voice Chat through the
-    // Expo recorder on web: its media/metering implementation is not a
-    // substitute for browser continuous recognition.
-    if (Platform.OS === "web" && isWebDictationAvailable()) {
+    // Voice Chat remains on browser SpeechRecognition for its continuous,
+    // interruptible conversation. Composer dictation deliberately uses the
+    // MediaRecorder path below: Android Brave does not consistently expose
+    // SpeechRecognition, and only a finalized recording can be sent to the
+    // existing transcription endpoint.
+    if (
+      source === "voice" &&
+      Platform.OS === "web" &&
+      isWebDictationAvailable()
+    ) {
       try {
         recordingGuardUntilRef.current = Date.now() + 4000;
         const preferredLanguage = await loadAskPranaPreferredLanguage();
@@ -2708,15 +2720,21 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
     try {
       recordingGuardUntilRef.current = Date.now() + 4000;
 
-      let permission = await getRecordingPermissionsAsync();
-      if (!permission.granted) {
-        permission = await requestRecordingPermissionsAsync();
-      }
-      if (!permission.granted) {
-        voiceBusyRef.current = false;
-        recordingGuardUntilRef.current = 0;
-        await promptMicrophonePermissionDenied(permission.canAskAgain !== false);
-        return;
+      // On web, prepareToRecordAsync calls getUserMedia directly from the
+      // original button gesture. Preflighting it here used to open and close a
+      // first stream, then request a second one after awaits; Android Chrome
+      // and Brave can reject that second capture or produce an empty recorder.
+      if (Platform.OS !== "web") {
+        let permission = await getRecordingPermissionsAsync();
+        if (!permission.granted) {
+          permission = await requestRecordingPermissionsAsync();
+        }
+        if (!permission.granted) {
+          voiceBusyRef.current = false;
+          recordingGuardUntilRef.current = 0;
+          await promptMicrophonePermissionDenied(permission.canAskAgain !== false);
+          return;
+        }
       }
 
       await setAudioModeAsync({
@@ -2742,9 +2760,17 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       recordingGuardUntilRef.current = 0;
       recordingStopAllowedAtRef.current = 0;
       await releaseRecordingResources();
+      const errorName =
+        error && typeof error === "object" && "name" in error
+          ? String((error as { name?: unknown }).name)
+          : "";
       Alert.alert(
-        "Recording failed",
-        "Couldn't start recording. Please try again.",
+        errorName === "NotAllowedError" || errorName === "SecurityError"
+          ? "Microphone permission"
+          : "Recording failed",
+        errorName === "NotAllowedError" || errorName === "SecurityError"
+          ? "Allow microphone access for Ask Prana in your browser settings, then try recording again."
+          : "Couldn't start recording. Please try again.",
       );
       // Voice mode needs this rejection to leave its listening state. The
       // composer intentionally keeps its tap handler fire-and-forget.

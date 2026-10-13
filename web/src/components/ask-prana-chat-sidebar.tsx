@@ -45,8 +45,14 @@ const drawerRootWeb: ViewStyle | null =
         right: 0,
         bottom: 0,
         left: 0,
-      } as ViewStyle)
+      } as unknown as ViewStyle)
     : null;
+
+function isPressableHovered(state: { pressed: boolean }) {
+  // React Native Web supplies `hovered` at runtime, but the native callback
+  // type intentionally omits it.
+  return (state as { hovered?: boolean }).hovered === true;
+}
 
 function dateGroup(value: string, t: (key: string) => string) {
   const date = new Date(value);
@@ -93,10 +99,10 @@ function ChatHistoryContextMenu({
     >
       <Pressable
         onPress={onTogglePin}
-        style={({ hovered, pressed }) => [
+        style={(state) => [
           styles.menuAction,
-          hovered && styles.menuActionHovered,
-          pressed && styles.pressed,
+          isPressableHovered(state) && styles.menuActionHovered,
+          state.pressed && styles.pressed,
         ]}
         accessibilityRole="button"
         accessibilityLabel={pinned ? t("askPrana.unpinChat") : t("askPrana.pinChat")}
@@ -106,10 +112,10 @@ function ChatHistoryContextMenu({
       </Pressable>
       <Pressable
         onPress={onEdit}
-        style={({ hovered, pressed }) => [
+        style={(state) => [
           styles.menuAction,
-          hovered && styles.menuActionHovered,
-          pressed && styles.pressed,
+          isPressableHovered(state) && styles.menuActionHovered,
+          state.pressed && styles.pressed,
         ]}
         accessibilityRole="button"
         accessibilityLabel={t("askPrana.edit")}
@@ -119,10 +125,10 @@ function ChatHistoryContextMenu({
       </Pressable>
       <Pressable
         onPress={onDelete}
-        style={({ hovered, pressed }) => [
+        style={(state) => [
           styles.menuAction,
-          hovered && styles.deleteActionHovered,
-          pressed && styles.pressed,
+          isPressableHovered(state) && styles.deleteActionHovered,
+          state.pressed && styles.pressed,
         ]}
         accessibilityRole="button"
         accessibilityLabel={t("askPrana.delete")}
@@ -248,7 +254,7 @@ export function AskPranaChatSidebar({
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") closeContextMenu(true);
     };
-    const closeOnPointerDown = (event: MouseEvent) => {
+    const closeOnPointerDown = (event: Event) => {
       const target = event.target as Element | null;
       if (
         target?.closest("#ask-prana-chat-history-menu") ||
@@ -259,12 +265,14 @@ export function AskPranaChatSidebar({
       closeMenu();
     };
     window.addEventListener("keydown", closeOnEscape);
-    window.addEventListener("mousedown", closeOnPointerDown);
+    // `pointerdown` covers mouse, touch, and pen. A `mousedown` listener
+    // misses/treats Android browser taps inconsistently after the menu opens.
+    window.addEventListener("pointerdown", closeOnPointerDown);
     window.addEventListener("scroll", closeMenu, true);
     window.addEventListener("resize", closeMenu);
     return () => {
       window.removeEventListener("keydown", closeOnEscape);
-      window.removeEventListener("mousedown", closeOnPointerDown);
+      window.removeEventListener("pointerdown", closeOnPointerDown);
       window.removeEventListener("scroll", closeMenu, true);
       window.removeEventListener("resize", closeMenu);
     };
@@ -581,11 +589,11 @@ export function AskPranaChatSidebar({
                   onPress={() => void openSession(session.id)}
                   onHoverIn={() => setHoveredSessionId(session.id)}
                   onHoverOut={() => setHoveredSessionId((current) => current === session.id ? null : current)}
-                  style={({ pressed, hovered }) => [
+                  style={(state) => [
                     styles.conversationItem,
                     session.id === activeSessionId && styles.activeItem,
-                    hovered && styles.hoveredItem,
-                    pressed && styles.pressed,
+                    isPressableHovered(state) && styles.hoveredItem,
+                    state.pressed && styles.pressed,
                   ]}
                   accessibilityRole="button"
                   accessibilityLabel={t("askPrana.openConversationLabel", { title: displayText(session.title) })}
@@ -606,11 +614,11 @@ export function AskPranaChatSidebar({
                   onHoverIn={() => setHoveredSessionId(session.id)}
                   onFocus={() => setFocusedSessionId(session.id)}
                   onBlur={() => setFocusedSessionId((current) => current === session.id ? null : current)}
-                  style={({ hovered, pressed }) => [
+                  style={(state) => [
                     styles.menuButton,
                     !showMenuButton && styles.menuButtonHidden,
-                    hovered && styles.menuButtonHovered,
-                    pressed && styles.pressed,
+                    isPressableHovered(state) && styles.menuButtonHovered,
+                    state.pressed && styles.pressed,
                   ]}
                   hitSlop={6}
                   nativeID={`ask-prana-menu-trigger-${session.id}`}
@@ -673,11 +681,11 @@ export function AskPranaChatSidebar({
                     onHoverIn={() => setHoveredSessionId(session.id)}
                     onFocus={() => setFocusedSessionId(session.id)}
                     onBlur={() => setFocusedSessionId((current) => current === session.id ? null : current)}
-                    style={({ hovered, pressed }) => [
+                    style={(state) => [
                       styles.menuButton,
                       !showMenuButton && styles.menuButtonHidden,
-                      hovered && styles.menuButtonHovered,
-                      pressed && styles.pressed,
+                      isPressableHovered(state) && styles.menuButtonHovered,
+                      state.pressed && styles.pressed,
                     ]}
                     hitSlop={6}
                     nativeID={`ask-prana-menu-trigger-${session.id}`}
@@ -750,13 +758,14 @@ export function AskPranaChatSidebar({
           <View style={[styles.drawerRoot, drawerRootWeb]}>
             <Pressable style={styles.backdrop} onPress={onClose} />
             <View style={styles.mobileDrawer}>{content}</View>
+            {floatingMenu}
           </View>
         </Modal>
       )}
 
-      {Platform.OS === "web" && typeof document !== "undefined"
+      {isDesktop && Platform.OS === "web" && typeof document !== "undefined"
         ? createPortal(floatingMenu, document.body)
-        : floatingMenu}
+        : null}
 
       <Modal
         visible={renamingSession != null}

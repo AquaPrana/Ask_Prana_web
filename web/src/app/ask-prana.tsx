@@ -239,6 +239,7 @@ export default function AskPranaScreen() {
   const [focusedLanguageOption, setFocusedLanguageOption] = useState<string | null>(null);
   const [hoveredLanguageOption, setHoveredLanguageOption] = useState<string | null>(null);
   const [voiceModeOpen, setVoiceModeOpen] = useState(false);
+  const [recordingElapsedSec, setRecordingElapsedSec] = useState(0);
   // Start from the already-loaded UI language so nothing renders in English first.
   const [preferredLanguage, setPreferredLanguage] =
     useState<AskPranaSpeechLanguageCode>(() =>
@@ -316,6 +317,22 @@ export default function AskPranaScreen() {
     stopGeneration,
     openConversation,
   } = useAskPranaChat();
+
+  useEffect(() => {
+    if (!isRecording || voiceModeOpen) {
+      setRecordingElapsedSec(0);
+      return;
+    }
+    setRecordingElapsedSec(0);
+    const timer = setInterval(() => {
+      setRecordingElapsedSec((current) => current + 1);
+    }, 1_000);
+    return () => clearInterval(timer);
+  }, [isRecording, voiceModeOpen]);
+
+  const recordingTimerLabel = `${Math.floor(recordingElapsedSec / 60)
+    .toString()
+    .padStart(2, "0")}:${(recordingElapsedSec % 60).toString().padStart(2, "0")}`;
 
   const routeSessionId = Array.isArray(params.sessionId)
     ? params.sessionId[0]
@@ -1115,6 +1132,7 @@ export default function AskPranaScreen() {
                   quietColor="rgba(255,255,255,0.35)"
                   activeColor={colors.white}
                 />
+                <Text style={styles.recordingTimer}>{recordingTimerLabel}</Text>
                 <Pressable
                   onPress={handleStopDictation}
                   style={({ pressed }) => [
@@ -2065,8 +2083,22 @@ const styles = StyleSheet.create({
     backgroundColor: colors.white,
   },
   recordingShell: {
+    flexDirection: "row",
+    alignItems: "center",
+    minHeight: 56,
     paddingHorizontal: 8,
+    paddingVertical: 8,
     gap: 10,
+  },
+  recordingTimer: {
+    minWidth: 40,
+    color: colors.white,
+    fontFamily: ASK_PRANA_FONT_FAMILY,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "500",
+    fontVariant: ["tabular-nums"],
+    textAlign: "right",
   },
   recordingCircleButton: {
     width: 38,

@@ -163,12 +163,40 @@ export class AudioRecorder extends Emitter {
       );
     }
     const recorder = this.mediaRecorder;
-    const dataPromise = new Promise<Blob>((resolve) =>
-      recorder.addEventListener("dataavailable", (e) => resolve(e.data)),
-    );
-    recorder.stop();
+    const data = await new Promise<Blob>((resolve, reject) => {
+      const chunks: BlobPart[] = [];
+      const cleanup = () => {
+        recorder.removeEventListener("dataavailable", onData);
+        recorder.removeEventListener("stop", onStop);
+        recorder.removeEventListener("error", onError);
+      };
+      const onData = (event: BlobEvent) => {
+        if (event.data?.size > 0) chunks.push(event.data);
+      };
+      const onStop = () => {
+        cleanup();
+        resolve(new Blob(chunks, { type: recorder.mimeType || "audio/webm" }));
+      };
+      const onError = () => {
+        cleanup();
+        reject(new Error("The browser could not finalize the audio recording."));
+      };
+      recorder.addEventListener("dataavailable", onData);
+      recorder.addEventListener("stop", onStop);
+      recorder.addEventListener("error", onError);
+      try {
+        // Ask Chromium to flush the final chunk before ending the stream.
+        recorder.requestData();
+        recorder.stop();
+      } catch (error) {
+        cleanup();
+        reject(error);
+      }
+    });
     this.mediaRecorder = null;
-    const data = await dataPromise;
+    if (data.size === 0) {
+      throw new Error("The browser returned an empty audio recording.");
+    }
     const url = URL.createObjectURL(data);
     this.uri = url;
     this.emit(RECORDING_STATUS_UPDATE, { id: this.id, isFinished: true, hasError: false, error: null, url });
@@ -212,8 +240,14 @@ export class AudioRecorder extends Emitter {
     }
 
     const recorderOptions: MediaRecorderOptions = {};
-    const mimeType = options.mimeType ?? "audio/webm";
-    if (mimeType && MediaRecorder.isTypeSupported(mimeType)) recorderOptions.mimeType = mimeType;
+    const preferredMimeTypes = [
+      options.mimeType,
+      "audio/webm;codecs=opus",
+      "audio/webm",
+      "audio/ogg;codecs=opus",
+    ].filter((value): value is string => Boolean(value));
+    const mimeType = preferredMimeTypes.find((value) => MediaRecorder.isTypeSupported(value));
+    if (mimeType) recorderOptions.mimeType = mimeType;
     if (options.bitsPerSecond) recorderOptions.bitsPerSecond = options.bitsPerSecond;
     else if (options.bitRate) recorderOptions.audioBitsPerSecond = options.bitRate;
     else recorderOptions.bitsPerSecond = 128000;
