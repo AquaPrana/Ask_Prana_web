@@ -120,6 +120,33 @@ create table if not exists public.chat_messages (
   constraint chat_messages_role_check check ((role = any (array['user'::text, 'assistant'::text])))
 );
 
+-- Display translations (see migrations/20261013120000_chat_translations.sql).
+-- chat_messages.content stays as written; these hold the en/hi/te copies.
+create table if not exists public.chat_message_translations (
+  message_id uuid not null references public.chat_messages(id) on delete cascade,
+  lang text not null check (lang in ('en', 'hi', 'te')),
+  content text not null,
+  created_at timestamptz not null default now(),
+  primary key (message_id, lang)
+);
+
+create table if not exists public.chat_session_translations (
+  session_id uuid not null references public.chat_sessions(id) on delete cascade,
+  lang text not null check (lang in ('en', 'hi', 'te')),
+  title text,
+  preview text,
+  updated_at timestamptz not null default now(),
+  primary key (session_id, lang)
+);
+
+create table if not exists public.translation_cache (
+  text_hash text not null,
+  lang text not null check (lang in ('en', 'hi', 'te')),
+  content text not null,
+  created_at timestamptz not null default now(),
+  primary key (text_hash, lang)
+);
+
 -- ------------------------------------------------------------------ indexes
 create unique index if not exists users_phone_uidx on public.users using btree (phone) where ((phone is not null) and (btrim(phone) <> ''::text));
 create unique index if not exists users_email_uidx on public.users using btree (email) where (email is not null);
@@ -140,6 +167,9 @@ alter table public.users enable row level security;
 alter table public.user_sessions enable row level security;
 alter table public.chat_sessions enable row level security;
 alter table public.chat_messages enable row level security;
+alter table public.chat_message_translations enable row level security;
+alter table public.chat_session_translations enable row level security;
+alter table public.translation_cache enable row level security;
 
 drop policy if exists "Users can read own row" on public.users;
 create policy "Users can read own row" on public.users
@@ -156,6 +186,9 @@ grant select, insert, update, delete on public.users to service_role;
 grant select, insert, update, delete on public.user_sessions to service_role;
 grant select, insert, update, delete on public.chat_sessions to service_role;
 grant select, insert, update, delete on public.chat_messages to service_role;
+grant select, insert, update, delete on public.chat_message_translations to service_role;
+grant select, insert, update, delete on public.chat_session_translations to service_role;
+grant select, insert, update, delete on public.translation_cache to service_role;
 grant select, insert, update on public.users to authenticated;
 
 -- ------------------------------------------------------------------ storage
