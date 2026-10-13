@@ -1,5 +1,14 @@
 import type { ChatMessage, ChatMessageType } from "../context/ask-prana-chat-context";
+import {
+  getAskPranaSelectedLanguage,
+  isTextInAskPranaLanguage,
+  markAskPranaServerPending,
+  registerAskPranaTranslationSources,
+  seedAskPranaDisplayTranslations,
+  setAskPranaStoredTranslationLoader,
+} from "../lib/ask-prana-display-translation";
 import { getAskPranaFileUrl } from "../lib/ask-prana-files";
+import type { AskPranaSpeechLanguageCode } from "../lib/ask-prana-language";
 import { supabase } from "../lib/supabase";
 import { requireAskPranaAuth } from "./ask-prana";
 
@@ -20,6 +29,8 @@ export type AskPranaMessageRow = {
   metadata?: Record<string, unknown> | null;
   attachments?: unknown;
   created_at: string;
+  /** Stored display translation in the requested language (null if not stored yet). */
+  translated_content?: string | null;
 };
 
 export type SaveAskPranaMessageInput = {
@@ -45,7 +56,66 @@ export type AskPranaSessionSummary = {
   preview: string;
   createdAt: string;
   lastActivity: string;
+  /** Stored display translations in the requested language (null if not stored yet). */
+  translatedTitle?: string | null;
+  translatedPreview?: string | null;
 };
+
+type Language = AskPranaSpeechLanguageCode;
+
+/**
+ * Hands stored translations to the display store before the rows render, and
+ * marks the ones the server is still translating so no live request races it.
+ */
+function applyStoredMessageTranslations(language: Language, rows: readonly AskPranaMessageRow[]) {
+  registerAskPranaTranslationSources({
+    messages: rows.map((row) => ({ id: row.id, text: row.content })),
+  });
+  seedAskPranaDisplayTranslations(
+    language,
+    rows.map((row) => [row.content, row.translated_content] as const),
+  );
+  markAskPranaServerPending(
+    language,
+    rows
+      .filter((row) => !row.translated_content && row.content && !isTextInAskPranaLanguage(row.content, language))
+      .filter((row) => !(row.file_path && row.file_name && row.content?.trim() === row.file_name.trim()))
+      .map((row) => row.content),
+  );
+}
+
+function applyStoredSessionTranslations(language: Language, sessions: readonly AskPranaSessionSummary[]) {
+  registerAskPranaTranslationSources({ sessions });
+  seedAskPranaDisplayTranslations(
+    language,
+    sessions.flatMap((session) => [
+      [session.title, session.translatedTitle] as const,
+      [session.preview, session.translatedPreview] as const,
+    ]),
+  );
+  markAskPranaServerPending(
+    language,
+    sessions.flatMap((session) => [
+      ...(session.translatedTitle ? [] : [session.title]),
+      ...(session.translatedPreview ? [] : [session.preview]),
+    ]),
+  );
+}
+
+/** Language switch: one request for the stored translations of everything on screen. */
+async function loadStoredTranslations(
+  language: Language,
+  ids: { messageIds: string[]; sessionIds: string[] },
+) {
+  const result = await conversationRequest<{
+    messages?: AskPranaMessageRow[];
+    sessions?: AskPranaSessionSummary[];
+  }>("translations", { lang: language, messageIds: ids.messageIds, sessionIds: ids.sessionIds });
+  applyStoredMessageTranslations(language, result.messages ?? []);
+  applyStoredSessionTranslations(language, result.sessions ?? []);
+}
+
+setAskPranaStoredTranslationLoader(loadStoredTranslations);
 
 function getPublicFileUrl(filePath: string | null | undefined) {
   if (!filePath) {
@@ -205,22 +275,31 @@ export async function getOrCreateAskPranaSession(
 export async function fetchAskPranaMessages(
   sessionId: string,
   userId?: string,
-): Promise<{ messages: ChatMessage[]; error: Error | null }> {
+  options?: { before?: string | null; limit?: number; lang?: Language },
+): Promise<{ messages: ChatMessage[]; hasMore: boolean; error: Error | null }> {
   if (!isValidAskPranaUuid(sessionId)) {
-    return { messages: [], error: new Error("Invalid session_id.") };
+    return { messages: [], hasMore: false, error: new Error("Invalid session_id.") };
   }
+  const lang = options?.lang ?? getAskPranaSelectedLanguage();
   try {
-    const result = await conversationRequest<{ messages?: AskPranaMessageRow[] }>("messages", {
+    const result = await conversationRequest<{ messages?: AskPranaMessageRow[]; hasMore?: boolean }>("messages", {
       sessionId,
       userId,
+      lang,
+      ...(options?.before ? { before: options.before } : {}),
+      ...(options?.limit ? { limit: options.limit } : {}),
     });
+    const rows = result.messages ?? [];
+    applyStoredMessageTranslations(lang, rows);
     return {
-      messages: await Promise.all((result.messages ?? []).map((row) => mapRowToChatMessage(row))),
+      messages: await Promise.all(rows.map((row) => mapRowToChatMessage(row))),
+      hasMore: Boolean(result.hasMore),
       error: null,
     };
   } catch (error) {
     return {
       messages: [],
+      hasMore: false,
       error: error instanceof Error ? error : new Error("Unable to open the conversation."),
     };
   }
@@ -279,6 +358,11 @@ export async function saveAskPranaMessage(
       mimeType: input.mimeType ?? null,
     });
     if (!saved.message) return { message: null, error: new Error("Unable to save message.") };
+    // The server translates new messages in the background; knowing the id
+    // lets a later language switch read those stored translations.
+    registerAskPranaTranslationSources({
+      messages: [{ id: saved.message.id, text: saved.message.content }],
+    });
     return {
       message: originalMessage
         ? await mergePersistedMessage(originalMessage, saved.message)
@@ -321,16 +405,25 @@ export async function splitPackedAskPranaSessions(
 export async function listAskPranaSessionsForPond(
   userId: string,
   _pondId: string | null,
-): Promise<{ sessions: AskPranaSessionSummary[]; error: Error | null }> {
+  cursor?: string | null,
+  lang: Language = getAskPranaSelectedLanguage(),
+): Promise<{ sessions: AskPranaSessionSummary[]; nextCursor: string | null; error: Error | null }> {
   if (!isValidAskPranaUuid(userId)) {
-    return { sessions: [], error: new Error("Invalid user_id.") };
+    return { sessions: [], nextCursor: null, error: new Error("Invalid user_id.") };
   }
   try {
-    const listed = await conversationRequest<{ sessions?: AskPranaSessionSummary[] }>("list", { userId });
-    return { sessions: listed.sessions ?? [], error: null };
+    const listed = await conversationRequest<{ sessions?: AskPranaSessionSummary[]; nextCursor?: string | null }>("list", {
+      userId,
+      lang,
+      ...(cursor ? { cursor } : {}),
+    });
+    const sessions = listed.sessions ?? [];
+    applyStoredSessionTranslations(lang, sessions);
+    return { sessions, nextCursor: listed.nextCursor ?? null, error: null };
   } catch (error) {
     return {
       sessions: [],
+      nextCursor: null,
       error: error instanceof Error ? error : new Error("Unable to load your conversation history. Please try again."),
     };
   }

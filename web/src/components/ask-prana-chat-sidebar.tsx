@@ -357,8 +357,9 @@ export function AskPranaChatSidebar({
     sessions.flatMap((session) => [session.title, session.preview].filter(Boolean)),
     "visible",
     // Keep room for the open conversation's newest messages. Remaining
-    // history rows still translate in the shared background queue.
-    { priorityCount: 10, prefetchOtherLanguages: true },
+    // history rows still translate in the shared background queue. Other
+    // languages come from the server's stored translations, not prefetch.
+    { priorityCount: 10, prefetchOtherLanguages: false },
   );
 
   const visibleSessions = useMemo(() => {

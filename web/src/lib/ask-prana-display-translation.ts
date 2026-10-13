@@ -18,8 +18,10 @@ import { acceptDisplayTranslation, isStaleTranslation, shouldSendTranslation } f
  *   and preview is one cache entry. The painted language changes only when
  *   that whole visible set is ready, so the screen does not stay in English
  *   one paragraph at a time.
- * - The open chat is also pre-translated into the other languages at idle
- *   ("prefetch"), so switching language on it is served from cache.
+ * - Stored translations come from the database with the history (and on a
+ *   language switch, by id), so a chat opened before switches without any
+ *   OpenAI call. Live translate-history is only a fallback for text the
+ *   server has not stored yet.
  * - Until a translation arrives the original text is shown, so the chat never
  *   goes blank. Stored messages are never modified.
  */
@@ -34,33 +36,36 @@ type Entry = {
   value?: string;
   failedAt?: number;
   attempts?: number;
+  /** Loading because the server is translating it in the background. */
+  serverPending?: boolean;
 };
 
 type Job = { language: Language; priority: AskPranaTranslationPriority; texts: string[] };
 
-// Model latency grows with output length. Keep the foreground batches very
-// small so the newest visible messages repaint as soon as their own request
-// completes instead of waiting behind older conversation history.
+// Stored translations now come from the database with the history itself, so
+// live translate-history calls are only a fallback for text the server has not
+// stored yet. Fewer, larger batches avoid paying the Edge Function start-up
+// and auth lookup for every two or three messages.
 const BATCH_LIMITS: Record<AskPranaTranslationPriority, { items: number; chars: number }> = {
-  // Keep foreground work small enough that a long assistant answer cannot
-  // hold the newest visible turns behind a large history batch.
-  visible: { items: 3, chars: 2_400 },
-  background: { items: 24, chars: 2400 },
-  prefetch: { items: 8, chars: 1400 },
+  visible: { items: 8, chars: 12_000 },
+  background: { items: 8, chars: 12_000 },
+  prefetch: { items: 8, chars: 12_000 },
 };
-// Six concurrent model translations looked fast locally, but a language
-// switch can queue an entire chat plus the sidebar and trigger rate limits.
-// Three requests keep the first visible content responsive and let the queue
-// make steady progress for every stored conversation.
-const MAX_CONCURRENT_REQUESTS = 3;
+const MAX_CONCURRENT_REQUESTS = 2;
 /** Caps per lower priority so the visible chat always has free request slots. */
 const MAX_CONCURRENT_BY_PRIORITY: Record<AskPranaTranslationPriority, number> = {
   visible: MAX_CONCURRENT_REQUESTS,
-  // History titles/previews are independent. Two background batches keep a
-  // large conversation list moving without taking slots from the active chat.
   background: 1,
   prefetch: 1,
 };
+/**
+ * When the server reports stored translations missing it starts translating
+ * them itself. Re-read the database at these delays before falling back to a
+ * live request, so the same text is not sent to OpenAI twice.
+ */
+const SERVER_FILL_RECHECK_MS = [3_000, 7_000];
+/** A language switch waits at most this long for stored translations. */
+const SERVER_LOAD_TIMEOUT_MS = 2_500;
 /** After an OpenAI rate limit: retry the screen quickly, keep low-priority work paused longer. */
 const RATE_LIMIT_RETRY_MS = 1_500;
 const RATE_LIMIT_MAX_RETRIES = 4;
@@ -71,10 +76,10 @@ const STORAGE_PREFIX = "ask-prana:display-translations:v1:";
 const MAX_PERSISTED_PER_LANGUAGE = 2_000;
 const PERSIST_DEBOUNCE_MS = 800;
 const LANGUAGES: Language[] = ["en", "hi", "te"];
-// Long answers were previously one translation job. A single detailed answer
-// could therefore keep its original language on screen until a slow model call
-// completed. Splitting is display-only; original message data is untouched.
-const TRANSLATION_SEGMENT_MAX_CHARS = 1_600;
+// Only very long text is split for live translation (matches the server), so
+// a normal message is one cache entry that can be stored against its id.
+// Splitting is display-only; original message data is untouched.
+const TRANSLATION_SEGMENT_MAX_CHARS = 6_000;
 
 const store: Record<Language, Map<string, Entry>> = {
   en: new Map(),
@@ -278,7 +283,7 @@ function resolveText(text: string, language: Language): Resolved {
   if (entries.every((entry) => entry?.status === "ready" && entry.value)) {
     return {
       status: "ready",
-      text: entries.map((entry) => entry?.value.trim() ?? "").join("\n\n"),
+      text: entries.map((entry) => entry?.value?.trim() ?? "").join("\n\n"),
     };
   }
   if (entries.some((entry) => entry?.status === "loading")) return { status: "loading", text };
@@ -418,7 +423,12 @@ function pump() {
       metrics.batches += 1;
       metrics.apiCalls += 1;
     }
-    void translateAskPranaHistory(job.texts, job.language)
+    // Message ids let the server store the result for every device.
+    const jobIds = job.texts.map((text) => {
+      const ids = messageIdsBySource.get(text.trim());
+      return ids?.size ? ids.values().next().value ?? null : null;
+    });
+    void translateAskPranaHistory(job.texts, job.language, jobIds)
       .then((results) => {
         if (jobGeneration !== generation) return;
         job.texts.forEach((text, index) => {
@@ -493,12 +503,187 @@ function pump() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Stored (server) translations
+// ---------------------------------------------------------------------------
+
+/** Source text → stored message ids / session ids, for database lookups. */
+const messageIdsBySource = new Map<string, Set<string>>();
+const sessionIdsBySource = new Map<string, Set<string>>();
+
+export type AskPranaStoredTranslationLoader = (
+  language: Language,
+  ids: { messageIds: string[]; sessionIds: string[] },
+) => Promise<void>;
+let storedTranslationLoader: AskPranaStoredTranslationLoader | null = null;
+/** Languages whose stored translations are being read for a switch. */
+const serverLoadInFlight = new Set<Language>();
+const deferredRequests: { texts: readonly string[]; language: Language; priority: AskPranaTranslationPriority }[] = [];
+const serverPending: Record<Language, Set<string>> = { en: new Set(), hi: new Set(), te: new Set() };
+let serverRecheckTimer: ReturnType<typeof setTimeout> | null = null;
+let serverRecheckRound = 0;
+
+/** Registered by the history service; reads stored translations by id. */
+export function setAskPranaStoredTranslationLoader(loader: AskPranaStoredTranslationLoader | null) {
+  storedTranslationLoader = loader;
+}
+
+/** The language the picker selected (history requests ask the server for it). */
+export function getAskPranaSelectedLanguage(): Language {
+  return activeLanguage;
+}
+
+function addId(map: Map<string, Set<string>>, source: string | null | undefined, id: string) {
+  const key = source?.trim();
+  if (!key) return;
+  const ids = map.get(key) ?? new Set<string>();
+  ids.add(id);
+  map.set(key, ids);
+}
+
+/** Remembers which stored message/session each display text belongs to. */
+export function registerAskPranaTranslationSources(input: {
+  messages?: readonly { id: string; text: string | null | undefined }[];
+  sessions?: readonly { id: string; title?: string | null; preview?: string | null }[];
+}) {
+  for (const message of input.messages ?? []) addId(messageIdsBySource, message.text, message.id);
+  for (const session of input.sessions ?? []) {
+    addId(sessionIdsBySource, session.title, session.id);
+    addId(sessionIdsBySource, session.preview, session.id);
+  }
+}
+
+/**
+ * Marks server translations ready before render, so a stored chat paints in
+ * the selected language with no translate-history call.
+ */
+export function seedAskPranaDisplayTranslations(
+  language: Language,
+  pairs: readonly (readonly [source: string | null | undefined, translated: string | null | undefined])[],
+) {
+  const cache = store[language];
+  let changed = false;
+  for (const [source, translated] of pairs) {
+    const key = source?.trim();
+    const value = translated?.trim();
+    if (!key || !value || !needsTranslation(key, language)) continue;
+    if (!isValidTranslation(key, value, language)) continue;
+    if (cache.get(key)?.value === value) continue;
+    cache.set(key, { status: "ready", value });
+    serverPending[language].delete(key);
+    changed = true;
+  }
+  if (changed) {
+    schedulePersist(language);
+    emit();
+  }
+}
+
+/**
+ * The server is translating these in the background. Show the original as
+ * "loading" (no live request) and re-read the database shortly.
+ */
+export function markAskPranaServerPending(language: Language, sources: readonly (string | null | undefined)[]) {
+  const cache = store[language];
+  let added = false;
+  for (const source of sources) {
+    const key = source?.trim();
+    if (!key || !needsTranslation(key, language)) continue;
+    const entry = cache.get(key);
+    if (entry?.status === "ready" || (entry?.status === "loading" && !entry.serverPending)) continue;
+    cache.set(key, { status: "loading", serverPending: true, attempts: entry?.attempts });
+    serverPending[language].add(key);
+    added = true;
+  }
+  if (!added) return;
+  emit();
+  if (!serverRecheckTimer) {
+    serverRecheckRound = 0;
+    scheduleServerRecheck();
+  }
+}
+
+function scheduleServerRecheck() {
+  const delay = SERVER_FILL_RECHECK_MS[serverRecheckRound] ?? SERVER_FILL_RECHECK_MS[SERVER_FILL_RECHECK_MS.length - 1];
+  const previous = SERVER_FILL_RECHECK_MS[serverRecheckRound - 1] ?? 0;
+  serverRecheckTimer = setTimeout(() => void runServerRecheck(), Math.max(0, delay - previous));
+}
+
+function idsForSources(sources: readonly string[]) {
+  const messageIds = new Set<string>();
+  const sessionIds = new Set<string>();
+  for (const source of sources) {
+    const key = source.trim();
+    messageIdsBySource.get(key)?.forEach((id) => messageIds.add(id));
+    sessionIdsBySource.get(key)?.forEach((id) => sessionIds.add(id));
+  }
+  return { messageIds: [...messageIds], sessionIds: [...sessionIds] };
+}
+
+async function runServerRecheck() {
+  const recheckGeneration = generation;
+  const lastRound = serverRecheckRound >= SERVER_FILL_RECHECK_MS.length - 1;
+  for (const language of LANGUAGES) {
+    const pending = [...serverPending[language]];
+    if (!pending.length) continue;
+    const ids = idsForSources(pending);
+    if (storedTranslationLoader && (ids.messageIds.length || ids.sessionIds.length)) {
+      // The loader seeds anything that has been stored since.
+      await storedTranslationLoader(language, ids).catch(() => undefined);
+      if (recheckGeneration !== generation) return;
+    }
+    if (!lastRound) continue;
+    // Still missing after the server had time: fall back to a live request.
+    const cache = store[language];
+    const stillMissing = [...serverPending[language]];
+    serverPending[language].clear();
+    for (const key of stillMissing) {
+      if (cache.get(key)?.serverPending) cache.delete(key);
+    }
+    emit();
+    if (stillMissing.length && language === activeLanguage) {
+      requestAskPranaDisplayTranslations(stillMissing, language, "visible");
+    }
+  }
+  serverRecheckTimer = null;
+  if (!lastRound && LANGUAGES.some((language) => serverPending[language].size)) {
+    serverRecheckRound += 1;
+    scheduleServerRecheck();
+  }
+}
+
+/** Reads stored translations for everything on screen (one DB request). */
+async function loadStoredTranslations(language: Language, texts: readonly string[]) {
+  if (!storedTranslationLoader) return;
+  const ids = idsForSources(texts.filter((text) => text?.trim() && needsTranslation(text, language)));
+  if (!ids.messageIds.length && !ids.sessionIds.length) return;
+  serverLoadInFlight.add(language);
+  try {
+    await Promise.race([
+      storedTranslationLoader(language, ids).catch(() => undefined),
+      new Promise((resolve) => setTimeout(resolve, SERVER_LOAD_TIMEOUT_MS)),
+    ]);
+  } finally {
+    serverLoadInFlight.delete(language);
+    const replay = deferredRequests.splice(0).filter((request) => request.language === language);
+    for (const request of replay) requestAskPranaDisplayTranslations(request.texts, request.language, request.priority);
+  }
+}
+
 /** Drops cached, persisted and queued translations, e.g. when the user signs out. */
 export function clearAskPranaDisplayTranslations() {
   generation += 1;
   for (const priority of PRIORITY_ORDER) queues[priority].length = 0;
   pendingUnits.clear();
   dirtyLanguages.clear();
+  messageIdsBySource.clear();
+  sessionIdsBySource.clear();
+  deferredRequests.length = 0;
+  for (const language of LANGUAGES) serverPending[language].clear();
+  if (serverRecheckTimer) {
+    clearTimeout(serverRecheckTimer);
+    serverRecheckTimer = null;
+  }
   for (const cache of Object.values(store)) cache.clear();
   if (storageAvailable) {
     void AsyncStorage.multiRemove(LANGUAGES.map((lang) => STORAGE_PREFIX + lang)).catch(() => undefined);
@@ -520,6 +705,12 @@ export function requestAskPranaDisplayTranslations(
   if (!hydrated) {
     // Wait for the device cache first so cached text is never re-requested.
     void ensureHydrated().then(() => requestAskPranaDisplayTranslations(texts, language, priority));
+    return;
+  }
+  if (serverLoadInFlight.has(language)) {
+    // Stored translations for this language are being read; only what they
+    // do not cover is sent for live translation afterwards.
+    deferredRequests.push({ texts, language, priority });
     return;
   }
 
@@ -682,16 +873,21 @@ export function selectAskPranaLanguageWhenReady(
     activeLanguage = language;
   }
   paintedLanguage = language;
+  // Hold live requests until the stored translations for the screen are read;
+  // set before apply() so the re-render it triggers cannot send any.
+  const texts = visibleAskPranaTexts();
+  const stored = loadStoredTranslations(language, texts);
   apply(language);
-  const request = () => {
+  const request = async () => {
+    await stored;
     if (activeLanguage !== language) return;
-    const texts = visibleAskPranaTexts();
-    if (texts.length) requestAskPranaDisplayTranslations(texts, language, "visible");
+    const visible = visibleAskPranaTexts();
+    if (visible.length) requestAskPranaDisplayTranslations(visible, language, "visible");
     revealPaintedLanguage();
     version += 1;
     for (const listener of listeners) listener();
   };
-  if (hydrated) request();
+  if (hydrated) void request();
   else void ensureHydrated().then(request);
 }
 

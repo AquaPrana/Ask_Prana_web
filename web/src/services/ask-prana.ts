@@ -26,6 +26,8 @@ export type AskPranaReply = {
 export async function translateAskPranaHistory(
   texts: string[],
   language: "en" | "te" | "hi",
+  /** Message id per text (or null), so the server can store the result. */
+  ids?: (string | null)[],
 ): Promise<string[]> {
   // English is translated too: chats typed in Hindi/Telugu must not leak into
   // the English UI. Callers only send text that is not already in `language`.
@@ -43,7 +45,7 @@ export async function translateAskPranaHistory(
   try {
     result = await Promise.race([
       supabase.functions.invoke("ask-prana", {
-        body: { task: "translate-history", texts, language },
+        body: { task: "translate-history", texts, language, ...(ids?.some(Boolean) ? { ids } : {}) },
         headers: { Authorization: `Bearer ${auth.accessToken}` },
         signal: controller.signal,
       }),

@@ -443,10 +443,21 @@ export default function AskPranaScreen() {
       // immediately; older turns continue through the shared background queue
       // rather than starving the latest reply or triggering API rate limits.
       priorityCount: 9,
-      // Once the current conversation is settled, warm Hindi/Telugu/English
-      // cache entries in the background so later language switches are local.
-      prefetchOtherLanguages: true,
+      // The server stores every message in all three languages, so other
+      // languages are read from the database on switch, not prefetched live.
+      prefetchOtherLanguages: false,
     });
+  // Stored translations normally arrive well under a second; only mention
+  // translating when a visible message has really been waiting.
+  const [showTranslatingBanner, setShowTranslatingBanner] = useState(false);
+  useEffect(() => {
+    if (contentPhase !== "loading") {
+      setShowTranslatingBanner(false);
+      return;
+    }
+    const timer = setTimeout(() => setShowTranslatingBanner(true), 2_000);
+    return () => clearTimeout(timer);
+  }, [contentPhase]);
   // Reuse the previous display object when a message's shown text is unchanged,
   // so the memoized bubbles only re-render for messages whose translation landed.
   const [displayMessageCache] = useState(
@@ -1000,7 +1011,7 @@ export default function AskPranaScreen() {
 
 
           <View style={styles.messageColumn}>
-          {contentPhase === "loading" ? (
+          {contentPhase === "loading" && showTranslatingBanner ? (
             <Text style={styles.translationBanner}>{t("askPrana.translating")}</Text>
           ) : contentPhase === "error" ? (
             <Pressable onPress={() => retryAskPranaVisibleTranslations()} accessibilityRole="button">
