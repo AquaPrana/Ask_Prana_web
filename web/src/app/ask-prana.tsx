@@ -1291,13 +1291,27 @@ export default function AskPranaScreen() {
                       <Pressable
                         onPress={() => {
                           setAttachmentMenuOpen(false);
-                          void sendImageAttachment(requestContext);
+                          void sendImageAttachment(requestContext, "gallery");
                         }}
                         style={styles.attachMenuItem}
                       >
                         <Feather name="image" size={16} color={colors.textDark} />
                         <Text style={styles.attachMenuText}>{t("askPrana.addImage")}</Text>
                       </Pressable>
+                      {isDesktop ? null : (
+                        // Phones/tablets: open the camera directly. Desktop
+                        // browsers have no camera capture for file inputs.
+                        <Pressable
+                          onPress={() => {
+                            setAttachmentMenuOpen(false);
+                            void sendImageAttachment(requestContext, "camera");
+                          }}
+                          style={styles.attachMenuItem}
+                        >
+                          <Feather name="camera" size={16} color={colors.textDark} />
+                          <Text style={styles.attachMenuText}>{t("askPrana.takePhoto")}</Text>
+                        </Pressable>
+                      )}
                       <Pressable
                         onPress={() => {
                           setAttachmentMenuOpen(false);

@@ -160,6 +160,8 @@ export const pickSingleImage = async (
     const result = await ImagePicker.launchCameraAsync({
       mediaTypes: ["images"],
       quality: 0.8,
+      // Rear camera: farmers photograph ponds, shrimp, feed trays.
+      cameraType: ImagePicker.CameraType.back,
     });
 
     if (result.canceled || !result.assets.length) {

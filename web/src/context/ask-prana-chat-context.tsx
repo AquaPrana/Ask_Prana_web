@@ -666,7 +666,11 @@ type AskPranaChatContextValue = {
   } | null>;
   /** Call when opening voice mode so the first turn starts a fresh shared session. */
   prepareVoiceModeSession: () => void;
-  sendImageAttachment: (requestContext?: AskPranaRequestContext) => Promise<void>;
+  /** `source` opens the camera or gallery directly instead of asking first. */
+  sendImageAttachment: (
+    requestContext?: AskPranaRequestContext,
+    source?: "camera" | "gallery",
+  ) => Promise<void>;
   sendDocumentAttachment: (
     requestContext?: AskPranaRequestContext,
   ) => Promise<void>;
@@ -2535,7 +2539,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
   }, [uploadPendingAttachment]);
 
   const sendImageAttachment = useCallback(
-    async (_requestContext?: AskPranaRequestContext) => {
+    async (_requestContext?: AskPranaRequestContext, source?: "camera" | "gallery") => {
       if (isSending || isRecording || isTranscribing) return;
 
       const pickAndUpload = async (source: "camera" | "gallery") => {
@@ -2565,7 +2569,12 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         setPendingAttachments((current) => [...current, ...localItems].slice(0, MAX_ATTACHMENT_COUNT));
         void Promise.all(localItems.map(uploadPendingAttachment));
       };
-      promptImageSource((source) => { void pickAndUpload(source); });
+      if (source) {
+        // The attach menu already says which one (Add image / Take photo).
+        await pickAndUpload(source);
+        return;
+      }
+      promptImageSource((picked) => { void pickAndUpload(picked); });
     },
     [isSending, isRecording, isTranscribing, uploadPendingAttachment],
   );
