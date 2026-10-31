@@ -14,9 +14,10 @@ import {
  * - Cache-first: every result is stored in `translation_cache` keyed by the
  *   sha256 of the trimmed source, so identical text is translated once per
  *   language for every user and device.
- * - No `reasoning` is sent: translation is a direct transformation and
- *   reasoning only adds latency. If the configured model insists on it, the
- *   lowest effort it accepts is remembered for the rest of the isolate.
+ * - Reasoning models are asked for no thinking (effort "none"): translation
+ *   is a direct transformation and thinking only adds latency. If a model
+ *   rejects that, the lowest effort it accepts is remembered for the isolate.
+ *   Non-reasoning models get no `reasoning` field.
  * - Text already in the target language is returned unchanged without a call.
  */
 
@@ -128,8 +129,28 @@ export class TranslationError extends Error {
   }
 }
 
-/** Only set if the model rejects requests without `reasoning`. */
-let requiredReasoningEffort: "minimal" | "low" | null = null;
+type ReasoningEffort = "none" | "minimal" | "low";
+/** Lowest effort the configured model has accepted (remembered per isolate). */
+let requiredReasoningEffort: ReasoningEffort | null = null;
+
+/**
+ * GPT-5 / o-series models "think" by default. For translation that only adds
+ * seconds, and with a small output budget the thinking used every token and
+ * the reply came back empty ("incomplete: max_output_tokens"), so nothing was
+ * stored and the next language switch had to translate again. Ask these
+ * models for no thinking; other models get no `reasoning` field at all.
+ */
+function reasoningEffortFor(model: string): ReasoningEffort | null {
+  if (requiredReasoningEffort) return requiredReasoningEffort;
+  return /^(gpt-5|o\d)/i.test(model) ? "none" : null;
+}
+
+/** Next effort to try when the model rejects the current one. */
+function nextReasoningEffort(current: ReasoningEffort | null): ReasoningEffort {
+  if (current === "none") return "minimal";
+  if (current === "minimal") return "low";
+  return "minimal";
+}
 // Matches the previous translate-history behaviour: a plain JSON array parsed
 // permissively, without structured-output overhead.
 let structuredOutput = false;
@@ -164,10 +185,19 @@ async function callOpenAI(texts: string[], target: TranslationLang): Promise<str
   const startedAt = performance.now();
   let rateLimitRetried = false;
   let reasoningRetries = 0;
+  let budgetRetried = false;
+  // Long replies sometimes come back as JSON the parser cannot read (stray
+  // quotes or escapes), which threw away a correct translation. Such a call
+  // is retried once with strict structured output, which is always valid.
+  let strictRetried = false;
+  let strictThisCall = structuredOutput;
+  // Room for the translation itself plus any thinking the model still does.
+  let outputBudget = Math.min(16_000, Math.max(1_200, Math.ceil(sourceChars * 3)));
 
   while (true) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    const effort = reasoningEffortFor(model);
     let response: Response;
     let data: Record<string, unknown>;
     try {
@@ -183,9 +213,9 @@ async function callOpenAI(texts: string[], target: TranslationLang): Promise<str
             "Keep pH, DO, FCR, DOC, ABW, Vannamei, biomass, salinity, mg/L, and ppm in Latin script. " +
             `Return a JSON array of exactly ${texts.length} strings.`,
           input: JSON.stringify(texts),
-          ...(requiredReasoningEffort ? { reasoning: { effort: requiredReasoningEffort } } : {}),
-          max_output_tokens: Math.min(8_000, Math.max(400, Math.ceil(sourceChars * 2))),
-          ...(structuredOutput
+          ...(effort ? { reasoning: { effort } } : {}),
+          max_output_tokens: outputBudget,
+          ...(strictThisCall
             ? {
               text: {
                 format: {
@@ -217,18 +247,21 @@ async function callOpenAI(texts: string[], target: TranslationLang): Promise<str
       chars: sourceChars,
       ms: Math.round(performance.now() - startedAt),
       model,
+      effort,
       status: response.status,
     });
 
     if (response.status === 400) {
       const described = JSON.stringify(data);
-      if (structuredOutput && /schema|text\.format|json_schema/i.test(described)) {
+      if (strictThisCall && /schema|text\.format|json_schema/i.test(described)) {
         structuredOutput = false;
+        strictThisCall = false;
+        strictRetried = true;
         continue;
       }
-      if (/reasoning|effort/i.test(described) && reasoningRetries < 2) {
-        // This model requires reasoning: use the lowest effort it accepts.
-        requiredReasoningEffort = requiredReasoningEffort === "minimal" ? "low" : "minimal";
+      if (/reasoning|effort/i.test(described) && reasoningRetries < 3) {
+        // The model rejected this effort: step up to the lowest one it accepts.
+        requiredReasoningEffort = nextReasoningEffort(effort);
         reasoningRetries += 1;
         continue;
       }
@@ -254,6 +287,22 @@ async function callOpenAI(texts: string[], target: TranslationLang): Promise<str
     }
 
     const items = parseItems(extractOpenAIOutputText(data));
+    const ranOutOfBudget =
+      (data as { status?: unknown }).status === "incomplete" &&
+      (data as { incomplete_details?: { reason?: unknown } }).incomplete_details?.reason === "max_output_tokens";
+    if ((!items || items.length !== texts.length) && ranOutOfBudget && !budgetRetried) {
+      // Out of room before the answer was written: retry once with double.
+      budgetRetried = true;
+      outputBudget = Math.min(32_000, outputBudget * 2);
+      console.warn("[translate-openai] output budget exhausted; retrying", { outputBudget });
+      continue;
+    }
+    if ((!items || items.length !== texts.length) && !ranOutOfBudget && !strictThisCall && !strictRetried) {
+      strictRetried = true;
+      strictThisCall = true;
+      console.warn("[translate-openai] unreadable reply; retrying with structured output");
+      continue;
+    }
     if (!items || items.length !== texts.length || !items.every((item) => typeof item === "string")) {
       console.error("[translate-openai] incomplete response", describeOpenAIResponse(data));
       throw new TranslationError("Translation response was incomplete.", 502);
@@ -325,7 +374,22 @@ async function runBatches(units: string[], target: TranslationLang): Promise<(st
           results[index] = acceptTranslation(units[index], value, target) ? value : null;
         });
       } catch (error) {
-        firstError ??= error;
+        if (batch.length === 1) {
+          firstError ??= error;
+          continue;
+        }
+        // The model sometimes merges or drops an item (for example a junk
+        // message like "Fhhbb"), so the whole batch was rejected every time.
+        // Translate that batch one item at a time instead.
+        for (const index of batch) {
+          try {
+            const [value] = await callOpenAI([units[index]], target);
+            const trimmed = value?.trim() ?? "";
+            results[index] = acceptTranslation(units[index], trimmed, target) ? trimmed : null;
+          } catch (itemError) {
+            firstError ??= itemError;
+          }
+        }
       }
     }
   };
