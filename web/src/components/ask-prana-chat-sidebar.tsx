@@ -417,8 +417,11 @@ export function AskPranaChatSidebar({
 
   const openSession = async (sessionId: string) => {
     closeContextMenu();
-    await openConversation(sessionId);
+    // Close the drawer first: the chat then shows its loader (or the cached
+    // messages) at once. Waiting for the download before closing made a tap
+    // look like it did nothing for several seconds.
     if (!isDesktop) onClose();
+    await openConversation(sessionId);
   };
 
   const saveRename = async () => {

@@ -5,6 +5,7 @@ import {
   supabase,
 } from "../lib/supabase";
 import { explicitReplyLanguageLabel } from "../lib/ask-prana-translation-policy";
+import { loadAskPranaPreferredLanguage } from "../lib/ask-prana-language";
 import { getCurrentUserProfile, resolveFarmerDisplayName } from "./profile";
 
 export type AskPranaGeneratedFile = {
@@ -684,13 +685,42 @@ function appendVoiceFile(
   formData.append("file", blob, fileName);
 }
 
-export async function transcribeAskPranaAudio(input: {
+/**
+ * Scripts Ask Prana cannot show or translate: Bengali, Gurmukhi, Gujarati,
+ * Odia, Tamil (U+0980-U+0BFF) and Kannada, Malayalam, Sinhala
+ * (U+0C80-U+0DFF). Telugu and Devanagari are outside these ranges.
+ */
+const UNSUPPORTED_INDIC_SCRIPT = /[\u0980-\u0BFF\u0C80-\u0DFF]/;
+
+type TranscribeInput = {
   uri: string;
   blob: Blob;
   mimeType?: string | null;
   fileName?: string | null;
   language?: string | null;
-}) {
+};
+
+/**
+ * Voice Chat uses automatic language detection so mixed Telugu/Hindi/English
+ * works, but it sometimes picks Tamil or Malayalam for Telugu speech. That
+ * text could not be understood or translated and was saved into the chat.
+ * In that case transcribe once more in the language selected in the app.
+ */
+export async function transcribeAskPranaAudio(input: TranscribeInput) {
+  const transcript = await transcribeAskPranaAudioOnce(input);
+  const isAuto = (input.language ?? "").trim().toLowerCase() === "auto";
+  if (!isAuto || !UNSUPPORTED_INDIC_SCRIPT.test(transcript)) return transcript;
+  try {
+    const preferred = await loadAskPranaPreferredLanguage();
+    const retry = await transcribeAskPranaAudioOnce({ ...input, language: preferred });
+    if (retry && !UNSUPPORTED_INDIC_SCRIPT.test(retry)) return retry;
+  } catch (error) {
+    console.log("[askPrana] transcription retry in selected language failed:", error);
+  }
+  return transcript;
+}
+
+async function transcribeAskPranaAudioOnce(input: TranscribeInput) {
   const auth = await requireAskPranaAuth();
   const config = getSupabasePublicConfig();
   const anonKey = (process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? "").trim();
