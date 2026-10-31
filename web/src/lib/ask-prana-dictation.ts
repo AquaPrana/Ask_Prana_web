@@ -58,9 +58,35 @@ function logRecognitionTiming(stage: string, startedAt: number, detail?: Record<
 // These values are only used to bridge browser recognition events: they are
 // not retry loops. Keep them short enough for a conversational handoff while
 // still allowing Chrome to publish its final segment after speech ends.
-const CONFIRMED_SILENCE_MS = 900;
+// A farmer pausing to think mid-question must not be cut off: 0.9 s / 1.5 s
+// sent half-finished questions. These are closer to a natural turn gap.
+const CONFIRMED_SILENCE_MS = 1_400;
 /** Browser speech-end events are inconsistent; never wait forever for one. */
-const AMBIGUOUS_SILENCE_FALLBACK_MS = 1_500;
+const AMBIGUOUS_SILENCE_FALLBACK_MS = 2_400;
+/** Extra wait when the words so far clearly are not a finished question. */
+const UNFINISHED_EXTRA_MS = 1_400;
+
+/** Words a question does not end on ("how much feed for the ..."). */
+const CONTINUATION_WORDS = new Set([
+  // English
+  "and", "or", "but", "so", "because", "if", "the", "a", "an", "of", "to",
+  "for", "in", "on", "at", "with", "my", "your", "is", "are", "was", "how",
+  "what", "which", "when", "where", "why", "about", "like", "um", "uh", "er",
+  "then", "also", "from", "per", "than", "that", "this",
+  // Hindi (Devanagari and common romanised forms)
+  "और", "या", "लेकिन", "कि", "का", "की", "के", "को", "में", "से", "पर",
+  "aur", "ya", "lekin", "ki", "ka", "ke", "ko", "mein", "se", "par",
+  // Telugu
+  "మరియు", "లేదా", "కానీ", "కి", "లో", "తో", "యొక్క",
+]);
+
+/** True when the transcript so far looks like the speaker is mid-sentence. */
+function looksUnfinished(text: string): boolean {
+  const words = text.trim().toLowerCase().replace(/[.,!?।]+$/u, "").split(/\s+/).filter(Boolean);
+  if (words.length === 0) return false;
+  if (words.length <= 2) return true;
+  return CONTINUATION_WORDS.has(words[words.length - 1]);
+}
 const RESTART_DELAY_MS = 120;
 const STOP_FINAL_RESULT_GRACE_MS = 750;
 const MAX_RAPID_UNEXPECTED_ENDS = 3;
@@ -82,7 +108,26 @@ function getSpeechRecognitionCtor(): SpeechRecognitionCtor | null {
   return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
 }
 
+/**
+ * Brave exposes SpeechRecognition but blocks the Google speech service behind
+ * it, so recognition keeps failing with "network" and Voice Chat seems not to
+ * listen. Such browsers use the recorder + Ask Prana transcription path.
+ */
+let webSpeechServiceBroken = false;
+
+export function isBraveBrowser(): boolean {
+  if (Platform.OS !== "web" || typeof navigator === "undefined") return false;
+  const nav = navigator as Navigator & { brave?: { isBrave?: unknown } };
+  return typeof nav.brave?.isBrave === "function";
+}
+
+/** Called when the browser's speech service is unreachable from this browser. */
+export function markWebSpeechServiceBroken() {
+  webSpeechServiceBroken = true;
+}
+
 export function isWebDictationAvailable(): boolean {
+  if (webSpeechServiceBroken || isBraveBrowser()) return false;
   return getSpeechRecognitionCtor() != null;
 }
 
@@ -238,11 +283,13 @@ export function startWebDictation(
     if (speechActive) return;
     if (!currentTranscript().trim()) return;
     clearPause();
+    const wait = CONFIRMED_SILENCE_MS +
+      (looksUnfinished(currentTranscript()) ? UNFINISHED_EXTRA_MS : 0);
     pauseTimer = setTimeout(() => {
       pauseTimer = null;
       if (speechActive) return;
       finalizeUtterance("speech-end");
-    }, CONFIRMED_SILENCE_MS);
+    }, wait);
   };
 
   const armAmbiguousPauseFallback = () => {
@@ -252,11 +299,13 @@ export function startWebDictation(
     // `onspeechend` is absent on some Chromium sessions. A result gap is not
     // normally considered silence; this is the bounded recovery path only
     // when the browser never sends a speech-end event.
+    const wait = AMBIGUOUS_SILENCE_FALLBACK_MS +
+      (looksUnfinished(currentTranscript()) ? UNFINISHED_EXTRA_MS : 0);
     ambiguousPauseTimer = setTimeout(() => {
       ambiguousPauseTimer = null;
       if (speechEnded) return;
       finalizeUtterance("fallback");
-    }, AMBIGUOUS_SILENCE_FALLBACK_MS);
+    }, wait);
   };
 
   const currentTranscript = () => {
@@ -347,6 +396,19 @@ export function startWebDictation(
       return;
     }
     console.log("[AskPranaDictation] web speech error:", code);
+    if (code === "network" && !firstResultSeen) {
+      // The speech service never answered in this browser (blocked or
+      // unsupported). Switch this page to the recorder path for next time.
+      markWebSpeechServiceBroken();
+      terminalError(
+        code,
+        "Switching to backup voice recognition. Tap the orb and speak again.",
+      );
+      return;
+    }
+    if (code === "service-not-allowed" && isBraveBrowser()) {
+      markWebSpeechServiceBroken();
+    }
     if (code === "not-allowed" || code === "service-not-allowed") {
       terminalError(
         code,

@@ -117,18 +117,86 @@ async function speakWithExpoSpeech(
   }
   resumeWebSpeech();
 
-  return await new Promise<AskPranaSpeakResult>((resolve) => {
+  // Chrome's online voices (for example "Google हिन्दी") stop by themselves
+  // after about 15 seconds of continuous speech and never report the end, so
+  // Voice Mode used to sit in "Speaking" for up to two minutes. Speaking the
+  // reply in short sentence-sized pieces keeps every piece under that limit.
+  const chunks = splitSpeechChunks(text);
+  options?.onPlaybackStart?.();
+  for (const chunk of chunks) {
+    if (generation !== speakGeneration || options?.shouldPlay?.() === false) {
+      return { spoke: false, provider: "expo-speech", reason: "interrupted" };
+    }
+    const result = await speakChunkWithExpoSpeech(chunk, option, generation);
+    if (!result.spoke) return result;
+  }
+  return { spoke: true, provider: "expo-speech" };
+}
+
+const SPEECH_CHUNK_MAX_CHARS = 160;
+
+/** Splits text at sentence ends, then commas, then spaces, into short pieces. */
+export function splitSpeechChunks(text: string, maxChars = SPEECH_CHUNK_MAX_CHARS): string[] {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) return [];
+  const sentences = normalized.match(/[^.!?\u0964\u0965\n]+[.!?\u0964\u0965]*\s*/g) ?? [normalized];
+  const chunks: string[] = [];
+  let current = "";
+  const pushPiece = (piece: string) => {
+    const trimmed = piece.trim();
+    if (!trimmed) return;
+    if (!current) {
+      current = trimmed;
+    } else if (current.length + 1 + trimmed.length <= maxChars) {
+      current = `${current} ${trimmed}`;
+    } else {
+      chunks.push(current);
+      current = trimmed;
+    }
+  };
+  for (const sentence of sentences) {
+    if (sentence.trim().length <= maxChars) {
+      pushPiece(sentence);
+      continue;
+    }
+    // A very long sentence: break at commas, then at word boundaries.
+    for (const part of sentence.split(/(?<=[,;:])\s+/)) {
+      if (part.length <= maxChars) {
+        pushPiece(part);
+        continue;
+      }
+      let rest = part.trim();
+      while (rest.length > maxChars) {
+        let cut = rest.lastIndexOf(" ", maxChars);
+        if (cut < maxChars / 2) cut = maxChars;
+        pushPiece(rest.slice(0, cut));
+        rest = rest.slice(cut).trim();
+      }
+      pushPiece(rest);
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+
+function speakChunkWithExpoSpeech(
+  text: string,
+  option: ReturnType<typeof getAskPranaLanguageOption>,
+  generation: number,
+): Promise<AskPranaSpeakResult> {
+  return new Promise<AskPranaSpeakResult>((resolve) => {
     let settled = false;
-    // Browser speech synthesis can occasionally omit both onDone and onError
-    // after an audio-device change. Bound that failure so Voice Mode can
-    // resume recognition instead of staying in Speaking forever.
-    const safetyMs = Math.min(120_000, Math.max(30_000, text.length * 75 + 12_000));
+    // If a piece still never reports its end (audio-device change, engine
+    // hiccup), skip it after a bounded wait instead of stalling the reply.
+    const safetyMs = Math.min(45_000, Math.max(8_000, text.length * 110 + 4_000));
     const safetyTimer = setTimeout(() => {
-      finish({
-        spoke: false,
-        provider: "expo-speech",
-        reason: "Speech playback did not finish. Listening has resumed.",
-      });
+      if (generation !== speakGeneration) {
+        finish({ spoke: false, provider: "expo-speech", reason: "interrupted" });
+        return;
+      }
+      console.log("[ask-prana-speech] speech piece did not report its end; continuing");
+      void Speech.stop();
+      finish({ spoke: true, provider: "expo-speech" });
     }, safetyMs);
     const finish = (result: AskPranaSpeakResult) => {
       if (settled) return;
@@ -137,7 +205,6 @@ async function speakWithExpoSpeech(
       resolve(result);
     };
 
-    options?.onPlaybackStart?.();
     Speech.speak(text, {
       language: option.bcp47,
       rate: 0.95,

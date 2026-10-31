@@ -109,6 +109,8 @@ type Props = {
   addFileLabel?: string;
   onMutedChange?: (muted: boolean) => void;
   onRegisterActions?: (actions: VoiceBarActions | null) => void;
+  /** Cancels an answer that is still being generated. */
+  onCancelAsk?: () => void;
 };
 
 function mixHex(from: string, to: string, amount: number) {
@@ -379,7 +381,10 @@ function VoiceOrb({
 const BARGE_IN_PREROLL_SEC = 1.2;
 const BARGE_IN_MAX_CAPTURE_SEC = 30;
 /** Pause after an interruption that ends the turn if the recognizer did not. */
-const BARGE_IN_SILENCE_MS = 1400;
+const BARGE_IN_SILENCE_MS = 1800;
+/** While Thinking there is no echo, but a cough or a door must not cancel the
+ * answer, so speech has to last longer before it counts. */
+const BARGE_IN_THINKING_SUSTAIN_MS = 450;
 /** Below this, a "barge-in" was most likely echo or noise; skip transcription. */
 const BARGE_IN_MIN_VOICED_MS = 250;
 /** Mobile data can be slow; a too-short limit silently drops the user's words. */
@@ -514,6 +519,7 @@ export function AskPranaVoiceModeModal({
   addFileLabel = "Add file",
   onMutedChange,
   onRegisterActions,
+  onCancelAsk,
 }: Props) {
   const insets = useSafeAreaInsets();
   const [state, setState] = useState<VoiceModeState>("idle");
@@ -538,6 +544,14 @@ export function AskPranaVoiceModeModal({
   const bargeInTriggeredRef = useRef(false);
   /** When the reply was handed to the speaker (lets barge-in learn its echo). */
   const bargeInPlaybackStartedAtRef = useRef<number | null>(null);
+  /** The answer still loading when the user spoke during Thinking. Kept so a
+   * noise (empty transcript) does not throw the answer away. */
+  type HeldAsk = {
+    question: string;
+    promise: Promise<{ answer: string; language: AskPranaSpeechLanguageCode } | null>;
+  };
+  const pendingAskRef = useRef<HeldAsk | null>(null);
+  const heldAskRef = useRef<HeldAsk | null>(null);
   /** Audio of the current interruption, including its pre-roll. */
   const interruptCaptureRef = useRef<InterruptCapture | null>(null);
   const runTurnRef = useRef<(transcript: string) => Promise<void>>(async () => {});
@@ -614,7 +628,7 @@ export function AskPranaVoiceModeModal({
     bargeInTriggeredRef.current = false;
   }, []);
 
-  const startBargeInMonitor = useCallback(async () => {
+  const startBargeInMonitorNow = useCallback(async () => {
     // Keep one echo-cancelled stream open while TTS plays. It detects that the
     // user started talking and keeps a short rolling PCM buffer, so the first
     // words of an interruption (spoken before the browser recognizer is up)
@@ -636,7 +650,10 @@ export function AskPranaVoiceModeModal({
           autoGainControl: true,
         },
       });
-      if (!sessionActiveRef.current || stateRef.current !== "speaking") {
+      if (
+        !sessionActiveRef.current ||
+        (stateRef.current !== "speaking" && stateRef.current !== "processing")
+      ) {
         stream.getTracks().forEach((track) => track.stop());
         return;
       }
@@ -787,8 +804,13 @@ export function AskPranaVoiceModeModal({
               threshold: Number(threshold.toFixed(4)),
             });
           }
-          if (voicedRun >= BARGE_IN_SUSTAIN_MS && !bargeInTriggeredRef.current) {
+          const duringThinking = stateRef.current === "processing";
+          const sustainNeeded = duringThinking ? BARGE_IN_THINKING_SUSTAIN_MS : BARGE_IN_SUSTAIN_MS;
+          if (voicedRun >= sustainNeeded && !bargeInTriggeredRef.current) {
             bargeInTriggeredRef.current = true;
+            // Speaking during Thinking: keep the loading answer until we know
+            // the user really said something (see finishListeningTurn).
+            heldAskRef.current = duringThinking ? pendingAskRef.current : null;
             capturing = true;
             voicedMs = voicedRun;
             interruptCaptureRef.current = {
@@ -843,6 +865,18 @@ export function AskPranaVoiceModeModal({
       console.log("[AskPranaVoice] barge-in monitor unavailable:", error);
     }
   }, []);
+
+  /** One start at a time: Thinking and Speaking both ask for the monitor, and
+   * two overlapping starts would open the microphone twice. */
+  const bargeInStartingRef = useRef<Promise<void> | null>(null);
+  const startBargeInMonitor = useCallback((): Promise<void> => {
+    if (bargeInStartingRef.current) return bargeInStartingRef.current;
+    const starting = startBargeInMonitorNow().finally(() => {
+      if (bargeInStartingRef.current === starting) bargeInStartingRef.current = null;
+    });
+    bargeInStartingRef.current = starting;
+    return starting;
+  }, [startBargeInMonitorNow]);
 
   const cleanupSession = useCallback(async () => {
     const closingSessionId = voiceSessionIdRef.current;
@@ -1021,9 +1055,9 @@ export function AskPranaVoiceModeModal({
   }, [onCancelListening, startListeningSafely, visible]);
 
   const runTurnFromTranscript = useCallback(
-    async (transcript: string) => {
+    async (transcript: string, resume?: HeldAsk) => {
       if (!sessionActiveRef.current) return;
-      const cleaned = transcript.trim();
+      const cleaned = (resume?.question ?? transcript).trim();
       if (!cleaned) return;
       const turnStartedAt = performance.now();
       const speechEndedAt = speechEndedAtRef.current;
@@ -1032,9 +1066,13 @@ export function AskPranaVoiceModeModal({
       console.log("[AskPranaVoice] transcript received", {
         length: cleaned.length,
       });
-      appendLine("user", cleaned);
+      if (!resume) appendLine("user", cleaned);
       setState("processing");
+      stateRef.current = "processing";
       setErrorText(null);
+      // This turn owns the conversation until the user interrupts, taps the
+      // orb, types, mutes or changes language (each bumps speechTurnRef).
+      const turnToken = ++speechTurnRef.current;
       try {
         if (speechEndedAt != null && process.env.NODE_ENV !== "production") {
           console.debug("[AskPranaVoiceTiming] speech-end-to-ai-request", {
@@ -1043,14 +1081,24 @@ export function AskPranaVoiceModeModal({
         }
         logVoiceTiming("ai-request-start", turnStartedAt);
         console.log("[AskPranaVoice] ask started");
-        const result = await onAsk(cleaned, {
+        const askPromise = resume?.promise ?? onAsk(cleaned, {
           ...requestContext,
           // Voice header language (e.g. తెలుగు) must drive replies even if STT is messy.
           sessionLanguageCode: activeLanguage,
           language: getAskPranaLanguageOption(activeLanguage).llmLabel,
         });
+        pendingAskRef.current = { question: cleaned, promise: askPromise };
+        // Keep listening while Thinking so the user can change or correct the
+        // question. Not awaited: the request is already on its way.
+        if (!mutedRef.current) void startBargeInMonitor();
+        const result = await askPromise;
+        if (pendingAskRef.current?.promise === askPromise) pendingAskRef.current = null;
+        // The user spoke, tapped the orb or typed while this was loading; the
+        // newer turn owns the conversation now.
+        if (turnToken !== speechTurnRef.current) return;
         if (!sessionActiveRef.current) return;
         if (!result?.answer?.trim()) {
+          stopBargeInMonitor();
           // A null result is now reserved for a stale/cancelled request. The
           // submitted user message stays in chat; do not send it again, but
           // restore Listening so the conversation is not stranded in Error.
@@ -1078,6 +1126,7 @@ export function AskPranaVoiceModeModal({
           });
         }
         if (/^no response received\.?$/i.test(cleanedAnswer)) {
+          stopBargeInMonitor();
           setState("error");
           setErrorText(
             "Ask Prana could not finish that answer. Tap the orb to try again.",
@@ -1097,6 +1146,7 @@ export function AskPranaVoiceModeModal({
         });
         appendLine("assistant", cleanedAnswer);
         if (mutedRef.current) {
+          stopBargeInMonitor();
           setErrorText(null);
           setState("muted");
           stateRef.current = "muted";
@@ -1108,10 +1158,10 @@ export function AskPranaVoiceModeModal({
         console.log("[AskPranaVoice] speak started", { replyLanguage });
         // Acquire VAD and its rolling pre-buffer before output begins. The
         // previous playback callback left a device-start gap at reply onset.
-        // Claim this reply's turn *before* the monitor starts, so an
-        // interruption detected while the reply is still being prepared
-        // cancels it instead of being silently overwritten.
-        const speechTurn = ++speechTurnRef.current;
+        // The turn was claimed before the request, so an interruption during
+        // Thinking or while the reply is being prepared cancels it instead of
+        // being silently overwritten. The monitor is usually already running.
+        const speechTurn = turnToken;
         await startBargeInMonitor();
         if (speechTurn !== speechTurnRef.current || !sessionActiveRef.current) return;
         const spoken = await speakAskPranaText(cleanedAnswer, replyLanguage, {
@@ -1169,6 +1219,8 @@ export function AskPranaVoiceModeModal({
       } catch (error) {
         console.log("[AskPranaVoice] turn failed:", error);
         if (!sessionActiveRef.current) return;
+        if (turnToken !== speechTurnRef.current) return;
+        stopBargeInMonitor();
         setState("error");
         setErrorText(
           error instanceof Error
@@ -1220,6 +1272,8 @@ export function AskPranaVoiceModeModal({
       // the captured audio (with pre-roll) and keep the fuller result.
       const capture = interruptCaptureRef.current;
       interruptCaptureRef.current = null;
+      const heldAsk = heldAskRef.current;
+      heldAskRef.current = null;
       let transcript = recognized;
       if (capture) {
         const hadSpeech = capture.hadSpeech();
@@ -1238,6 +1292,16 @@ export function AskPranaVoiceModeModal({
         }
       }
       if (isStale()) return;
+      if (!transcript && heldAsk) {
+        // Only a noise interrupted Thinking: carry on with the original answer.
+        logVoiceLifecycle("thinking-interruption-empty-resuming", { sessionId, turnId });
+        await runTurnFromTranscript("", heldAsk);
+        return;
+      }
+      if (transcript && heldAsk) {
+        // A real new question replaces the one still loading.
+        onCancelAsk?.();
+      }
       if (!transcript) {
         console.log("[AskPranaVoice] empty transcript — keep listening");
         logVoiceLifecycle("transcript-empty", { sessionId, turnId });
@@ -1260,7 +1324,7 @@ export function AskPranaVoiceModeModal({
       // reply had failed, making both mic entry points look broken.
       setErrorText(voiceTurnErrorMessage(error));
     }
-  }, [onStopListeningToTranscript, runTurnFromTranscript, startListeningSafely]);
+  }, [onCancelAsk, onStopListeningToTranscript, runTurnFromTranscript, startListeningSafely]);
 
   useEffect(() => {
     finishListeningTurnRef.current = finishListeningTurn;
@@ -1288,7 +1352,22 @@ export function AskPranaVoiceModeModal({
     }
 
     const current = stateRef.current;
-    if (current === "processing") return;
+    if (current === "processing") {
+      // Cancel the answer that is still loading and listen again.
+      orbPressLockRef.current = true;
+      try {
+        speechTurnRef.current += 1;
+        heldAskRef.current = null;
+        pendingAskRef.current = null;
+        stopBargeInMonitor();
+        onCancelAsk?.();
+        await stopAskPranaSpeech();
+        await startListeningSafely("retry");
+      } finally {
+        orbPressLockRef.current = false;
+      }
+      return;
+    }
 
     orbPressLockRef.current = true;
     try {
@@ -1320,7 +1399,7 @@ export function AskPranaVoiceModeModal({
     } finally {
       orbPressLockRef.current = false;
     }
-  }, [finishListeningTurn, muted, startListeningSafely, stopBargeInMonitor]);
+  }, [finishListeningTurn, muted, onCancelAsk, startListeningSafely, stopBargeInMonitor]);
 
   const handleMuteToggle = useCallback(async () => {
     const next = !mutedRef.current;
@@ -1368,9 +1447,16 @@ export function AskPranaVoiceModeModal({
 
   const handleSendTyped = useCallback(async () => {
     const text = draft.trim();
-    if (!text || isSending || isTranscribing) return;
+    // While a voice answer is loading, a typed question replaces it.
+    if (!text || isTranscribing || (isSending && !pendingAskRef.current)) return;
     onChangeDraft("");
     speechTurnRef.current += 1;
+    heldAskRef.current = null;
+    if (pendingAskRef.current) {
+      // A typed question replaces one that is still loading.
+      pendingAskRef.current = null;
+      onCancelAsk?.();
+    }
     stopBargeInMonitor();
     await stopAskPranaSpeech();
     await onCancelListening();
@@ -1379,6 +1465,7 @@ export function AskPranaVoiceModeModal({
     draft,
     isSending,
     isTranscribing,
+    onCancelAsk,
     onCancelListening,
     onChangeDraft,
     runTurnFromTranscript,
@@ -1413,7 +1500,8 @@ export function AskPranaVoiceModeModal({
 
   const statusLabel = (() => {
     if (state === "listening") return "Listening…";
-    if (state === "finalizing" || state === "processing" || isTranscribing || isSending) return "Thinking…";
+    if (state === "processing") return "Thinking… Tap the orb to cancel.";
+    if (state === "finalizing" || isTranscribing || isSending) return "Thinking…";
     if (state === "speaking") return "Speaking… Tap the orb to interrupt.";
     if (state === "interrupted") return "Listening…";
     if (state === "muted") return "Muted";

@@ -1127,6 +1127,7 @@ export default function AskPranaScreen() {
               }}
               onMutedChange={setVoiceMuted}
               onRegisterActions={registerVoiceActions}
+              onCancelAsk={stopGeneration}
             />
           ) : null}
           </View>

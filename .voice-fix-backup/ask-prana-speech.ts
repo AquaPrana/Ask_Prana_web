@@ -94,6 +94,9 @@ async function speakWithExpoSpeech(
   if (options?.shouldPlay?.() === false) {
     return { spoke: false, provider: "none", reason: "interrupted" };
   }
+  // Capture the generation before any await: a stop() during the voice
+  // lookup must still cancel this reply.
+  const generation = speakGeneration;
   const option = getAskPranaLanguageOption(language);
   const available = await hasDeviceVoiceFor(option.bcp47);
   if (!available && language !== "en") {
@@ -104,11 +107,14 @@ async function speakWithExpoSpeech(
     };
   }
 
-  const generation = speakGeneration;
   await setAudioModeAsync({
     allowsRecording: Boolean(options?.keepMicrophoneActive),
     playsInSilentMode: true,
   });
+  // The user may have interrupted while the voice list was loading.
+  if (generation !== speakGeneration || options?.shouldPlay?.() === false) {
+    return { spoke: false, provider: "expo-speech", reason: "interrupted" };
+  }
   resumeWebSpeech();
 
   return await new Promise<AskPranaSpeakResult>((resolve) => {
