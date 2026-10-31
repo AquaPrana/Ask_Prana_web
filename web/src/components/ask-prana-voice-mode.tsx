@@ -394,7 +394,10 @@ const BARGE_IN_TRANSCRIBE_TIMEOUT_MS = 15000;
  * loudness. Normal speech is enough on headphones; on speakers the reply's own
  * echo is measured first so the assistant does not interrupt itself.
  */
-const BARGE_IN_MIN_RMS = 0.018;
+// Phones turn the user's voice down while the reply plays (echo cancelling),
+// so 0.018 was often never reached. The room-noise and echo checks below
+// still keep fans and the reply itself from counting.
+const BARGE_IN_MIN_RMS = 0.012;
 /** Speech must be this much louder than the room's background noise... */
 const BARGE_IN_AMBIENT_RATIO = 2;
 /** ...but a noisy room never raises the bar above this. */

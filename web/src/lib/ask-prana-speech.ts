@@ -122,12 +122,19 @@ async function speakWithExpoSpeech(
   // Voice Mode used to sit in "Speaking" for up to two minutes. Speaking the
   // reply in short sentence-sized pieces keeps every piece under that limit.
   const chunks = splitSpeechChunks(text);
-  options?.onPlaybackStart?.();
+  // Tell Voice Mode when sound really starts (not when it was requested):
+  // the interruption detector measures the reply's echo at that moment.
+  let reportedStart = false;
+  const reportStart = () => {
+    if (reportedStart) return;
+    reportedStart = true;
+    options?.onPlaybackStart?.();
+  };
   for (const chunk of chunks) {
     if (generation !== speakGeneration || options?.shouldPlay?.() === false) {
       return { spoke: false, provider: "expo-speech", reason: "interrupted" };
     }
-    const result = await speakChunkWithExpoSpeech(chunk, option, generation);
+    const result = await speakChunkWithExpoSpeech(chunk, option, generation, reportStart);
     if (!result.spoke) return result;
   }
   return { spoke: true, provider: "expo-speech" };
@@ -183,6 +190,7 @@ function speakChunkWithExpoSpeech(
   text: string,
   option: ReturnType<typeof getAskPranaLanguageOption>,
   generation: number,
+  onStarted?: () => void,
 ): Promise<AskPranaSpeakResult> {
   return new Promise<AskPranaSpeakResult>((resolve) => {
     let settled = false;
@@ -221,6 +229,7 @@ function speakChunkWithExpoSpeech(
       pitch: 1,
       onStart: () => {
         started = true;
+        onStarted?.();
       },
       onDone: () => {
         if (generation !== speakGeneration) {
@@ -326,7 +335,6 @@ async function speakWithOpenAiTts(
 
   const player = createAudioPlayer({ uri: dataUri });
   activePlayer = player;
-  options?.onPlaybackStart?.();
   player.play();
 
   return await new Promise<AskPranaSpeakResult>((resolve) => {
@@ -359,7 +367,11 @@ async function speakWithOpenAiTts(
       }
       const status = player.currentStatus;
       const elapsed = Date.now() - started;
-      if (status?.playing) everPlayed = true;
+      if (status?.playing && !everPlayed) {
+        everPlayed = true;
+        // Phones need 1-3 s to start this audio; report the real start.
+        options?.onPlaybackStart?.();
+      }
       if (status?.didJustFinish || (everPlayed && !status?.playing && elapsed > 800)) {
         finish({ spoke: true, provider: "openai-tts" }, false);
         return;
