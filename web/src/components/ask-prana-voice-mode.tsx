@@ -382,7 +382,8 @@ const BARGE_IN_MAX_CAPTURE_SEC = 30;
 const BARGE_IN_SILENCE_MS = 1400;
 /** Below this, a "barge-in" was most likely echo or noise; skip transcription. */
 const BARGE_IN_MIN_VOICED_MS = 250;
-const BARGE_IN_TRANSCRIBE_TIMEOUT_MS = 8000;
+/** Mobile data can be slow; a too-short limit silently drops the user's words. */
+const BARGE_IN_TRANSCRIBE_TIMEOUT_MS = 15000;
 /**
  * Barge-in detection adapts to the microphone instead of using one fixed
  * loudness. Normal speech is enough on headphones; on speakers the reply's own
@@ -920,6 +921,14 @@ export function AskPranaVoiceModeModal({
           ) {
             return false;
           }
+          if (reason === "interrupt" && interruptCaptureRef.current) {
+            // Phones often refuse a second microphone while the interruption
+            // monitor holds one. Its capture already has the user's words and
+            // ends the turn on silence, so keep listening instead of failing
+            // and throwing the interruption away.
+            logVoiceLifecycle("recognition-start-failed-using-capture", { sessionId, attemptId });
+            return true;
+          }
           setState("error");
           stateRef.current = "error";
           setErrorText(voiceTurnErrorMessage(error));
@@ -1381,7 +1390,10 @@ export function AskPranaVoiceModeModal({
   }, [muted, onMutedChange]);
 
   useEffect(() => {
-    if (!visible || variant !== "overlay") {
+    // Both layouts use the page's bottom bar (mute, end, typed send). The
+    // phone layout ("screen") must register too, otherwise those buttons do
+    // nothing on mobile.
+    if (!visible) {
       onRegisterActions?.(null);
       return;
     }
