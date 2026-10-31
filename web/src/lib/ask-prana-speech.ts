@@ -186,6 +186,15 @@ function speakChunkWithExpoSpeech(
 ): Promise<AskPranaSpeakResult> {
   return new Promise<AskPranaSpeakResult>((resolve) => {
     let settled = false;
+    let started = false;
+    // Some phone browsers accept speak() but never produce sound. If this
+    // piece has not started within a few seconds, report failure so the
+    // cloud voice is used instead of a silent "Speaking".
+    const startTimer = setTimeout(() => {
+      if (started || generation !== speakGeneration) return;
+      void Speech.stop();
+      finish({ spoke: false, provider: "none", reason: "The device voice did not start." });
+    }, 4_000);
     // If a piece still never reports its end (audio-device change, engine
     // hiccup), skip it after a bounded wait instead of stalling the reply.
     const safetyMs = Math.min(45_000, Math.max(8_000, text.length * 110 + 4_000));
@@ -202,6 +211,7 @@ function speakChunkWithExpoSpeech(
       if (settled) return;
       settled = true;
       clearTimeout(safetyTimer);
+      clearTimeout(startTimer);
       resolve(result);
     };
 
@@ -209,6 +219,9 @@ function speakChunkWithExpoSpeech(
       language: option.bcp47,
       rate: 0.95,
       pitch: 1,
+      onStart: () => {
+        started = true;
+      },
       onDone: () => {
         if (generation !== speakGeneration) {
           finish({ spoke: false, provider: "expo-speech", reason: "interrupted" });
@@ -318,44 +331,56 @@ async function speakWithOpenAiTts(
 
   return await new Promise<AskPranaSpeakResult>((resolve) => {
     const started = Date.now();
-    const timer = setInterval(() => {
-      if (generation !== speakGeneration) {
-        clearInterval(timer);
-        try {
-          player.pause();
-          player.remove();
-        } catch {
-          // ignore
-        }
-        if (activePlayer === player) activePlayer = null;
-        resolve({ spoke: false, provider: "openai-tts", reason: "interrupted" });
-        return;
-      }
-
-      const status = player.currentStatus;
-      if (status?.didJustFinish || (status?.isLoaded && !status.playing && Date.now() - started > 800)) {
-        clearInterval(timer);
-        try {
-          player.remove();
-        } catch {
-          // ignore
-        }
-        if (activePlayer === player) activePlayer = null;
-        resolve({ spoke: true, provider: "openai-tts" });
-      }
-    }, 200);
-
-    // Safety timeout (~2 min)
-    setTimeout(() => {
+    let settled = false;
+    // Phones often need more than a second to decode the audio. The old check
+    // ("not playing after 0.8 s" = finished) stopped replies before they were
+    // heard and Voice Mode went straight back to Listening. Only a reply that
+    // actually started and then ended counts as spoken.
+    let everPlayed = false;
+    let replayed = false;
+    const finish = (result: AskPranaSpeakResult, stop: boolean) => {
+      if (settled) return;
+      settled = true;
       clearInterval(timer);
+      clearTimeout(safety);
       try {
-        player.pause();
+        if (stop) player.pause();
         player.remove();
       } catch {
         // ignore
       }
       if (activePlayer === player) activePlayer = null;
-      resolve({ spoke: true, provider: "openai-tts" });
+      resolve(result);
+    };
+    const timer = setInterval(() => {
+      if (generation !== speakGeneration) {
+        finish({ spoke: false, provider: "openai-tts", reason: "interrupted" }, true);
+        return;
+      }
+      const status = player.currentStatus;
+      const elapsed = Date.now() - started;
+      if (status?.playing) everPlayed = true;
+      if (status?.didJustFinish || (everPlayed && !status?.playing && elapsed > 800)) {
+        finish({ spoke: true, provider: "openai-tts" }, false);
+        return;
+      }
+      if (!everPlayed && !replayed && elapsed > 2_500) {
+        // play() can be refused while the audio is still loading; ask again.
+        replayed = true;
+        player.play();
+      }
+      if (!everPlayed && elapsed > 10_000) {
+        finish({
+          spoke: false,
+          provider: "none",
+          reason: "The answer could not be played aloud. It is shown on screen.",
+        }, true);
+      }
+    }, 200);
+
+    // Safety timeout (~2 min) for a reply that never reports its end.
+    const safety = setTimeout(() => {
+      finish({ spoke: everPlayed, provider: everPlayed ? "openai-tts" : "none" }, true);
     }, 120_000);
   });
 }
@@ -399,5 +424,17 @@ export async function speakAskPranaText(
     }
   }
 
-  return speakWithExpoSpeech(cleaned, language === "en" ? "en" : language, options);
+  // English: the phone's own voice first; if it cannot speak (no voice
+  // installed, browser refused), use the cloud voice instead of going back
+  // to Listening in silence.
+  const device = await speakWithExpoSpeech(cleaned, "en", options);
+  if (device.spoke || device.reason === "interrupted") return device;
+  try {
+    const cloud = await speakWithOpenAiTts(cleaned, "en", options);
+    if (cloud.spoke || cloud.reason === "interrupted") return cloud;
+    return { ...cloud, reason: cloud.reason || device.reason };
+  } catch (error) {
+    console.log("[ask-prana-speech] cloud TTS fallback failed:", error);
+    return device;
+  }
 }

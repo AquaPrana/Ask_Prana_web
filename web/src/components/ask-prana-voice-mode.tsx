@@ -1110,9 +1110,13 @@ export function AskPranaVoiceModeModal({
           // A null result is also used when a stale request is deliberately
           // discarded during a handoff. It is not evidence that the farmer
           // interrupted playback, so do not show a false red failure.
-          setErrorText(null);
+          // Never go back to Listening in silence: say what happened.
           const resumed = await startListeningSafely("retry");
-          if (!resumed) setErrorText("Listening could not restart. Tap the orb to try again.");
+          setErrorText(
+            resumed
+              ? "I didn't get an answer for that. Please ask again."
+              : "Listening could not restart. Tap the orb to try again.",
+          );
           return;
         }
         const cleanedAnswer = result.answer.trim();
@@ -1199,6 +1203,8 @@ export function AskPranaVoiceModeModal({
           }
         } else if (!spoken.spoke) {
           console.log("[AskPranaVoice] speak failed", spoken.reason);
+          // Show the answer on screen so it is not lost when audio fails.
+          setCaptionsVisible(true);
           setErrorText(
             spoken.reason ||
               "Could not play speech. The reply is shown above — listening continues.",
