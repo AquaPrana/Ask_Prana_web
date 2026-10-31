@@ -383,6 +383,29 @@ const BARGE_IN_SILENCE_MS = 1400;
 /** Below this, a "barge-in" was most likely echo or noise; skip transcription. */
 const BARGE_IN_MIN_VOICED_MS = 250;
 const BARGE_IN_TRANSCRIBE_TIMEOUT_MS = 8000;
+/**
+ * Barge-in detection adapts to the microphone instead of using one fixed
+ * loudness. Normal speech is enough on headphones; on speakers the reply's own
+ * echo is measured first so the assistant does not interrupt itself.
+ */
+const BARGE_IN_MIN_RMS = 0.018;
+/** Speech must be this much louder than the room's background noise... */
+const BARGE_IN_AMBIENT_RATIO = 2;
+/** ...but a noisy room never raises the bar above this. */
+const BARGE_IN_AMBIENT_CAP = 0.04;
+/** ...and this much louder than the reply's own echo picked up by the mic. */
+const BARGE_IN_ECHO_RATIO = 1.4;
+/** Time after playback starts that is used to measure the reply's echo. */
+const BARGE_IN_ECHO_LEARN_MS = 450;
+/** Echo level follower: rises quickly, falls slowly. */
+const BARGE_IN_ECHO_ATTACK_MS = 80;
+const BARGE_IN_ECHO_RELEASE_MS = 3000;
+/** The echo level is not updated this soon after the user was heard. */
+const BARGE_IN_ECHO_HOLD_MS = 400;
+/** How long speech must continue (short dips allowed) to count as an interruption. */
+const BARGE_IN_SUSTAIN_MS = 250;
+/** After an interruption starts, below this level counts as a pause. */
+const BARGE_IN_CAPTURE_MIN_RMS = 0.015;
 const WAV_SAMPLE_RATE = 16000;
 
 type InterruptCapture = {
@@ -512,6 +535,8 @@ export function AskPranaVoiceModeModal({
   /** Stops the barge-in mic stream, detection loop and PCM capture. */
   const bargeInReleaseRef = useRef<(() => void) | null>(null);
   const bargeInTriggeredRef = useRef(false);
+  /** When the reply was handed to the speaker (lets barge-in learn its echo). */
+  const bargeInPlaybackStartedAtRef = useRef<number | null>(null);
   /** Audio of the current interruption, including its pre-roll. */
   const interruptCaptureRef = useRef<InterruptCapture | null>(null);
   const runTurnRef = useRef<(transcript: string) => Promise<void>>(async () => {});
@@ -622,6 +647,19 @@ export function AskPranaVoiceModeModal({
         return;
       }
       const audioContext = new AudioContextCtor();
+      if (audioContext.state === "suspended") {
+        // Created after async work (or after a reload straight into Voice
+        // Mode) the context can start suspended and deliver only silence,
+        // which silently disables interruption. Resume it explicitly.
+        try {
+          await audioContext.resume();
+        } catch {
+          // handled below
+        }
+      }
+      if (audioContext.state !== "running") {
+        console.log("[AskPranaVoice] barge-in audio context not running:", audioContext.state);
+      }
       const source = audioContext.createMediaStreamSource(stream);
       const analyser = audioContext.createAnalyser();
       analyser.fftSize = 512;
@@ -669,14 +707,25 @@ export function AskPranaVoiceModeModal({
       };
       bargeInReleaseRef.current = release;
 
-      // The monitor is acquired before playback. Only guard the brief output
-      // route click; a longer blind window loses the opening interruption.
-      const ignoreUntil = Date.now() + 120;
-      let consecutiveVoiceFrames = 0;
+      // Adaptive detection. Before the reply starts playing, the mic hears
+      // only the room, so that sets the background level. For a short moment
+      // after playback starts, the mic hears the reply's own echo (speakers),
+      // so that sets the echo level. An interruption is speech clearly louder
+      // than both, kept up for BARGE_IN_SUSTAIN_MS.
+      const monitorStartedAt = Date.now();
+      // Only guard the brief output-route click.
+      const ignoreUntil = monitorStartedAt + 120;
+      let ambient = 0;
+      let echoRef = 0;
+      let smoothed = 0;
+      let voicedRun = 0;
       let voicedMs = 0;
-      let lastFrameAt = 0;
+      let lastVoicedAt = 0;
+      let lastFrameAt = monitorStartedAt;
       let silenceSince = 0;
       let autoFinished = false;
+      let loggedThreshold = false;
+      bargeInPlaybackStartedAtRef.current = null;
 
       const monitor = () => {
         if (released) return;
@@ -689,17 +738,58 @@ export function AskPranaVoiceModeModal({
         const rms = Math.sqrt(energy / samples.length);
         setAudioLevel((current) => Math.abs(current - rms) > 0.012 ? rms : current);
         const now = Date.now();
+        // Real elapsed time keeps behaviour the same on 60 Hz and 144 Hz screens.
+        const elapsed = Math.min(Math.max(now - lastFrameAt, 0), 100);
+        lastFrameAt = now;
+        smoothed = smoothed ? smoothed * 0.6 + rms * 0.4 : rms;
 
         if (!capturing) {
-          // Sustained input avoids treating a short playback echo or click as
-          // a user interruption. Echo cancellation is requested at the source.
-          consecutiveVoiceFrames = now >= ignoreUntil && rms > 0.055
-            ? consecutiveVoiceFrames + 1
-            : 0;
-          if (consecutiveVoiceFrames >= 4 && !bargeInTriggeredRef.current) {
+          const playbackAt = bargeInPlaybackStartedAtRef.current;
+          const learningEcho =
+            playbackAt != null && now - playbackAt < BARGE_IN_ECHO_LEARN_MS;
+          if (playbackAt == null && now >= ignoreUntil) {
+            // Reply not playing yet: the mic hears only the room. Follow the
+            // quiet floor (drops at once, rises slowly) so a user who starts
+            // talking early is not mistaken for background noise.
+            ambient = !ambient || smoothed < ambient
+              ? smoothed
+              : ambient + (smoothed - ambient) * Math.min(1, elapsed / 4000);
+          }
+          const threshold = Math.max(
+            BARGE_IN_MIN_RMS,
+            Math.min(ambient * BARGE_IN_AMBIENT_RATIO, BARGE_IN_AMBIENT_CAP),
+            echoRef * BARGE_IN_ECHO_RATIO,
+          );
+          const voiced = !learningEcho && now >= ignoreUntil && smoothed > threshold;
+          if (voiced) {
+            voicedRun += elapsed;
+            lastVoicedAt = now;
+          } else {
+            // Short dips between syllables do not reset the run.
+            voicedRun = Math.max(0, voicedRun - elapsed * 2);
+          }
+          if (learningEcho) voicedRun = 0;
+          if (
+            playbackAt != null &&
+            !voiced &&
+            now - lastVoicedAt > BARGE_IN_ECHO_HOLD_MS
+          ) {
+            // Follow the reply's own echo level, never the user's voice.
+            const tau = smoothed > echoRef ? BARGE_IN_ECHO_ATTACK_MS : BARGE_IN_ECHO_RELEASE_MS;
+            echoRef += (smoothed - echoRef) * Math.min(1, elapsed / tau);
+          }
+          if (playbackAt != null && !learningEcho && !loggedThreshold) {
+            loggedThreshold = true;
+            logVoiceLifecycle("barge-in-calibrated", {
+              ambient: Number(ambient.toFixed(4)),
+              echo: Number(echoRef.toFixed(4)),
+              threshold: Number(threshold.toFixed(4)),
+            });
+          }
+          if (voicedRun >= BARGE_IN_SUSTAIN_MS && !bargeInTriggeredRef.current) {
             bargeInTriggeredRef.current = true;
             capturing = true;
-            lastFrameAt = now;
+            voicedMs = voicedRun;
             interruptCaptureRef.current = {
               hadSpeech: () => voicedMs >= BARGE_IN_MIN_VOICED_MS,
               takeWav: () => {
@@ -707,6 +797,10 @@ export function AskPranaVoiceModeModal({
                 return pcmLength ? encodeWav(pcm, pcmLength, sampleRate) : null;
               },
             };
+            logVoiceLifecycle("barge-in-triggered", {
+              rms: Number(smoothed.toFixed(4)),
+              threshold: Number(threshold.toFixed(4)),
+            });
             // Retire the reply's turn: its speak() call returns "interrupted"
             // and must not restart listening on top of this handoff.
             speechTurnRef.current += 1;
@@ -716,9 +810,12 @@ export function AskPranaVoiceModeModal({
             void interruptListeningRef.current();
           }
         } else {
-          const elapsed = now - lastFrameAt;
-          lastFrameAt = now;
-          if (rms > 0.03) {
+          // The reply has stopped, so only the room and the user remain.
+          const captureThreshold = Math.max(
+            BARGE_IN_CAPTURE_MIN_RMS,
+            Math.min(ambient * 2, BARGE_IN_AMBIENT_CAP),
+          );
+          if (smoothed > captureThreshold) {
             voicedMs += elapsed;
             silenceSince = 0;
           } else if (!silenceSince) {
@@ -1002,14 +1099,21 @@ export function AskPranaVoiceModeModal({
         console.log("[AskPranaVoice] speak started", { replyLanguage });
         // Acquire VAD and its rolling pre-buffer before output begins. The
         // previous playback callback left a device-start gap at reply onset.
-        await startBargeInMonitor();
+        // Claim this reply's turn *before* the monitor starts, so an
+        // interruption detected while the reply is still being prepared
+        // cancels it instead of being silently overwritten.
         const speechTurn = ++speechTurnRef.current;
+        await startBargeInMonitor();
+        if (speechTurn !== speechTurnRef.current || !sessionActiveRef.current) return;
         const spoken = await speakAskPranaText(cleanedAnswer, replyLanguage, {
           shouldPlay: () =>
             sessionActiveRef.current &&
             !mutedRef.current &&
             speechTurn === speechTurnRef.current,
           onPlaybackStart: () => {
+            if (speechTurn === speechTurnRef.current) {
+              bargeInPlaybackStartedAtRef.current = Date.now();
+            }
             // This marks playback being handed to the platform. Browsers do not
             // expose a reliable cross-engine first-sample callback.
             logVoiceTiming("audio-playback-requested", turnStartedAt);
@@ -1629,8 +1733,9 @@ const styles = StyleSheet.create({
     fontSize: 16,
     lineHeight: 22,
     fontWeight: "400",
-    outlineStyle: "none",
-    outlineWidth: 0,
+    // Web-only: hide the browser focus outline. React Native's style types
+    // do not list "none", so it is added untyped (same result at runtime).
+    ...({ outlineStyle: "none", outlineWidth: 0 } as object),
   },
   sendBtn: {
     width: 32,

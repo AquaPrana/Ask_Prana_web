@@ -1395,7 +1395,10 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
 
       if (error || !isValidAskPranaUuid(nextSessionId)) {
         console.log("[AskPranaChat] ensure session error:", error);
-        return "";
+        throw new Error(
+          error?.message?.trim() ||
+            "Unable to start a conversation. Please check your connection and try again.",
+        );
       }
 
       if (requestEpoch !== sessionCreateEpochRef.current) {
