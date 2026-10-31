@@ -13,6 +13,10 @@ import VerifyOtpScreen from "./app/verify-otp";
 import VerifyEmailScreen from "./app/verify-email";
 import EditProfileScreen from "./app/edit-profile";
 import AskPranaScreen from "./app/ask-prana";
+import { installWebAlert } from "./web/web-alert";
+
+// react-native-web's Alert.alert is empty: show real toasts/dialogs instead.
+installWebAlert();
 
 const routes = {
   "/": StartupScreen,
