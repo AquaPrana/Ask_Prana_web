@@ -91,6 +91,15 @@ function detectRequestedFileFormat(text: string): "docx" | "pdf" | "xlsx" | null
   }
   return null;
 }
+
+function splitAttachmentFileName(fileName: string): { base: string; extension: string } {
+  const dot = fileName.lastIndexOf(".");
+  if (dot <= 0 || dot === fileName.length - 1) {
+    return { base: fileName, extension: "" };
+  }
+  return { base: fileName.slice(0, dot), extension: fileName.slice(dot) };
+}
+
 const LANGUAGE_SHORT_LABELS: Record<AskPranaSpeechLanguageCode, string> = {
   en: "En",
   te: "Te",
@@ -369,9 +378,19 @@ export default function AskPranaScreen() {
   // chats in a loop together with the route-opening effect above.
   const routeSessionIdRef = useRef(routeSessionId);
   routeSessionIdRef.current = routeSessionId;
+  //
+  // Switching from one conversation to another adds a browser history entry,
+  // so Back returns to the previous conversation instead of leaving Ask Prana.
+  // The first conversation (or a new chat receiving its id) replaces the
+  // current entry, so empty "new chat" pages never pile up in history.
   useEffect(() => {
-    if (!activeSessionId || routeSessionIdRef.current === activeSessionId) return;
-    router.setParams({ sessionId: activeSessionId } as never);
+    const currentRouteSessionId = routeSessionIdRef.current;
+    if (!activeSessionId || currentRouteSessionId === activeSessionId) return;
+    if (currentRouteSessionId) {
+      router.pushParams({ sessionId: activeSessionId });
+    } else {
+      router.setParams({ sessionId: activeSessionId } as never);
+    }
   }, [activeSessionId, router]);
 
   useEffect(() => {
@@ -1230,6 +1249,7 @@ export default function AskPranaScreen() {
                       const previewUri = item.localUri ?? item.fileUrl;
                       const isImage = item.kind === "image";
                       const isPreparing = item.status === "preparing";
+                      const nameParts = splitAttachmentFileName(item.fileName);
                       return (
                         <View key={item.id} style={styles.pendingChip}>
                           {isImage && previewUri ? (
@@ -1246,7 +1266,19 @@ export default function AskPranaScreen() {
                             <View style={styles.pendingFile}>
                               <Feather name="file-text" size={16} color={colors.primary} />
                               <View style={styles.pendingFileDetails}>
-                                <Text style={styles.pendingFileName} numberOfLines={1}>{item.fileName}</Text>
+                                <View
+                                  style={styles.pendingFileNameRow}
+                                  {...(Platform.OS === "web"
+                                    ? ({ title: item.fileName } as { title: string })
+                                    : {})}
+                                >
+                                  <Text style={styles.pendingFileName} numberOfLines={1}>
+                                    {nameParts.base}
+                                  </Text>
+                                  {nameParts.extension ? (
+                                    <Text style={styles.pendingFileExt}>{nameParts.extension}</Text>
+                                  ) : null}
+                                </View>
                                 <Text style={styles.pendingFileMeta} numberOfLines={1}>
                                   {(item.mimeType.split("/").pop() ?? "file").toUpperCase()}{item.fileSize ? ` · ${(item.fileSize / 1024).toFixed(item.fileSize >= 1024 * 1024 ? 1 : 0)} ${item.fileSize >= 1024 * 1024 ? "MB" : "KB"}` : ""}
                                 </Text>
@@ -1956,16 +1988,32 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 8,
   },
-  pendingFileDetails: { flexShrink: 1, gap: 2 },
+  pendingFileDetails: { flex: 1, flexShrink: 1, minWidth: 0, gap: 2 },
+  pendingFileNameRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    minWidth: 0,
+    maxWidth: "100%",
+  },
   pendingFileName: {
-    color: colors.textDark,
+    flexShrink: 1,
+    minWidth: 0,
+    color: "#1F2937",
     fontFamily: ASK_PRANA_FONT_FAMILY,
     fontSize: 12,
     lineHeight: 16,
-    fontWeight: "500",
+    fontWeight: "600",
+  },
+  pendingFileExt: {
+    flexShrink: 0,
+    color: "#1F2937",
+    fontFamily: ASK_PRANA_FONT_FAMILY,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: "600",
   },
   pendingFileMeta: {
-    color: colors.muted,
+    color: "#4B5563",
     fontFamily: ASK_PRANA_FONT_FAMILY,
     fontSize: 10,
     lineHeight: 14,

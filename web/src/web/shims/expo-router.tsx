@@ -68,6 +68,12 @@ function toUrl(entry: { pathname: string; params: Params }): string {
   return `${entry.pathname}${query ? `?${query}` : ""}${window.location.hash}`;
 }
 
+function sameParams(a: Params, b: Params): boolean {
+  const aKeys = Object.keys(a).filter((key) => a[key] !== undefined);
+  const bKeys = Object.keys(b).filter((key) => b[key] !== undefined);
+  return aKeys.length === bKeys.length && aKeys.every((key) => a[key] === b[key]);
+}
+
 function routeName(pathname: string): string {
   const trimmed = pathname.replace(/^\//, "");
   return trimmed === "" ? "index" : trimmed;
@@ -104,7 +110,17 @@ class NavigationStore {
     const existing = this.stack.findIndex((e) => e.key === state.__askPranaKey);
     if (existing >= 0) {
       // Browser back: drop everything above the restored screen.
-      this.stack = this.stack.slice(0, existing + 1);
+      const kept = this.stack.slice(0, existing + 1);
+      // Several browser entries can belong to one screen (see pushParams), so
+      // re-read that screen's params from the URL being restored.
+      const restored = kept[existing];
+      const { pathname, params } = parseHref(
+        `${window.location.pathname}${window.location.search}`,
+      );
+      if (restored.pathname === pathname && !sameParams(restored.params, params)) {
+        kept[existing] = { ...restored, params };
+      }
+      this.stack = kept;
     } else {
       const { pathname, params } = parseHref(
         `${window.location.pathname}${window.location.search}`,
@@ -204,6 +220,30 @@ class NavigationStore {
     this.emit();
   }
 
+  /**
+   * Like setParams, but adds a browser history entry instead of overwriting
+   * the current one, so the browser Back button returns to the previous
+   * params (e.g. the previous conversation). The same screen stays mounted:
+   * unlike push(), no new screen is added to the stack.
+   */
+  pushParams(params: Record<string, unknown>) {
+    const top = this.top;
+    const nextParams: Params = { ...top.params };
+    for (const [key, value] of Object.entries(params)) {
+      if (value === undefined || value === null) delete nextParams[key];
+      else nextParams[key] = String(value);
+    }
+    if (sameParams(top.params, nextParams)) return;
+    const entry = { ...top, params: nextParams };
+    this.stack = [...this.stack.slice(0, -1), entry];
+    window.history.pushState(
+      { __askPranaKey: entry.key, __askPranaIndex: this.stack.length - 1 } satisfies HistoryState,
+      "",
+      toUrl(entry),
+    );
+    this.emit();
+  }
+
   getState() {
     return {
       key: "root",
@@ -225,6 +265,7 @@ const router = {
   dismissAll: () => navigationStore.dismissAll(),
   dismiss: () => navigationStore.back(),
   setParams: (params: Record<string, unknown>) => navigationStore.setParams(params),
+  pushParams: (params: Record<string, unknown>) => navigationStore.pushParams(params),
 };
 
 export { router };
