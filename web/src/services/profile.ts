@@ -22,10 +22,34 @@ export type UserProfile = {
   isDeleted?: boolean;
 };
 
-export async function getCurrentUserProfile(): Promise<{
+type CurrentUserProfileResult = {
   profile: UserProfile | null;
   error: Error | null;
-}> {
+};
+
+let currentUserProfileRequest: Promise<CurrentUserProfileResult> | null = null;
+
+/**
+ * Loads the signed-in user's profile. Calls made while a request is already
+ * in flight share it: on page load ProfileProvider and resolveFarmerDisplayName
+ * both ask at the same moment, which used to send two identical "me" requests.
+ * Nothing is cached after the request finishes, so later calls (for example
+ * the reload after saving the profile) always fetch fresh data.
+ */
+export function getCurrentUserProfile(): Promise<CurrentUserProfileResult> {
+  if (!currentUserProfileRequest) {
+    currentUserProfileRequest = fetchCurrentUserProfile().finally(() => {
+      currentUserProfileRequest = null;
+    });
+  }
+  // Each caller gets its own copy so one caller can't mutate another's result.
+  return currentUserProfileRequest.then((result) => ({
+    profile: result.profile ? { ...result.profile } : null,
+    error: result.error,
+  }));
+}
+
+async function fetchCurrentUserProfile(): Promise<CurrentUserProfileResult> {
   try {
     const session = await waitForAuthReady();
     const user = session?.user;
