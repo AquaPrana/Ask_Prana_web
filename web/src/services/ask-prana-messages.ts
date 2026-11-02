@@ -7,7 +7,7 @@ import {
   seedAskPranaDisplayTranslations,
   setAskPranaStoredTranslationLoader,
 } from "../lib/ask-prana-display-translation";
-import { getAskPranaFileUrl } from "../lib/ask-prana-files";
+import { getAskPranaFileUrl, getAskPranaFileUrls } from "../lib/ask-prana-files";
 import type { AskPranaSpeechLanguageCode } from "../lib/ask-prana-language";
 import { supabase } from "../lib/supabase";
 import { requireAskPranaAuth } from "./ask-prana";
@@ -132,10 +132,14 @@ function getPublicFileUrl(filePath: string | null | undefined) {
 
 export async function mapRowToChatMessage(
   row: AskPranaMessageRow,
+  /** Pre-signed URLs from one batched request (see fetchAskPranaMessages). */
+  signedUrls?: ReadonlyMap<string, string>,
 ): Promise<ChatMessage> {
   const messageType = normalizeMessageType(row);
+  const preSigned = row.file_path ? signedUrls?.get(row.file_path) : undefined;
   const fileUrl =
-    (await getAskPranaFileUrl(row.file_path ?? null)) ??
+    preSigned ??
+    (row.file_path ? await getAskPranaFileUrl(row.file_path) : null) ??
     getPublicFileUrl(row.file_path);
 
   return {
@@ -291,8 +295,9 @@ export async function fetchAskPranaMessages(
     });
     const rows = result.messages ?? [];
     applyStoredMessageTranslations(lang, rows);
+    const signedUrls = await getAskPranaFileUrls(rows.map((row) => row.file_path));
     return {
-      messages: await Promise.all(rows.map((row) => mapRowToChatMessage(row))),
+      messages: await Promise.all(rows.map((row) => mapRowToChatMessage(row, signedUrls))),
       hasMore: Boolean(result.hasMore),
       error: null,
     };

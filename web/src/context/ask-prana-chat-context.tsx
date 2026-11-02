@@ -46,7 +46,6 @@ import {
   createAskPranaSession,
   deleteAskPranaSession,
   fetchAskPranaMessages,
-  getAskPranaSessionPondId,
   isValidAskPranaUuid,
   listAskPranaSessionsForPond,
   renameAskPranaSession,
@@ -1469,10 +1468,6 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       isSendingRef.current = false;
       setIsSending(false);
       setThinkingKind(null);
-      const expectedPondId =
-        !requestPondId || requestPondId === GENERIC_ASSISTANT_ID
-          ? null
-          : requestPondId;
 
       const openStartedAt = Date.now();
       const cacheKey = `${userId ?? ""}:${nextSessionId}`;
@@ -1489,52 +1484,19 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       messagesRef.current = initialMessages;
 
       try {
-        // Session ownership/pond check and the message fetch are independent
-        // reads (both filtered by user/pond), so run them in parallel; the
-        // messages are only shown after the checks below pass.
-        const [
-          { pondId: sessionPondId, userId: sessionUserId, error: metaError },
-          fetchedMessages,
-        ] = await Promise.all([
-          getAskPranaSessionPondId(nextSessionId, userId ?? undefined),
-          fetchAskPranaMessages(nextSessionId, userId ?? undefined),
-        ]);
+        // One request: the server's "messages" op already verifies that the
+        // conversation belongs to the signed-in user (404 otherwise), and Ask
+        // Prana conversations are not pond-scoped, so the separate "scope"
+        // round trip added latency without adding a check.
+        const fetchedMessages = await fetchAskPranaMessages(
+          nextSessionId,
+          userId ?? undefined,
+        );
 
         if (epoch !== pondLoadEpochRef.current) {
           return;
         }
         if (selectedPondIdRef.current !== requestPondId) {
-          return;
-        }
-
-        if (metaError) {
-          console.log("[AskPranaChat] open conversation meta error:", metaError);
-          Alert.alert(
-            "Unable to open conversation",
-            metaError.message || "Please try again.",
-          );
-          setActiveSessionId(null);
-          setMessages([buildWelcomeMessage(farmerName)]);
-          return;
-        }
-
-        if (userId && sessionUserId && sessionUserId !== userId) {
-          Alert.alert(
-            "Unable to open conversation",
-            "This conversation belongs to another account.",
-          );
-          setActiveSessionId(null);
-          setMessages([buildWelcomeMessage(farmerName)]);
-          return;
-        }
-
-        if ((sessionPondId ?? null) !== (expectedPondId ?? null)) {
-          Alert.alert(
-            "Unable to open conversation",
-            "This conversation belongs to a different pond.",
-          );
-          setActiveSessionId(null);
-          setMessages([buildWelcomeMessage(farmerName)]);
           return;
         }
 

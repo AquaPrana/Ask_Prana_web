@@ -1727,6 +1727,25 @@ async function handleConversations(
 
   const sessionId = typeof body.sessionId === "string" ? body.sessionId : "";
   if (!isValidUuid(sessionId)) return jsonResponse({ error: "Invalid session_id." }, 400);
+  // Opening a chat: start the message read alongside the ownership check
+  // instead of after it. It is filtered by user_id as well, and nothing is
+  // returned unless the ownership check below passes.
+  let messagesQuery: Promise<{ data: unknown[] | null; error: unknown }> | null = null;
+  const messagesLimitRaw = Number(body.limit);
+  const messagesLimit = Number.isFinite(messagesLimitRaw) ? Math.min(50, Math.max(1, Math.floor(messagesLimitRaw))) : 40;
+  if (op === "messages") {
+    const before = typeof body.before === "string" ? body.before : "";
+    let query = supabase
+      .from("chat_messages")
+      .select("id, session_id, user_id, role, content, message_type, file_path, file_name, mime_type, created_at")
+      .eq("session_id", sessionId)
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(messagesLimit + 1);
+    if (before) query = query.lt("created_at", before);
+    // Query builders are lazy; Promise.resolve calls then() so it starts now.
+    messagesQuery = Promise.resolve(query).then(({ data, error }) => ({ data: data as unknown[] | null, error }));
+  }
   const { data: owned } = await supabase
     .from("chat_sessions")
     .select("id, title, user_id")
@@ -1740,21 +1759,16 @@ async function handleConversations(
     return jsonResponse({ pondId: null, userId });
   }
 
-  if (op === "messages") {
-    const limitRaw = Number(body.limit);
-    const limit = Number.isFinite(limitRaw) ? Math.min(50, Math.max(1, Math.floor(limitRaw))) : 40;
-    const before = typeof body.before === "string" ? body.before : "";
-    let query = supabase
-      .from("chat_messages")
-      .select("id, session_id, user_id, role, content, message_type, file_path, file_name, mime_type, created_at")
-      .eq("session_id", sessionId)
-      .eq("user_id", userId)
-      .order("created_at", { ascending: false })
-      .limit(limit + 1);
-    if (before) query = query.lt("created_at", before);
-    const { data, error } = await query;
+  if (op === "messages" && messagesQuery) {
+    const limit = messagesLimit;
+    const { data, error } = await messagesQuery;
     if (error) return jsonResponse({ error: "Unable to open the conversation." }, 500);
-    const rows = data ?? [];
+    const rows = (data ?? []) as {
+      id: string;
+      content?: string | null;
+      file_path?: string | null;
+      file_name?: string | null;
+    }[];
     const hasMore = rows.length > limit;
     const messages = await withMessageTranslations(supabase, rows.slice(0, limit).reverse(), lang);
     return jsonResponse({ messages, hasMore });

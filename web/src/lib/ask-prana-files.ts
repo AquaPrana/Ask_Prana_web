@@ -241,6 +241,33 @@ export async function uploadAskPranaFile({
   }
 }
 
+/**
+ * Signs many attachment paths in one Storage request (opening a chat used to
+ * make one request per attachment). Paths that fail are simply left out so
+ * callers can fall back to getAskPranaFileUrl.
+ */
+export async function getAskPranaFileUrls(
+  filePaths: readonly (string | null | undefined)[],
+): Promise<Map<string, string>> {
+  const unique = [...new Set(filePaths.filter((path): path is string => Boolean(path)))];
+  const signed = new Map<string, string>();
+  if (unique.length === 0) return signed;
+  try {
+    const { data, error } = await supabase.storage
+      .from(ASK_PRANA_FILES_BUCKET)
+      .createSignedUrls(unique, 60 * 60, { download: true });
+    if (error || !data) return signed;
+    for (const item of data) {
+      if (item.path && item.signedUrl && !item.error && !item.signedUrl.includes("/aquagpt-files/")) {
+        signed.set(item.path, item.signedUrl);
+      }
+    }
+  } catch {
+    // Fall back to per-file signing in the caller.
+  }
+  return signed;
+}
+
 export async function getAskPranaFileUrl(
   filePath: string | null,
   downloadFileName?: string | null,

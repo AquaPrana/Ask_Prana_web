@@ -342,31 +342,37 @@ export default function AskPranaScreen() {
     ? params.sessionId[0]
     : params.sessionId;
   const routeOpenSessionIdRef = useRef<string | null>(null);
+  const activeSessionIdRef = useRef(activeSessionId);
+  activeSessionIdRef.current = activeSessionId;
 
+  // Open a conversation from the URL only when the URL itself changes (first
+  // load, browser back/forward). A sidebar click changes activeSessionId first
+  // and the URL second (effect below); reacting to activeSessionId here made
+  // the two effects flip between the old and new chat until React aborted with
+  // "Maximum update depth exceeded", firing ~50 duplicate history loads.
   useEffect(() => {
     if (isAuthLoading) return;
-    if (!routeSessionId) {
-      routeOpenSessionIdRef.current = null;
-      return;
-    }
-    if (
-      routeSessionId === activeSessionId ||
-      routeOpenSessionIdRef.current === routeSessionId
-    ) {
-      return;
-    }
-    routeOpenSessionIdRef.current = routeSessionId;
+    const previousRouteSessionId = routeOpenSessionIdRef.current;
+    routeOpenSessionIdRef.current = routeSessionId ?? null;
+    if (!routeSessionId || routeSessionId === previousRouteSessionId) return;
+    if (routeSessionId === activeSessionIdRef.current) return;
     void openConversation(routeSessionId);
-  }, [activeSessionId, isAuthLoading, openConversation, routeSessionId]);
+  }, [isAuthLoading, openConversation, routeSessionId]);
 
   // Keep the active persisted conversation in the route. If a browser tab is
   // discarded/reloaded while Ask Prana is in the background, this lets the
   // existing route-opening path restore the same history instead of falling
   // back to an in-memory welcome thread.
+  //
+  // Runs only when the open conversation changes, never when the URL changes:
+  // reacting to URL changes here made browser Back/Forward flip between two
+  // chats in a loop together with the route-opening effect above.
+  const routeSessionIdRef = useRef(routeSessionId);
+  routeSessionIdRef.current = routeSessionId;
   useEffect(() => {
-    if (!activeSessionId || routeSessionId === activeSessionId) return;
+    if (!activeSessionId || routeSessionIdRef.current === activeSessionId) return;
     router.setParams({ sessionId: activeSessionId } as never);
-  }, [activeSessionId, routeSessionId, router]);
+  }, [activeSessionId, router]);
 
   useEffect(() => {
     void (async () => {

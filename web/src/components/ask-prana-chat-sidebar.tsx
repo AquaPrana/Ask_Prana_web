@@ -31,6 +31,7 @@ const colors = {
   danger: "#F87171",
   muted: "#A0A0A0",
   selected: "#2A2A2A",
+  activeConversation: "#1F2E25",
   text: "#F5F5F5",
   white: "#FFFFFF",
 };
@@ -597,10 +598,12 @@ export function AskPranaChatSidebar({
                   onHoverOut={() => setHoveredSessionId((current) => current === session.id ? null : current)}
                   style={(state) => [
                     styles.conversationItem,
-                    session.id === activeSessionId && styles.activeItem,
                     isPressableHovered(state) && styles.hoveredItem,
+                    // After hover so the selected chat stays marked under the cursor.
+                    session.id === activeSessionId && styles.activeItem,
                     state.pressed && styles.pressed,
                   ]}
+                  accessibilityState={{ selected: session.id === activeSessionId }}
                   accessibilityRole="button"
                   accessibilityLabel={t("askPrana.openConversationLabel", { title: displayText(session.title) })}
                 >
@@ -662,10 +665,12 @@ export function AskPranaChatSidebar({
                   onHoverOut={() => setHoveredSessionId((current) => current === session.id ? null : current)}
                     style={({ pressed }) => [
                       styles.conversationItem,
+                      hoveredSessionId === session.id && styles.hoveredItem,
+                      // After hover so the selected chat stays marked under the cursor.
                       session.id === activeSessionId && styles.activeItem,
-                    hoveredSessionId === session.id && styles.hoveredItem,
                       pressed && styles.pressed,
                     ]}
+                    accessibilityState={{ selected: session.id === activeSessionId }}
                     accessibilityRole="button"
                     accessibilityLabel={t("askPrana.openConversationLabel", { title: displayText(session.title) })}
                   >
@@ -908,7 +913,12 @@ const styles = StyleSheet.create({
       ? ({ transitionProperty: "background-color", transitionDuration: "180ms" } as object)
       : null),
   },
-  activeItem: { backgroundColor: colors.selected },
+  activeItem: {
+    backgroundColor: colors.activeConversation,
+    borderLeftWidth: 3,
+    borderLeftColor: colors.accent,
+    paddingLeft: 6, // 9 - 3 so the title stays aligned with unselected rows
+  },
   hoveredItem: { backgroundColor: "#242424" },
   itemCopy: { flex: 1, minWidth: 0, gap: 2 },
   itemTitleRow: { flexDirection: "row", alignItems: "center", gap: 5, minWidth: 0 },
