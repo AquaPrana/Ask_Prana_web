@@ -4,6 +4,7 @@ import {
   getSupabasePublicConfig,
   supabase,
 } from "../lib/supabase";
+import { splitCompleteSentences } from "../lib/ask-prana-sentences";
 import { explicitReplyLanguageLabel } from "../lib/ask-prana-translation-policy";
 import { loadAskPranaPreferredLanguage } from "../lib/ask-prana-language";
 import { getCurrentUserProfile, resolveFarmerDisplayName } from "./profile";
@@ -21,7 +22,21 @@ export type AskPranaGeneratedFile = {
 export type AskPranaReply = {
   answer: string;
   generatedFile?: AskPranaGeneratedFile | null;
+  /** Session the answer was requested for. Voice saves must keep this id. */
+  sessionId?: string | null;
 };
+
+export type AskPranaVoiceHandlers = {
+  onSentence?: (sentence: string) => void;
+  onFirstText?: () => void;
+  onReplace?: (text: string) => void;
+  signal?: AbortSignal;
+  turnId?: string;
+};
+
+export function isAskPranaAbortError(error: unknown) {
+  return error instanceof Error && error.name === "AbortError";
+}
 
 /** Display-only historical translation. Originals are never written back. */
 export async function translateAskPranaHistory(
@@ -382,9 +397,135 @@ async function resolveAskPranaLanguage(preferred?: string | null) {
   return "English";
 }
 
+async function readVoiceEventStream(
+  response: Response,
+  handlers?: AskPranaVoiceHandlers,
+): Promise<string> {
+  if (!response.body) {
+    throw new Error("Ask Prana could not finish that answer. Please try asking again.");
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let pending = "";
+  let answer = "";
+  let sawText = false;
+  const emitted = new Set<string>();
+  const markText = () => {
+    if (sawText) return;
+    sawText = true;
+    handlers?.onFirstText?.();
+  };
+  const emit = (sentence: string) => {
+    const cleaned = sentence.replace(/\s+/g, " ").trim();
+    const key = cleaned.toLowerCase();
+    if (!cleaned || emitted.has(key)) return;
+    emitted.add(key);
+    markText();
+    handlers?.onSentence?.(cleaned);
+  };
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    pending += decoder.decode(value, { stream: true });
+    const blocks = pending.split("\n\n");
+    pending = blocks.pop() ?? "";
+    for (const block of blocks) {
+      const data = block
+        .split("\n")
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trim())
+        .join("\n");
+      if (!data) continue;
+      let event: { type?: string; text?: string; answer?: string; error?: string };
+      try {
+        event = JSON.parse(data) as typeof event;
+      } catch {
+        continue;
+      }
+      if (event.type === "text") markText();
+      else if (event.type === "sentence" && event.text) emit(event.text);
+      else if (event.type === "replace" && event.text) {
+        markText();
+        answer = event.text;
+        handlers?.onReplace?.(event.text);
+      } else if (event.type === "done") {
+        answer = event.answer?.trim() || answer;
+      } else if (event.type === "error") {
+        throw new Error(event.error || "Ask Prana could not finish that answer. Please try asking again.");
+      }
+    }
+  }
+  const finalAnswer = answer.trim();
+  if (!finalAnswer || /^no response received\.?$/i.test(finalAnswer)) {
+    throw new Error("Ask Prana could not finish that answer. Please try asking again.");
+  }
+  return finalAnswer;
+}
+
+async function askPranaVoice(
+  requestBody: Record<string, unknown>,
+  accessToken: string,
+  handlers?: AskPranaVoiceHandlers,
+): Promise<AskPranaReply> {
+  const config = getSupabasePublicConfig();
+  const anonKey = (process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? "").trim();
+  if (!config.url || !anonKey) {
+    throw new Error(
+      "Missing Environment Variable: EXPO_PUBLIC_SUPABASE_URL or EXPO_PUBLIC_SUPABASE_ANON_KEY",
+    );
+  }
+  const response = await fetch(`${config.url}/functions/v1/ask-prana`, {
+    method: "POST",
+    signal: handlers?.signal,
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      apikey: anonKey,
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+    },
+    body: JSON.stringify(requestBody),
+  });
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.includes("text/event-stream")) {
+    const raw = await response.text();
+    type VoiceJson = { answer?: string; generatedFile?: unknown; error?: unknown } | null;
+    let data: VoiceJson = null;
+    try {
+      data = raw ? JSON.parse(raw) as VoiceJson : null;
+    } catch {
+      data = null;
+    }
+    if (!response.ok || data?.error) {
+      throw new Error(await formatAskPranaInvokeError(null, data));
+    }
+    const answer = data?.answer?.trim() ?? "";
+    if (!answer || /^no response received\.?$/i.test(answer)) {
+      throw new Error("Ask Prana could not finish that answer. Please try asking again.");
+    }
+    handlers?.onFirstText?.();
+    for (const sentence of splitCompleteSentences(answer)) handlers?.onSentence?.(sentence);
+    return {
+      answer,
+      generatedFile: normalizeGeneratedFile(data?.generatedFile),
+      sessionId: typeof requestBody.sessionId === "string" ? requestBody.sessionId : null,
+    };
+  }
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(raw || "Ask Prana could not finish that answer. Please try asking again.");
+  }
+  const answer = await readVoiceEventStream(response, handlers);
+  return {
+    answer,
+    generatedFile: null,
+    sessionId: typeof requestBody.sessionId === "string" ? requestBody.sessionId : null,
+  };
+}
+
 export async function askPrana(
   question: string,
   context: string | AskPranaRequestContext,
+  handlers?: AskPranaVoiceHandlers,
 ): Promise<AskPranaReply> {
   const requestContext: AskPranaRequestContext =
     typeof context === "string"
@@ -511,6 +652,16 @@ export async function askPrana(
       fileName: attachment.fileName ?? null,
     })),
   });
+
+  if (requestBody.inputMode === "voice") {
+    try {
+      return await askPranaVoice(requestBody, auth.accessToken, handlers);
+    } catch (invokeError) {
+      if (isAskPranaAbortError(invokeError)) throw invokeError;
+      console.log("[askPrana] voice stream failed:", invokeError);
+      throw new Error(await formatAskPranaInvokeError(invokeError));
+    }
+  }
 
   let data: {
     answer?: string;

@@ -1145,7 +1145,7 @@ export default function AskPranaScreen() {
               }
               onCancelListening={cancelAudioRecording}
               onStopListeningToTranscript={stopAudioRecordingToTranscript}
-              onAsk={async (question, context) => askFromVoiceMode(question, context)}
+              onAsk={async (question, context, handlers) => askFromVoiceMode(question, context, handlers)}
               onLanguageChange={async (code) => {
                 await cancelAudioRecording();
                 await handleSelectLanguage(code);

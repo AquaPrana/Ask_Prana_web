@@ -36,9 +36,11 @@ import {
 import { pickMultipleImages, pickSingleImage, promptImageSource } from "../lib/record-images";
 import {
   askPrana,
+  isAskPranaAbortError,
   transcribeAskPranaAudio,
   type AskPranaAttachment,
   type AskPranaRequestContext,
+  type AskPranaVoiceHandlers,
 } from "../services/ask-prana";
 import { stopAskPranaSpeech } from "../lib/ask-prana-speech";
 import { clearAskPranaDisplayTranslations } from "../lib/ask-prana-display-translation";
@@ -659,6 +661,7 @@ type AskPranaChatContextValue = {
   askFromVoiceMode: (
     question: string,
     requestContext?: AskPranaRequestContext,
+    voiceHandlers?: AskPranaVoiceHandlers,
   ) => Promise<{
     answer: string;
     language: AskPranaSpeechLanguageCode;
@@ -838,6 +841,9 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
   const pondsRequestUserIdRef = useRef<string | null>(null);
   const generationIdRef = useRef(0);
   const sendEpochRef = useRef(0);
+  const voiceAbortRef = useRef<AbortController | null>(null);
+  const persistChainRef = useRef(Promise.resolve());
+  const assistantSaveIdsRef = useRef(new Set<string>());
   /** Bumped on pond/user scope change to discard stale history loads and replies. */
   const pondLoadEpochRef = useRef(0);
   const selectedPondIdRef = useRef<string | null>(null);
@@ -1434,6 +1440,8 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
     pondLoadEpochRef.current += 1;
     sendEpochRef.current += 1;
     generationIdRef.current += 1;
+    voiceAbortRef.current?.abort();
+    voiceAbortRef.current = null;
     sessionCreateEpochRef.current += 1;
     void cancelAudioRecording();
     sessionCreatePromiseRef.current = null;
@@ -1645,14 +1653,25 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
     [startNewConversation],
   );
 
+  const enqueuePersist = useCallback((task: () => Promise<void>) => {
+    const run = persistChainRef.current.then(task, task);
+    persistChainRef.current = run.then(
+      () => undefined,
+      () => undefined,
+    );
+  }, []);
+
   const persistMessage = useCallback(
-    async (message: ChatMessage, pondId: string | null) => {
+    async (message: ChatMessage, pondId: string | null, capturedSessionId?: string | null) => {
       if (message.id === "welcome") {
         return message;
       }
 
-      // Never insert messages until a valid session UUID exists.
-      const activeSessionId = await ensureSession();
+      // A captured id is the conversation that owned this turn. Never fall
+      // through to whatever session is active now.
+      const activeSessionId = capturedSessionId !== undefined
+        ? capturedSessionId
+        : await ensureSession();
       if (!isValidAskPranaUuid(activeSessionId)) {
         console.log("[AskPranaChat] message not stored; answering without history");
         return message;
@@ -1690,6 +1709,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
             screen: "ask-prana",
             localMessageId: message.id,
           },
+          createdAt: message.createdAt ?? null,
         },
         message,
       );
@@ -1718,7 +1738,9 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
     async (
       question: string,
       requestContext?: AskPranaRequestContext,
-    ): Promise<ChatMessage> => {
+      voiceHandlers?: AskPranaVoiceHandlers,
+      sessionCapture?: { id: string | null },
+    ): Promise<ChatMessage & { requestSessionId: string | null }> => {
       const context = resolveContext(requestContext);
       const historyMessages = messagesRef.current.filter(
         (message) => message.id !== "welcome",
@@ -1750,6 +1772,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
 
       const storedSessionId = await ensureSession();
       const sessionId = isValidAskPranaUuid(storedSessionId) ? storedSessionId : null;
+      if (sessionCapture) sessionCapture.id = sessionId;
 
       console.log("[AskPranaChat] openai attachment decision", {
         sessionId,
@@ -1819,10 +1842,11 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         ]
           .filter(Boolean)
           .join(" "),
-      });
+      }, voiceHandlers);
 
       // Stash last resolved voice/text language for askFromVoiceMode consumers.
       lastResolvedLanguageRef.current = resolvedLanguage.code;
+      const requestSessionId = reply.sessionId ?? sessionId;
 
       if (reply.generatedFile) {
         return {
@@ -1834,6 +1858,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
           fileUrl: reply.generatedFile.url,
           fileName: reply.generatedFile.fileName,
           mimeType: reply.generatedFile.mimeType,
+          requestSessionId,
         };
       }
 
@@ -1842,19 +1867,114 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         role: "assistant",
         text: reply.answer,
         messageType: "text",
+        requestSessionId,
       };
     },
     [ensureSession, resolveContext, userId, farmerName],
   );
 
+  const saveAssistantInBackground = useCallback(
+    (
+      message: ChatMessage,
+      sessionId: string | null,
+      pondId: string | null,
+      turnId?: string,
+    ) => {
+      if (assistantSaveIdsRef.current.has(message.id)) return;
+      assistantSaveIdsRef.current.add(message.id);
+      const startedAt = performance.now();
+      enqueuePersist(async () => {
+        try {
+          if (!isValidAskPranaUuid(sessionId)) {
+            console.log("[AskPranaChat] assistant reply not stored; captured session missing", {
+              localMessageId: message.id,
+            });
+            return;
+          }
+          const saved = await persistMessage(message, pondId, sessionId);
+          setMessages((current) => {
+            const visible = current.some((item) => item.id === message.id || item.id === saved.id);
+            if (!visible) return current;
+            const next = current.map((item) =>
+              item.id === message.id || item.id === saved.id ? saved : item,
+            );
+            messagesRef.current = next;
+            return next;
+          });
+          if (process.env.NODE_ENV !== "production") {
+            console.debug("[AskPranaVoiceTiming]", "message-save-completed", {
+              turnId: turnId ?? null,
+              localMessageId: message.id,
+              sessionId,
+              elapsedMs: Math.round(performance.now() - startedAt),
+            });
+          }
+        } catch (persistError) {
+          console.log("[AskPranaChat] assistant reply persistence failed:", persistError);
+        }
+      });
+    },
+    [enqueuePersist, persistMessage],
+  );
+
   const appendAssistantReply = useCallback(
-    async (question: string, requestContext?: AskPranaRequestContext) => {
+    async (
+      question: string,
+      requestContext?: AskPranaRequestContext,
+      voice?: { handlers?: AskPranaVoiceHandlers; createdAt?: string },
+    ) => {
       const context = resolveContext(requestContext);
       const pondAtStart =
         selectedPondIdRef.current === GENERIC_ASSISTANT_ID
           ? null
           : selectedPondIdRef.current;
+      const capturedPondId = context.pondId ?? pondAtStart;
       const requestId = ++generationIdRef.current;
+      const messageId = `assistant-${Date.now()}`;
+      const createdAt = voice?.createdAt ?? new Date().toISOString();
+      const sessionCapture = { id: null as string | null };
+      let streamed = "";
+      const pondStillSelected = () =>
+        pondAtStart == null
+          ? selectedPondIdRef.current === GENERIC_ASSISTANT_ID ||
+            selectedPondIdRef.current == null
+          : selectedPondIdRef.current === pondAtStart;
+      const stillCurrent = () => requestId === generationIdRef.current && pondStillSelected();
+      const writeMessage = (text: string, insert: boolean) => {
+        setMessages((current) => {
+          const exists = current.some((item) => item.id === messageId);
+          if (!exists && !insert) return current;
+          const nextMessage: ChatMessage = {
+            id: messageId,
+            role: "assistant",
+            text,
+            messageType: "text",
+            createdAt,
+          };
+          const next = exists
+            ? current.map((item) => item.id === messageId ? { ...item, text } : item)
+            : [...current, nextMessage];
+          messagesRef.current = next;
+          return next;
+        });
+      };
+      const handlers: AskPranaVoiceHandlers | undefined = voice?.handlers
+        ? {
+            ...voice.handlers,
+            onSentence: (sentence) => {
+              if (!stillCurrent()) return;
+              streamed = streamed ? `${streamed} ${sentence}` : sentence;
+              voice.handlers?.onSentence?.(sentence);
+              writeMessage(streamed, true);
+            },
+            onReplace: (text) => {
+              streamed = text;
+              if (!stillCurrent()) return;
+              voice.handlers?.onReplace?.(text);
+              writeMessage(text, true);
+            },
+          }
+        : undefined;
       setGenerationStopped(false);
       setThinkingKind(resolveThinkingKind(requestContext));
       try {
@@ -1862,72 +1982,75 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
           question,
           {
             ...requestContext,
-            pondId: context.pondId ?? pondAtStart,
+            pondId: capturedPondId,
             mode: context.mode,
           },
+          handlers,
+          sessionCapture,
         );
-        if (requestId !== generationIdRef.current) {
-          console.warn("[AskPranaChat] assistant reply discarded: generation superseded", {
+        const { requestSessionId, ...replyMessage } = assistantMessage;
+        const answerText =
+          replyMessage.text?.trim() ||
+          streamed.trim() ||
+          "Sorry — I could not finish that answer just now. Please ask again.";
+        const normalizedMessage: ChatMessage = {
+          ...replyMessage,
+          id: messageId,
+          text: answerText,
+          createdAt,
+        };
+        const sessionId = requestSessionId ?? sessionCapture.id;
+        if (stillCurrent()) {
+          writeMessage(answerText, true);
+          if (normalizedMessage.messageType === "document") {
+            setMessages((current) => {
+              const next = current.map((item) =>
+                item.id === messageId ? normalizedMessage : item,
+              );
+              messagesRef.current = next;
+              return next;
+            });
+          }
+          setThinkingKind(null);
+        } else {
+          // Keep a bubble that was already shown, but do not add this answer
+          // to a conversation the user has since left.
+          writeMessage(answerText, false);
+          console.warn("[AskPranaChat] assistant reply kept for its original conversation", {
             requestId,
             activeRequestId: generationIdRef.current,
+            sessionId,
           });
-          return null;
         }
-        const pondStillSelected =
-          pondAtStart == null
-            ? selectedPondIdRef.current === GENERIC_ASSISTANT_ID ||
-              selectedPondIdRef.current == null
-            : selectedPondIdRef.current === pondAtStart;
-        if (!pondStillSelected) {
-          console.warn("[AskPranaChat] assistant reply discarded: pond changed", {
-            pondAtStart,
-            activePondId: selectedPondIdRef.current,
-          });
-          return null;
-        }
-        setThinkingKind(null);
-        const answerText = assistantMessage.text?.trim() ?? "";
-        const normalizedMessage = {
-          ...assistantMessage,
-          text:
-            answerText ||
-            "Sorry — I could not finish that answer just now. Please ask again.",
-        };
-        setMessages((current) => [...current, normalizedMessage]);
-        // The reply is complete once it is in the chat. Saving it must not
-        // keep the UI in a generating state (or show a second Thinking row)
-        // when a background persistence request is slow.
-        isSendingRef.current = false;
-        setIsSending(false);
-        setThinkingKind(null);
-        try {
-          await persistMessage(
-            normalizedMessage,
-            context.pondId ?? pondAtStart,
-          );
-        } catch (persistError) {
-          // The completed reply remains valid in the current UI. Do not add a
-          // second fallback assistant message because only persistence failed.
-          console.log("[AskPranaChat] assistant reply persistence failed:", persistError);
-        }
-        return normalizedMessage.text;
+        saveAssistantInBackground(
+          normalizedMessage,
+          sessionId,
+          capturedPondId,
+          voice?.handlers?.turnId,
+        );
+        return stillCurrent() ? normalizedMessage.text : null;
       } catch (error) {
-        if (requestId !== generationIdRef.current) {
+        if (isAskPranaAbortError(error)) {
+          if (streamed.trim()) {
+            saveAssistantInBackground(
+              {
+                id: messageId,
+                role: "assistant",
+                text: streamed.trim(),
+                messageType: "text",
+                createdAt,
+              },
+              sessionCapture.id,
+              capturedPondId,
+              voice?.handlers?.turnId,
+            );
+          }
+          return null;
+        }
+        if (!stillCurrent()) {
           console.warn("[AskPranaChat] failed assistant reply discarded: generation superseded", {
             requestId,
             activeRequestId: generationIdRef.current,
-          });
-          return null;
-        }
-        const pondStillSelected =
-          pondAtStart == null
-            ? selectedPondIdRef.current === GENERIC_ASSISTANT_ID ||
-              selectedPondIdRef.current == null
-            : selectedPondIdRef.current === pondAtStart;
-        if (!pondStillSelected) {
-          console.warn("[AskPranaChat] failed assistant reply discarded: pond changed", {
-            pondAtStart,
-            activePondId: selectedPondIdRef.current,
           });
           return null;
         }
@@ -1944,25 +2067,34 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         });
 
         const fallback: ChatMessage = {
-          id: `assistant-${Date.now()}`,
+          id: messageId,
           role: "assistant",
           text: toFarmerFacingAssistantError(detail),
           messageType: "text",
+          createdAt,
         };
         isSendingRef.current = false;
         setIsSending(false);
         setThinkingKind(null);
-        setMessages((current) => [...current, fallback]);
+        setMessages((current) => {
+          const next = current.some((item) => item.id === messageId)
+            ? current.map((item) => item.id === messageId ? fallback : item)
+            : [...current, fallback];
+          messagesRef.current = next;
+          return next;
+        });
         // The fallback is a real, visible assistant turn. Returning it keeps
-        // Voice Mode's result contract aligned with text chat, so it does not
-        // incorrectly report an empty AI response after saving this message.
+        // Voice Mode's result contract aligned with text chat. A failed save
+        // must not add a second message, so this error text is not persisted.
         return fallback.text;
       }
     },
-    [persistMessage, requestAssistantReply, resolveContext],
+    [requestAssistantReply, resolveContext, saveAssistantInBackground],
   );
 
   const stopGeneration = useCallback(() => {
+    voiceAbortRef.current?.abort();
+    voiceAbortRef.current = null;
     if (!thinkingKind && !isSending) {
       return;
     }
@@ -1986,6 +2118,8 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       pondLoadEpochRef.current += 1;
       sendEpochRef.current += 1;
       generationIdRef.current += 1;
+      voiceAbortRef.current?.abort();
+      voiceAbortRef.current = null;
       sessionCreateEpochRef.current += 1;
       sessionCreatePromiseRef.current = null;
       voiceModeSessionStartedRef.current = false;
@@ -2008,7 +2142,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
     async (
       question: string,
       requestContext?: AskPranaRequestContext,
-      options?: { fromVoiceMode?: boolean },
+      options?: { fromVoiceMode?: boolean; voiceHandlers?: AskPranaVoiceHandlers },
     ) => {
       const fromVoiceMode = options?.fromVoiceMode === true;
       const trimmed = question.trim();
@@ -2023,11 +2157,16 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         return null;
       }
 
-      if (isSendingRef.current) {
+      if (isSendingRef.current && !fromVoiceMode) {
         console.log("[AskPranaChat] send blocked: already sending", {
           fromVoiceMode,
         });
         return null;
+      }
+      if (isSendingRef.current && fromVoiceMode) {
+        generationIdRef.current += 1;
+        sendEpochRef.current += 1;
+        isSendingRef.current = false;
       }
 
       const attachmentStillPreparing = pendingSnapshot.some(
@@ -2088,6 +2227,10 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         ? GENERIC_ASSISTANT_LABEL
         : selectedPondName ?? undefined;
 
+      const userCreatedAt = new Date().toISOString();
+      const assistantCreatedAt = new Date(
+        Date.parse(userCreatedAt) + Math.max(pendingSnapshot.length, 1),
+      ).toISOString();
       const userMessages: ChatMessage[] =
         pendingSnapshot.length === 0
           ? [
@@ -2097,12 +2240,14 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
                 text: trimmed,
                 messageType: "text",
                 pondName,
+                createdAt: userCreatedAt,
               },
             ]
           : pendingSnapshot.map((item, index) => ({
               id: `user-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
               role: "user" as const,
               text: index === 0 ? trimmed : "",
+              createdAt: new Date(Date.parse(userCreatedAt) + index).toISOString(),
               messageType:
                 item.kind === "image" ? ("image" as const) : ("document" as const),
               fileUrl: item.fileUrl,
@@ -2155,23 +2300,26 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         // time-to-first-response. Both consumers share ensureSession's single
         // in-flight promise, avoiding a duplicate create request.
         const sessionPromise = ensureSession();
-        void (async () => {
-          await sessionPromise;
-          for (const userMessage of userMessages) {
-            const savedUserMessage = await persistMessage(
-              userMessage,
-              scopedContext.pondId,
-            );
-            setMessages((current) => {
-              const next = current.map((message) =>
-                message.id === userMessage.id ? savedUserMessage : message,
+        enqueuePersist(async () => {
+          try {
+            const activeSessionId = await sessionPromise;
+            for (const userMessage of userMessages) {
+              const savedUserMessage = await persistMessage(
+                userMessage,
+                scopedContext.pondId,
+                activeSessionId,
               );
-              messagesRef.current = next;
-              return next;
-            });
+              setMessages((current) => {
+                const next = current.map((message) =>
+                  message.id === userMessage.id ? savedUserMessage : message,
+                );
+                messagesRef.current = next;
+                return next;
+              });
+            }
+          } catch (persistError) {
+            console.log("[AskPranaChat] user message persistence failed:", persistError);
           }
-        })().catch((persistError) => {
-          console.log("[AskPranaChat] user message persistence failed:", persistError);
         });
 
         console.log("[AskPranaChat] ask started", {
@@ -2197,24 +2345,37 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
             role: "assistant",
             text: GREETING_REPLY,
             messageType: "text",
+            createdAt: assistantCreatedAt,
           };
           setMessages((current) => {
             const next = [...current, greeting];
             messagesRef.current = next;
             return next;
           });
-          void persistMessage(greeting, scopedContext.pondId).catch((persistError) => {
-            console.log("[AskPranaChat] greeting persistence failed:", persistError);
+          enqueuePersist(async () => {
+            try {
+              const activeSessionId = await sessionPromise;
+              await persistMessage(greeting, scopedContext.pondId, activeSessionId);
+            } catch (persistError) {
+              console.log("[AskPranaChat] greeting persistence failed:", persistError);
+            }
           });
           return greeting.text;
         }
 
-        const answer = await appendAssistantReply(apiQuestion, {
-          ...requestContext,
-          pondId: scopedContext.pondId,
-          mode: scopedContext.mode,
-          attachments: mappedAttachments,
-        });
+        const answer = await appendAssistantReply(
+          apiQuestion,
+          {
+            ...requestContext,
+            pondId: scopedContext.pondId,
+            mode: scopedContext.mode,
+            attachments: mappedAttachments,
+          },
+          {
+            handlers: options?.voiceHandlers,
+            createdAt: assistantCreatedAt,
+          },
+        );
         console.log("[AskPranaChat] ask finished", {
           fromVoiceMode,
           answerLength: answer?.trim().length ?? 0,
@@ -2263,6 +2424,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
     },
     [
       appendAssistantReply,
+      enqueuePersist,
       ensureSession,
       persistMessage,
       resolveContext,
@@ -2271,13 +2433,22 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
   );
 
   const askFromVoiceMode = useCallback(
-    async (question: string, requestContext?: AskPranaRequestContext) => {
+    async (
+      question: string,
+      requestContext?: AskPranaRequestContext,
+      voiceHandlers?: AskPranaVoiceHandlers,
+    ) => {
       console.log("[AskPranaVoice] askFromVoiceMode", {
         questionPreview: question.trim().slice(0, 120),
         isRecording: isRecordingRef.current,
         isTranscribing: isTranscribingRef.current,
         isSending: isSendingRef.current,
       });
+      const controller = new AbortController();
+      voiceAbortRef.current?.abort();
+      voiceAbortRef.current = controller;
+      if (voiceHandlers?.signal?.aborted) controller.abort();
+      else voiceHandlers?.signal?.addEventListener("abort", () => controller.abort(), { once: true });
       const sessionLanguageCode =
         requestContext?.sessionLanguageCode?.trim() ||
         (requestContext?.language
@@ -2295,7 +2466,10 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
           // Lets Ask Prana ask "please say it again" for unclear speech.
           inputMode: "voice",
         },
-        { fromVoiceMode: true },
+        {
+          fromVoiceMode: true,
+          voiceHandlers: { ...voiceHandlers, signal: controller.signal },
+        },
       );
       if (!answer?.trim()) {
         return null;

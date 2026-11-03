@@ -47,6 +47,8 @@ export type SaveAskPranaMessageInput = {
   fileName?: string | null;
   mimeType?: string | null;
   metadata?: Record<string, unknown> | null;
+  /** Client timestamp so a background save keeps its place in the conversation. */
+  createdAt?: string | null;
 };
 
 export type AskPranaSessionSummary = {
@@ -361,6 +363,7 @@ export async function saveAskPranaMessage(
       filePath: input.filePath ?? null,
       fileName: input.fileName ?? null,
       mimeType: input.mimeType ?? null,
+      createdAt: input.createdAt ?? null,
     });
     if (!saved.message) return { message: null, error: new Error("Unable to save message.") };
     // The server translates new messages in the background; knowing the id

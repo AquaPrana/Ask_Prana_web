@@ -89,6 +89,8 @@ serve(async (req) => {
       text?: string;
       language?: string;
       languageCode?: string;
+      /** "audio" returns the MP3 bytes directly. Omitted keeps the JSON body. */
+      delivery?: string;
     } | null;
 
     const text = typeof body?.text === "string" ? body.text.trim() : "";
@@ -131,6 +133,23 @@ serve(async (req) => {
         { error: "Unable to generate speech right now." },
         502,
       );
+    }
+
+    if (!openaiResponse.body) {
+      return jsonResponse({ error: "Empty speech audio returned." }, 502);
+    }
+
+    // Sentence-sized callers start playback from the first audio bytes.
+    // The full reply is never buffered and re-encoded as Base64 for that path.
+    if (body?.delivery === "audio") {
+      return new Response(openaiResponse.body, {
+        status: 200,
+        headers: {
+          ...corsHeaders,
+          "Content-Type": "audio/mpeg",
+          "Cache-Control": "no-store",
+        },
+      });
     }
 
     const audio = new Uint8Array(await openaiResponse.arrayBuffer());

@@ -9,6 +9,7 @@ import {
   getAskPranaLanguageOption,
   type AskPranaSpeechLanguageCode,
 } from "./ask-prana-language";
+import { splitCompleteSentences } from "./ask-prana-sentences";
 
 export type AskPranaSpeakResult = {
   spoke: boolean;
@@ -21,10 +22,20 @@ type AskPranaSpeakOptions = {
   onPlaybackStart?: () => void;
   /** Voice mode keeps its capture path alive while the reply is playing. */
   keepMicrophoneActive?: boolean;
+  /** When set, a device voice that fails is skipped for the rest of this Voice Chat session. */
+  voiceSession?: boolean;
 };
 
 let activePlayer: ReturnType<typeof createAudioPlayer> | null = null;
 let speakGeneration = 0;
+const ttsAbortControllers = new Set<AbortController>();
+const failedDeviceVoices = new Set<string>();
+const activeAudioUrls = new Set<string>();
+
+/** Clears the remembered device-voice failure when a Voice Chat session opens or closes. */
+export function resetAskPranaVoiceSpeechSession() {
+  failedDeviceVoices.clear();
+}
 
 function resumeWebSpeech() {
   if (Platform.OS !== "web" || typeof window === "undefined") return;
@@ -39,6 +50,16 @@ function resumeWebSpeech() {
 
 export async function stopAskPranaSpeech() {
   speakGeneration += 1;
+  for (const controller of ttsAbortControllers) controller.abort();
+  ttsAbortControllers.clear();
+  for (const url of activeAudioUrls) {
+    try {
+      URL.revokeObjectURL(url);
+    } catch {
+      // ignore
+    }
+  }
+  activeAudioUrls.clear();
   try {
     await Speech.stop();
   } catch {
@@ -84,60 +105,6 @@ async function hasDeviceVoiceFor(bcp47: string): Promise<boolean> {
   } catch {
     return Platform.OS !== "web";
   }
-}
-
-async function speakWithExpoSpeech(
-  text: string,
-  language: AskPranaSpeechLanguageCode,
-  options?: AskPranaSpeakOptions,
-): Promise<AskPranaSpeakResult> {
-  if (options?.shouldPlay?.() === false) {
-    return { spoke: false, provider: "none", reason: "interrupted" };
-  }
-  // Capture the generation before any await: a stop() during the voice
-  // lookup must still cancel this reply.
-  const generation = speakGeneration;
-  const option = getAskPranaLanguageOption(language);
-  const available = await hasDeviceVoiceFor(option.bcp47);
-  if (!available && language !== "en") {
-    return {
-      spoke: false,
-      provider: "none",
-      reason: `On-device speech for ${option.nativeLabel} is not available on this device.`,
-    };
-  }
-
-  await setAudioModeAsync({
-    allowsRecording: Boolean(options?.keepMicrophoneActive),
-    playsInSilentMode: true,
-  });
-  // The user may have interrupted while the voice list was loading.
-  if (generation !== speakGeneration || options?.shouldPlay?.() === false) {
-    return { spoke: false, provider: "expo-speech", reason: "interrupted" };
-  }
-  resumeWebSpeech();
-
-  // Chrome's online voices (for example "Google हिन्दी") stop by themselves
-  // after about 15 seconds of continuous speech and never report the end, so
-  // Voice Mode used to sit in "Speaking" for up to two minutes. Speaking the
-  // reply in short sentence-sized pieces keeps every piece under that limit.
-  const chunks = splitSpeechChunks(text);
-  // Tell Voice Mode when sound really starts (not when it was requested):
-  // the interruption detector measures the reply's echo at that moment.
-  let reportedStart = false;
-  const reportStart = () => {
-    if (reportedStart) return;
-    reportedStart = true;
-    options?.onPlaybackStart?.();
-  };
-  for (const chunk of chunks) {
-    if (generation !== speakGeneration || options?.shouldPlay?.() === false) {
-      return { spoke: false, provider: "expo-speech", reason: "interrupted" };
-    }
-    const result = await speakChunkWithExpoSpeech(chunk, option, generation, reportStart);
-    if (!result.spoke) return result;
-  }
-  return { spoke: true, provider: "expo-speech" };
 }
 
 const SPEECH_CHUNK_MAX_CHARS = 160;
@@ -255,95 +222,134 @@ function speakChunkWithExpoSpeech(
   });
 }
 
-async function speakWithOpenAiTts(
+type PreparedSpeech =
+  | { kind: "device"; text: string }
+  | { kind: "cloud"; text: string; uri: string }
+  | { kind: "failed"; reason: string }
+  | { kind: "interrupted" };
+
+export type AskPranaSpeechQueue = {
+  enqueue: (sentence: string) => void;
+  /** Drops unplayed speech and speaks this text when playback has not started. */
+  replaceUnplayed: (text: string) => void;
+  close: () => void;
+  cancel: () => void;
+  done: Promise<AskPranaSpeakResult>;
+};
+
+function rememberAudioUrl(uri: string) {
+  if (uri.startsWith("blob:")) activeAudioUrls.add(uri);
+}
+
+function forgetAudioUrl(uri: string) {
+  if (!activeAudioUrls.has(uri)) return;
+  activeAudioUrls.delete(uri);
+  try {
+    URL.revokeObjectURL(uri);
+  } catch {
+    // ignore
+  }
+}
+
+async function audioUriFromResponse(response: Response): Promise<string | null> {
+  const contentType = response.headers.get("content-type") ?? "";
+  if (contentType.includes("application/json") || contentType.includes("text/")) {
+    const raw = await response.text();
+    let data: { audioBase64?: string; mimeType?: string; error?: string } = {};
+    try {
+      data = raw ? JSON.parse(raw) as typeof data : {};
+    } catch {
+      return null;
+    }
+    if (!response.ok || !data.audioBase64) return null;
+    return `data:${data.mimeType || "audio/mpeg"};base64,${data.audioBase64}`;
+  }
+  if (!response.ok) return null;
+  const blob = await response.blob();
+  if (!blob.size) return null;
+  if (typeof URL !== "undefined" && typeof URL.createObjectURL === "function") {
+    return URL.createObjectURL(blob);
+  }
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = "";
+  const step = 0x8000;
+  for (let index = 0; index < bytes.length; index += step) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + step));
+  }
+  return `data:audio/mpeg;base64,${btoa(binary)}`;
+}
+
+async function fetchCloudSpeechAudio(
   text: string,
   language: AskPranaSpeechLanguageCode,
-  options?: AskPranaSpeakOptions,
-): Promise<AskPranaSpeakResult> {
+  generation: number,
+): Promise<string | "interrupted" | null> {
+  if (generation !== speakGeneration) return "interrupted";
   const auth = await ensureValidSession();
   const accessToken = auth?.access_token;
-  if (!accessToken) {
-    return { spoke: false, provider: "none", reason: "Not signed in for cloud speech." };
-  }
-
+  if (!accessToken) return null;
   const config = getSupabasePublicConfig();
   const anonKey = (process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? "").trim();
-  if (!config.url || !anonKey) {
-    return {
-      spoke: false,
-      provider: "none",
-      reason: "Speech service URL is not configured.",
-    };
-  }
-
-  const option = getAskPranaLanguageOption(language);
-  const response = await fetch(`${config.url}/functions/v1/ask-prana-tts`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      apikey: anonKey,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      text,
-      language: option.llmLabel,
-      languageCode: option.code,
-    }),
-  });
-
-  const raw = await response.text();
-  let data: { audioBase64?: string; mimeType?: string; error?: string } = {};
+  if (!config.url || !anonKey) return null;
+  const controller = new AbortController();
+  ttsAbortControllers.add(controller);
   try {
-    data = raw ? JSON.parse(raw) : {};
-  } catch {
-    return {
-      spoke: false,
-      provider: "none",
-      reason: "Speech service returned an invalid response.",
-    };
+    if (generation !== speakGeneration) return "interrupted";
+    const option = getAskPranaLanguageOption(language);
+    const response = await fetch(`${config.url}/functions/v1/ask-prana-tts`, {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        apikey: anonKey,
+        "Content-Type": "application/json",
+        Accept: "audio/mpeg",
+      },
+      body: JSON.stringify({
+        text,
+        language: option.llmLabel,
+        languageCode: option.code,
+        delivery: "audio",
+      }),
+    });
+    if (generation !== speakGeneration) return "interrupted";
+    const uri = await audioUriFromResponse(response);
+    if (uri) rememberAudioUrl(uri);
+    return uri;
+  } catch (error) {
+    if (controller.signal.aborted || generation !== speakGeneration) return "interrupted";
+    console.log("[ask-prana-speech] cloud TTS failed:", error);
+    return null;
+  } finally {
+    ttsAbortControllers.delete(controller);
   }
+}
 
-  if (!response.ok || !data.audioBase64) {
-    return {
-      spoke: false,
-      provider: "none",
-      reason: data.error || "Cloud speech is unavailable right now.",
-    };
-  }
-
-  if (options?.shouldPlay?.() === false) {
-    return { spoke: false, provider: "none", reason: "interrupted" };
-  }
-
-  const generation = speakGeneration;
-  const mime = data.mimeType || "audio/mpeg";
-  const dataUri = `data:${mime};base64,${data.audioBase64}`;
-
-  await setAudioModeAsync({
-    allowsRecording: Boolean(options?.keepMicrophoneActive),
-    playsInSilentMode: true,
-  });
-
-  if (activePlayer) {
-    try {
-      activePlayer.remove();
-    } catch {
-      // ignore
+function playCloudUri(
+  uri: string,
+  generation: number,
+  onStarted?: () => void,
+  shouldPlay?: () => boolean,
+): Promise<AskPranaSpeakResult> {
+  return new Promise<AskPranaSpeakResult>((resolve) => {
+    if (generation !== speakGeneration || shouldPlay?.() === false) {
+      forgetAudioUrl(uri);
+      resolve({ spoke: false, provider: "openai-tts", reason: "interrupted" });
+      return;
     }
-    activePlayer = null;
-  }
-
-  const player = createAudioPlayer({ uri: dataUri });
-  activePlayer = player;
-  player.play();
-
-  return await new Promise<AskPranaSpeakResult>((resolve) => {
+    if (activePlayer) {
+      try {
+        activePlayer.remove();
+      } catch {
+        // ignore
+      }
+      activePlayer = null;
+    }
+    const player = createAudioPlayer({ uri });
+    activePlayer = player;
+    player.play();
     const started = Date.now();
     let settled = false;
-    // Phones often need more than a second to decode the audio. The old check
-    // ("not playing after 0.8 s" = finished) stopped replies before they were
-    // heard and Voice Mode went straight back to Listening. Only a reply that
-    // actually started and then ended counts as spoken.
     let everPlayed = false;
     let replayed = false;
     const finish = (result: AskPranaSpeakResult, stop: boolean) => {
@@ -358,10 +364,11 @@ async function speakWithOpenAiTts(
         // ignore
       }
       if (activePlayer === player) activePlayer = null;
+      forgetAudioUrl(uri);
       resolve(result);
     };
     const timer = setInterval(() => {
-      if (generation !== speakGeneration) {
+      if (generation !== speakGeneration || shouldPlay?.() === false) {
         finish({ spoke: false, provider: "openai-tts", reason: "interrupted" }, true);
         return;
       }
@@ -369,15 +376,13 @@ async function speakWithOpenAiTts(
       const elapsed = Date.now() - started;
       if (status?.playing && !everPlayed) {
         everPlayed = true;
-        // Phones need 1-3 s to start this audio; report the real start.
-        options?.onPlaybackStart?.();
+        onStarted?.();
       }
       if (status?.didJustFinish || (everPlayed && !status?.playing && elapsed > 800)) {
         finish({ spoke: true, provider: "openai-tts" }, false);
         return;
       }
       if (!everPlayed && !replayed && elapsed > 2_500) {
-        // play() can be refused while the audio is still loading; ask again.
         replayed = true;
         player.play();
       }
@@ -389,16 +394,241 @@ async function speakWithOpenAiTts(
         }, true);
       }
     }, 200);
-
-    // Safety timeout (~2 min) for a reply that never reports its end.
     const safety = setTimeout(() => {
       finish({ spoke: everPlayed, provider: everPlayed ? "openai-tts" : "none" }, true);
-    }, 120_000);
+    }, 45_000);
   });
 }
 
 /**
- * Speak assistant text aloud. Prefers cloud TTS for Indic languages, then device TTS.
+ * Plays sentences in order. Cloud audio for the next sentence is fetched
+ * while the current sentence plays. Only one sentence is prefetched.
+ */
+export function createAskPranaSpeechQueue(
+  language: AskPranaSpeechLanguageCode,
+  options?: AskPranaSpeakOptions,
+): AskPranaSpeechQueue {
+  const generation = speakGeneration;
+  const option = getAskPranaLanguageOption(language);
+  const pending: string[] = [];
+  const seen = new Set<string>();
+  let closed = false;
+  let cancelled = false;
+  let mode: "device" | "cloud" =
+    options?.voiceSession && failedDeviceVoices.has(language) ? "cloud" : "device";
+  let modeReady: Promise<void> | null = null;
+  let preparing: Promise<PreparedSpeech> | null = null;
+  let prepared: PreparedSpeech | null = null;
+  let playing = false;
+  let batch = 0;
+  let everSpoke = false;
+  let startReported = false;
+  let settled = false;
+  let lastReason = "Nothing to speak.";
+  let resolveDone: (result: AskPranaSpeakResult) => void = () => undefined;
+  const done = new Promise<AskPranaSpeakResult>((resolve) => {
+    resolveDone = resolve;
+  });
+  const waiters: Array<() => void> = [];
+  const wake = () => {
+    const pendingWaiters = waiters.splice(0);
+    pendingWaiters.forEach((waiter) => waiter());
+  };
+  const alive = () =>
+    !cancelled && generation === speakGeneration && options?.shouldPlay?.() !== false;
+  const finish = (result: AskPranaSpeakResult) => {
+    if (settled) return;
+    settled = true;
+    resolveDone(result);
+    wake();
+  };
+  const reportStart = () => {
+    if (startReported) return;
+    startReported = true;
+    options?.onPlaybackStart?.();
+  };
+  const ensureMode = () => {
+    if (!modeReady) {
+      modeReady = (async () => {
+        if (mode === "cloud") return;
+        if (language === "en") return;
+        const available = await hasDeviceVoiceFor(option.bcp47);
+        if (!alive()) return;
+        if (!available) {
+          if (options?.voiceSession) failedDeviceVoices.add(language);
+          mode = "cloud";
+        }
+      })();
+    }
+    return modeReady;
+  };
+  const pushSentence = (sentence: string) => {
+    const cleaned = sentence.replace(/\*\*/g, "").replace(/\s+/g, " ").trim();
+    if (!cleaned || seen.has(cleaned.toLowerCase())) return;
+    seen.add(cleaned.toLowerCase());
+    for (const chunk of splitSpeechChunks(cleaned)) pending.push(chunk);
+    wake();
+  };
+  const prepareNext = async (text: string): Promise<PreparedSpeech> => {
+    await ensureMode();
+    if (!alive()) return { kind: "interrupted" };
+    if (mode === "device") return { kind: "device", text };
+    await setAudioModeAsync({
+      allowsRecording: Boolean(options?.keepMicrophoneActive),
+      playsInSilentMode: true,
+    });
+    const uri = await fetchCloudSpeechAudio(text, language, generation);
+    if (uri === "interrupted" || !alive()) return { kind: "interrupted" };
+    if (!uri) return { kind: "failed", reason: "Cloud speech is unavailable right now." };
+    return { kind: "cloud", text, uri };
+  };
+  const playPrepared = async (item: PreparedSpeech): Promise<AskPranaSpeakResult> => {
+    if (item.kind === "interrupted") {
+      return { spoke: false, provider: "none", reason: "interrupted" };
+    }
+    if (item.kind === "failed") {
+      return { spoke: false, provider: "none", reason: item.reason };
+    }
+    if (item.kind === "device") {
+      if (mode === "cloud") {
+        const cloud = await prepareNext(item.text);
+        return playPrepared(cloud);
+      }
+      await setAudioModeAsync({
+        allowsRecording: Boolean(options?.keepMicrophoneActive),
+        playsInSilentMode: true,
+      });
+      if (!alive()) return { spoke: false, provider: "expo-speech", reason: "interrupted" };
+      resumeWebSpeech();
+      const spoken = await speakChunkWithExpoSpeech(item.text, option, generation, reportStart);
+      if (spoken.spoke || spoken.reason === "interrupted") return spoken;
+      try {
+        await Speech.stop();
+      } catch {
+        // The device voice failed; don't leave it running under the cloud voice.
+      }
+      if (options?.voiceSession) failedDeviceVoices.add(language);
+      mode = "cloud";
+      const cloud = await prepareNext(item.text);
+      return playPrepared(cloud);
+    }
+    return playCloudUri(item.uri, generation, reportStart, options?.shouldPlay);
+  };
+  const fillPrefetch = () => {
+    if (preparing || prepared || pending.length === 0 || !alive()) return;
+    const text = pending.shift();
+    if (!text) return;
+    const batchAtStart = batch;
+    preparing = prepareNext(text).then((item) => {
+      preparing = null;
+      if (batchAtStart !== batch || !alive()) {
+        if (item.kind === "cloud") forgetAudioUrl(item.uri);
+        wake();
+        return item;
+      }
+      prepared = item;
+      wake();
+      return item;
+    });
+  };
+  const run = async () => {
+    try {
+      while (!settled) {
+        if (!alive()) {
+          finish({
+            spoke: everSpoke,
+            provider: everSpoke ? (mode === "cloud" ? "openai-tts" : "expo-speech") : "none",
+            reason: "interrupted",
+          });
+          return;
+        }
+        if (!prepared && preparing) {
+          await preparing;
+          continue;
+        }
+        if (!prepared && pending.length > 0) fillPrefetch();
+        if (!prepared && preparing) {
+          await preparing;
+          continue;
+        }
+        if (!prepared) {
+          if (closed && pending.length === 0 && !preparing) {
+            finish(
+              everSpoke
+                ? { spoke: true, provider: mode === "cloud" ? "openai-tts" : "expo-speech" }
+                : { spoke: false, provider: "none", reason: lastReason },
+            );
+            return;
+          }
+          await new Promise<void>((resolve) => waiters.push(resolve));
+          continue;
+        }
+        const current = prepared;
+        prepared = null;
+        if (pending.length > 0) fillPrefetch();
+        playing = true;
+        const result = await playPrepared(current);
+        playing = false;
+        if (current.kind === "cloud") forgetAudioUrl(current.uri);
+        if (!alive() || result.reason === "interrupted") {
+          finish({
+            spoke: everSpoke || result.spoke,
+            provider: result.provider,
+            reason: "interrupted",
+          });
+          return;
+        }
+        if (result.spoke) {
+          everSpoke = true;
+          continue;
+        }
+        lastReason = result.reason || lastReason;
+        if (current.kind === "cloud" && pending.length === 0 && closed && !everSpoke) {
+          finish(result);
+          return;
+        }
+      }
+    } catch (error) {
+      console.log("[ask-prana-speech] queue failed:", error);
+      finish({
+        spoke: everSpoke,
+        provider: everSpoke ? (mode === "cloud" ? "openai-tts" : "expo-speech") : "none",
+        reason: "Speech playback failed.",
+      });
+    }
+  };
+  void run();
+  return {
+    enqueue: (sentence) => {
+      if (cancelled || settled) return;
+      pushSentence(sentence);
+    },
+    replaceUnplayed: (text) => {
+      if (cancelled || settled || startReported || playing || everSpoke) return;
+      batch += 1;
+      pending.splice(0);
+      seen.clear();
+      prepared = null;
+      preparing = null;
+      pushSentence(text);
+    },
+    close: () => {
+      closed = true;
+      wake();
+    },
+    cancel: () => {
+      cancelled = true;
+      pending.splice(0);
+      prepared = null;
+      wake();
+    },
+    done,
+  };
+}
+
+/**
+ * Speak assistant text aloud. Device speech plays sentence by sentence.
+ * Cloud speech fetches one sentence at a time and prefetches the next.
  * Never claims success unless audio actually started.
  */
 export async function speakAskPranaText(
@@ -410,43 +640,9 @@ export async function speakAskPranaText(
   if (!cleaned) {
     return { spoke: false, provider: "none", reason: "Nothing to speak." };
   }
-
   await stopAskPranaSpeech();
-
-  // A matching device voice begins immediately and avoids waiting for an entire
-  // cloud audio file. Keep cloud TTS as the fallback for devices that do not
-  // ship Telugu/Hindi voices.
-  if (language !== "en") {
-    try {
-      const device = await speakWithExpoSpeech(cleaned, language, options);
-      if (device.spoke) return device;
-      if (device.reason === "interrupted") return device;
-      const cloud = await speakWithOpenAiTts(cleaned, language, options);
-      if (cloud.spoke || cloud.reason === "interrupted") return cloud;
-      return {
-        spoke: false,
-        provider: "none",
-        reason:
-          device.reason ||
-          cloud.reason ||
-          "Speech playback is not available for this language on this device.",
-      };
-    } catch (error) {
-      console.log("[ask-prana-speech] cloud TTS failed:", error);
-    }
-  }
-
-  // English: the phone's own voice first; if it cannot speak (no voice
-  // installed, browser refused), use the cloud voice instead of going back
-  // to Listening in silence.
-  const device = await speakWithExpoSpeech(cleaned, "en", options);
-  if (device.spoke || device.reason === "interrupted") return device;
-  try {
-    const cloud = await speakWithOpenAiTts(cleaned, "en", options);
-    if (cloud.spoke || cloud.reason === "interrupted") return cloud;
-    return { ...cloud, reason: cloud.reason || device.reason };
-  } catch (error) {
-    console.log("[ask-prana-speech] cloud TTS fallback failed:", error);
-    return device;
-  }
+  const queue = createAskPranaSpeechQueue(language, options);
+  for (const sentence of splitCompleteSentences(cleaned)) queue.enqueue(sentence);
+  queue.close();
+  return queue.done;
 }

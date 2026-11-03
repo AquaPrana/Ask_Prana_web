@@ -1781,6 +1781,7 @@ async function handleConversations(
     const filePath = storedFilePath(body.filePath);
     const fileName = storedFileLabel(body.fileName);
     const mimeType = storedFileLabel(body.mimeType);
+    const createdAt = clientMessageCreatedAt(body.createdAt);
     const { data: message, error } = await supabase
       .from("chat_messages")
       .insert({
@@ -1792,6 +1793,7 @@ async function handleConversations(
         file_path: filePath,
         file_name: filePath ? fileName : null,
         mime_type: filePath ? mimeType : null,
+        ...(createdAt ? { created_at: createdAt } : {}),
       })
       .select("id, session_id, user_id, role, content, message_type, file_path, file_name, mime_type, created_at")
       .single();
@@ -1861,6 +1863,200 @@ async function handleConversations(
   return jsonResponse({ error: "Unknown conversation request." }, 400);
 }
 
+const VOICE_SENTENCE_END = /[.!?।॥\n]/u;
+
+function takeVoiceSentences(buffer: string, flush: boolean): { sentences: string[]; rest: string } {
+  const sentences: string[] = [];
+  let start = 0;
+  for (let index = 0; index < buffer.length; index += 1) {
+    const character = buffer[index];
+    if (!character || !VOICE_SENTENCE_END.test(character)) continue;
+    if (
+      character === "." &&
+      index > 0 &&
+      index + 1 < buffer.length &&
+      buffer[index - 1] >= "0" &&
+      buffer[index - 1] <= "9" &&
+      buffer[index + 1] >= "0" &&
+      buffer[index + 1] <= "9"
+    ) {
+      continue;
+    }
+    let end = index + 1;
+    while (end < buffer.length && /["')\]]/u.test(buffer[end] ?? "")) end += 1;
+    const after = buffer[end];
+    if (!flush && after !== undefined && character !== "\n" && !/\s/u.test(after)) continue;
+    if (!flush && after === undefined) break;
+    const sentence = buffer.slice(start, end).replace(/\s+/g, " ").trim();
+    if (sentence) sentences.push(sentence);
+    start = end;
+    while (start < buffer.length && /\s/u.test(buffer[start] ?? "")) start += 1;
+    index = start - 1;
+  }
+  const rest = buffer.slice(start);
+  if (flush) {
+    const tail = rest.replace(/\s+/g, " ").trim();
+    if (tail) sentences.push(tail);
+    return { sentences, rest: "" };
+  }
+  return { sentences, rest };
+}
+
+function voiceSse(payload: Record<string, unknown>) {
+  return `data: ${JSON.stringify(payload)}\n\n`;
+}
+
+/**
+ * Voice Chat only. Text chat keeps the buffered JSON response below.
+ * Sentences are emitted as the model writes them, including Telugu/Hindi dandas.
+ */
+function streamVoiceOpenAIAnswer(options: {
+  apiKey: string;
+  systemPrompt: string;
+  content: unknown;
+  timeoutMs: number;
+  signal: AbortSignal;
+  configuredLanguage: string;
+  maxOutputTokens: number;
+}) {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (payload: Record<string, unknown>) => {
+        controller.enqueue(encoder.encode(voiceSse(payload)));
+      };
+      const abortController = new AbortController();
+      const timeoutId = setTimeout(() => abortController.abort(), options.timeoutMs);
+      const onClientAbort = () => abortController.abort();
+      options.signal.addEventListener("abort", onClientAbort);
+      let announcedText = false;
+      let spoken = "";
+      const emitSentences = (incoming: string[], flush: boolean) => {
+        const pulled = takeVoiceSentences(incoming.join(""), flush);
+        for (const sentence of pulled.sentences) {
+          if (!announcedText) {
+            announcedText = true;
+            send({ type: "text" });
+          }
+          send({ type: "sentence", text: sentence });
+        }
+        return pulled.rest;
+      };
+      try {
+        const openaiResponse = await fetch(OPENAI_RESPONSES_URL, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${options.apiKey}`,
+            "Content-Type": "application/json",
+          },
+          signal: abortController.signal,
+          body: JSON.stringify({
+            model: OPENAI_MODEL,
+            instructions: options.systemPrompt.trim(),
+            input: [{ role: "user", content: options.content }],
+            reasoning: { effort: "low" },
+            max_output_tokens: options.maxOutputTokens,
+            stream: true,
+          }),
+        });
+        if (!openaiResponse.ok) {
+          const errText = await openaiResponse.text();
+          let parsed: unknown = null;
+          try {
+            parsed = errText ? JSON.parse(errText) : null;
+          } catch {
+            parsed = { error: { message: errText } };
+          }
+          const { message } = parseOpenAIError(openaiResponse.status, parsed);
+          send({ type: "error", error: message || "Unable to reach LLM provider." });
+          return;
+        }
+        if (!openaiResponse.body) {
+          send({ type: "error", error: "Invalid response from LLM provider." });
+          return;
+        }
+        const reader = openaiResponse.body.getReader();
+        const decoder = new TextDecoder();
+        let pending = "";
+        let carry = "";
+        let completedText = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          pending += decoder.decode(value, { stream: true });
+          const blocks = pending.split("\n\n");
+          pending = blocks.pop() ?? "";
+          for (const block of blocks) {
+            const data = block
+              .split("\n")
+              .filter((line) => line.startsWith("data:"))
+              .map((line) => line.slice(5).trim())
+              .join("\n");
+            if (!data || data === "[DONE]") continue;
+            let event: Record<string, unknown>;
+            try {
+              event = JSON.parse(data) as Record<string, unknown>;
+            } catch {
+              continue;
+            }
+            if (event.type === "response.output_text.delta" && typeof event.delta === "string") {
+              if (!announcedText && event.delta.trim()) {
+                announcedText = true;
+                send({ type: "text" });
+              }
+              carry += event.delta;
+              spoken += event.delta;
+              const pulled = takeVoiceSentences(carry, false);
+              carry = pulled.rest;
+              for (const sentence of pulled.sentences) send({ type: "sentence", text: sentence });
+            } else if (event.type === "response.output_text.done" && typeof event.text === "string") {
+              completedText = event.text;
+            } else if (event.type === "response.completed" && event.response && typeof event.response === "object") {
+              const extracted = extractOpenAIOutputText(event.response as Record<string, unknown>).trim();
+              if (extracted) completedText = extracted;
+            } else if (typeof event.error === "object" && event.error) {
+              const message = (event.error as { message?: unknown }).message;
+              throw new Error(typeof message === "string" ? message : "LLM stream failed.");
+            }
+          }
+        }
+        const full = (completedText || spoken).trim();
+        const answer = (full
+          ? clarificationInConfiguredLanguage(full, options.configuredLanguage)
+          : buildEmptyModelAnswerFallback(options.configuredLanguage)).trim();
+        if (full && answer !== full) {
+          // A short clarification can replace the model's wording. The client
+          // speaks it only when playback has not started.
+          send({ type: "replace", text: answer });
+        } else if (!spoken.trim()) {
+          emitSentences([answer], true);
+        } else if (carry.trim()) {
+          emitSentences([carry], true);
+        }
+        if (!announcedText && answer) send({ type: "text" });
+        send({ type: "done", answer });
+      } catch (error) {
+        if (abortController.signal.aborted || options.signal.aborted) return;
+        const message = error instanceof Error ? error.message : "Unable to reach LLM provider.";
+        send({ type: "error", error: message });
+      } finally {
+        clearTimeout(timeoutId);
+        options.signal.removeEventListener("abort", onClientAbort);
+        controller.close();
+      }
+    },
+  });
+  return new Response(stream, {
+    status: 200,
+    headers: {
+      ...corsHeaders,
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      "X-Accel-Buffering": "no",
+    },
+  });
+}
+
 function jsonResponse(
   body: Record<string, unknown>,
   status = 200,
@@ -1872,6 +2068,15 @@ function jsonResponse(
       "Content-Type": "application/json",
     },
   });
+}
+
+function clientMessageCreatedAt(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) return null;
+  const now = Date.now();
+  if (time > now + 60_000 || now - time > 24 * 60 * 60 * 1000) return null;
+  return new Date(time).toISOString();
 }
 
 function isValidUuid(value: unknown): value is string {
@@ -3251,12 +3456,26 @@ If this is a normal water/feed question with no prior health context, do not men
       return await packageDocumentExport(previousAnswerForExport);
     }
 
-    const controller = new AbortController();
     const timeoutMs = documentExportQuestion
       ? OPENAI_DOCUMENT_EXPORT_TIMEOUT_MS
       : successfulAttachments.length > 0
         ? OPENAI_ATTACHMENT_TIMEOUT_MS
         : OPENAI_TIMEOUT_MS;
+
+    // Voice Chat streams sentences. Text chat and document export stay JSON.
+    if (inputMode === "voice" && !documentExportQuestion) {
+      return streamVoiceOpenAIAnswer({
+        apiKey,
+        systemPrompt,
+        content,
+        timeoutMs,
+        signal: req.signal,
+        configuredLanguage,
+        maxOutputTokens: successfulAttachments.length > 0 ? 1100 : 900,
+      });
+    }
+
+    const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     const sanitizedContent = content.map((part) => {

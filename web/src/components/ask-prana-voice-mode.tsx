@@ -13,16 +13,23 @@ import {
 import Feather from "@expo/vector-icons/Feather";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ASK_PRANA_FONT_FAMILY } from "../constants/ask-prana-typography";
-import type { AskPranaRequestContext } from "../services/ask-prana";
+import {
+  isAskPranaAbortError,
+  type AskPranaRequestContext,
+  type AskPranaVoiceHandlers,
+} from "../services/ask-prana";
 import {
   ASK_PRANA_LANGUAGE_OPTIONS,
   getAskPranaLanguageOption,
   type AskPranaSpeechLanguageCode,
 } from "../lib/ask-prana-language";
 import {
-  speakAskPranaText,
+  createAskPranaSpeechQueue,
+  resetAskPranaVoiceSpeechSession,
   stopAskPranaSpeech,
+  type AskPranaSpeechQueue,
 } from "../lib/ask-prana-speech";
+import { splitCompleteSentences } from "../lib/ask-prana-sentences";
 import { transcribeAskPranaAudio } from "../services/ask-prana";
 import {
   setVoiceAutoStopListener,
@@ -100,6 +107,7 @@ type Props = {
   onAsk: (
     question: string,
     context: AskPranaRequestContext,
+    handlers?: AskPranaVoiceHandlers,
   ) => Promise<{ answer: string; language: AskPranaSpeechLanguageCode } | null>;
   onLanguageChange: (code: AskPranaSpeechLanguageCode) => Promise<void>;
   onOpenMenu?: () => void;
@@ -535,6 +543,9 @@ export function AskPranaVoiceModeModal({
   const [languageMenuOpen, setLanguageMenuOpen] = useState(false);
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const [captionsVisible, setCaptionsVisible] = useState(false);
+  const [slowAnswer, setSlowAnswer] = useState(false);
+  const [submittedQuestion, setSubmittedQuestion] = useState<string | null>(null);
+  const [retryQuestion, setRetryQuestion] = useState<string | null>(null);
   const [activeLanguage, setActiveLanguage] =
     useState<AskPranaSpeechLanguageCode>(language);
   const loopArmedRef = useRef(false);
@@ -563,6 +574,9 @@ export function AskPranaVoiceModeModal({
   /** Lets the barge-in monitor (declared earlier) end the interrupting turn. */
   const finishListeningTurnRef = useRef<() => Promise<void>>(async () => {});
   const speechTurnRef = useRef(0);
+  const speechQueueRef = useRef<AskPranaSpeechQueue | null>(null);
+  const requestLockRef = useRef(false);
+  const requestLockIdRef = useRef(0);
   const speechEndedAtRef = useRef<number | null>(null);
   /** Invalidates callbacks from a closed/reopened modal session. */
   const voiceSessionIdRef = useRef(0);
@@ -832,6 +846,8 @@ export function AskPranaVoiceModeModal({
             speechTurnRef.current += 1;
             setState("interrupted");
             stateRef.current = "interrupted";
+            speechQueueRef.current?.cancel();
+            speechQueueRef.current = null;
             void stopAskPranaSpeech();
             void interruptListeningRef.current();
           }
@@ -888,6 +904,10 @@ export function AskPranaVoiceModeModal({
     listeningAttemptRef.current += 1;
     turnInFlightRef.current = false;
     speechTurnRef.current += 1;
+    speechQueueRef.current?.cancel();
+    speechQueueRef.current = null;
+    resetAskPranaVoiceSpeechSession();
+    onCancelAsk?.();
     logVoiceLifecycle("session-closed", { sessionId: closingSessionId });
     stopBargeInMonitor();
     // The parent also cancels on its close handler, but keeping teardown here
@@ -896,7 +916,7 @@ export function AskPranaVoiceModeModal({
     await stopAskPranaSpeech();
     setState("idle");
     stateRef.current = "idle";
-  }, [onCancelListening, stopBargeInMonitor]);
+  }, [onCancelAsk, onCancelListening, stopBargeInMonitor]);
 
   const startListeningSafely = useCallback(
     async (reason: "open" | "resume" | "retry" | "interrupt" | "visibility") => {
@@ -994,6 +1014,7 @@ export function AskPranaVoiceModeModal({
 
     sessionActiveRef.current = true;
     voiceSessionIdRef.current += 1;
+    resetAskPranaVoiceSpeechSession();
     turnInFlightRef.current = false;
     loopArmedRef.current = true;
     logVoiceLifecycle("session-opened", { sessionId: voiceSessionIdRef.current });
@@ -1062,6 +1083,8 @@ export function AskPranaVoiceModeModal({
       if (!sessionActiveRef.current) return;
       const cleaned = (resume?.question ?? transcript).trim();
       if (!cleaned) return;
+      const lockId = ++requestLockIdRef.current;
+      requestLockRef.current = true;
       const turnStartedAt = performance.now();
       const speechEndedAt = speechEndedAtRef.current;
       speechEndedAtRef.current = null;
@@ -1070,131 +1093,156 @@ export function AskPranaVoiceModeModal({
         length: cleaned.length,
       });
       if (!resume) appendLine("user", cleaned);
+      setSubmittedQuestion(cleaned);
+      setRetryQuestion(cleaned);
       setState("processing");
       stateRef.current = "processing";
       setErrorText(null);
       // This turn owns the conversation until the user interrupts, taps the
       // orb, types, mutes or changes language (each bumps speechTurnRef).
       const turnToken = ++speechTurnRef.current;
+      const turnId = `${voiceSessionIdRef.current}-${turnToken}`;
+      const logTurn = (stage: string, detail?: Record<string, unknown>) => {
+        if (process.env.NODE_ENV === "production") return;
+        console.debug("[AskPranaVoiceTiming]", stage, {
+          turnId,
+          at: Math.round(performance.now()),
+          ...detail,
+        });
+      };
+      if (speechEndedAt != null) {
+        logTurn("speech-ended", { speechEndedAt: Math.round(speechEndedAt) });
+      }
       try {
-        if (speechEndedAt != null && process.env.NODE_ENV !== "production") {
-          console.debug("[AskPranaVoiceTiming] speech-end-to-ai-request", {
-            elapsedMs: Math.round(performance.now() - speechEndedAt),
-          });
-        }
-        logVoiceTiming("ai-request-start", turnStartedAt);
+        logTurn("ai-request-started");
+        logVoiceTiming("ai-request-start", turnStartedAt, { turnId });
         console.log("[AskPranaVoice] ask started");
+        speechQueueRef.current?.cancel();
+        await stopAskPranaSpeech();
+        if (turnToken !== speechTurnRef.current || !sessionActiveRef.current) return;
+        const replyLanguage = activeLanguage;
+        let receivedSentence = false;
+        let playbackStarted = false;
+        const queue = createAskPranaSpeechQueue(replyLanguage, {
+          voiceSession: true,
+          keepMicrophoneActive: true,
+          shouldPlay: () =>
+            sessionActiveRef.current &&
+            !mutedRef.current &&
+            turnToken === speechTurnRef.current,
+          onPlaybackStart: () => {
+            if (turnToken !== speechTurnRef.current) return;
+            playbackStarted = true;
+            bargeInPlaybackStartedAtRef.current = Date.now();
+            setState("speaking");
+            stateRef.current = "speaking";
+            logTurn("first-playback", {
+              speechEndToFirstAudioMs:
+                speechEndedAt == null ? null : Math.round(performance.now() - speechEndedAt),
+            });
+            logVoiceTiming("audio-playback-requested", turnStartedAt, { turnId });
+          },
+        });
+        speechQueueRef.current = queue;
+        const rememberSentence = (sentence: string) => {
+          setLines((current) => {
+            const id = `assistant-${turnToken}`;
+            const last = current[current.length - 1];
+            if (last?.id === id) {
+              return [...current.slice(0, -1), { ...last, text: `${last.text} ${sentence}`.trim() }];
+            }
+            return [...current, { id, role: "assistant", text: sentence }];
+          });
+        };
         const askPromise = resume?.promise ?? onAsk(cleaned, {
           ...requestContext,
           // Voice header language (e.g. తెలుగు) must drive replies even if STT is messy.
           sessionLanguageCode: activeLanguage,
           language: getAskPranaLanguageOption(activeLanguage).llmLabel,
+        }, {
+          turnId,
+          onFirstText: () => logTurn("first-text-received"),
+          onSentence: (sentence) => {
+            if (turnToken !== speechTurnRef.current || resume) return;
+            if (!receivedSentence) {
+              receivedSentence = true;
+              logTurn("first-sentence-ready", { chars: sentence.length });
+            }
+            rememberSentence(sentence);
+            queue.enqueue(sentence);
+          },
+          onReplace: (text) => {
+            if (turnToken !== speechTurnRef.current || playbackStarted) return;
+            queue.replaceUnplayed(text);
+          },
         });
         pendingAskRef.current = { question: cleaned, promise: askPromise };
-        // Keep listening while Thinking so the user can change or correct the
-        // question. Not awaited: the request is already on its way.
         if (!mutedRef.current) void startBargeInMonitor();
         const result = await askPromise;
         if (pendingAskRef.current?.promise === askPromise) pendingAskRef.current = null;
-        // The user spoke, tapped the orb or typed while this was loading; the
-        // newer turn owns the conversation now.
-        if (turnToken !== speechTurnRef.current) return;
-        if (!sessionActiveRef.current) return;
+        if (turnToken !== speechTurnRef.current) {
+          queue.cancel();
+          return;
+        }
+        if (!sessionActiveRef.current) {
+          queue.cancel();
+          return;
+        }
+        logTurn("full-response-completed", { answerLength: result?.answer?.trim().length ?? 0 });
         if (!result?.answer?.trim()) {
+          queue.cancel();
           stopBargeInMonitor();
-          // A null result is now reserved for a stale/cancelled request. The
-          // submitted user message stays in chat; do not send it again, but
-          // restore Listening so the conversation is not stranded in Error.
           console.warn("[AskPranaVoice] voice request returned no answer", {
             sessionId: voiceSessionIdRef.current,
             state: stateRef.current,
           });
           turnInFlightRef.current = false;
-          // A null result is also used when a stale request is deliberately
-          // discarded during a handoff. It is not evidence that the farmer
-          // interrupted playback, so do not show a false red failure.
-          // Never go back to Listening in silence: say what happened.
-          const resumed = await startListeningSafely("retry");
-          setErrorText(
-            resumed
-              ? "I didn't get an answer for that. Please ask again."
-              : "Listening could not restart. Tap the orb to try again.",
-          );
+          setState("error");
+          stateRef.current = "error";
+          setErrorText("I didn't get an answer for that. Please ask again.");
           return;
         }
         const cleanedAnswer = result.answer.trim();
-        const responseReceivedAt = performance.now();
         logVoiceTiming("ai-response-complete", turnStartedAt, {
           answerLength: cleanedAnswer.length,
+          turnId,
         });
-        if (process.env.NODE_ENV !== "production") {
-          console.debug("[AskPranaVoiceTiming] ai-response-first-and-complete-buffered", {
-            elapsedMs: Math.round(responseReceivedAt - turnStartedAt),
-          });
-        }
         if (/^no response received\.?$/i.test(cleanedAnswer)) {
+          queue.cancel();
           stopBargeInMonitor();
           setState("error");
-          setErrorText(
-            "Ask Prana could not finish that answer. Tap the orb to try again.",
-          );
+          stateRef.current = "error";
+          setErrorText("Ask Prana could not finish that answer. Tap Retry to ask again.");
           appendLine(
             "assistant",
             "Sorry — I could not finish that answer just now. Please ask again.",
           );
           return;
         }
-        // The Voice Mode header is an explicit user selection. A reply's text
-        // must never change it (for example, Telugu → Tamil/English).
-        const replyLanguage = activeLanguage;
         console.log("[AskPranaVoice] ask ok", {
           answerLength: cleanedAnswer.length,
           replyLanguage,
         });
-        appendLine("assistant", cleanedAnswer);
+        if (!receivedSentence || resume) {
+          for (const sentence of splitCompleteSentences(cleanedAnswer)) {
+            rememberSentence(sentence);
+            queue.enqueue(sentence);
+          }
+        }
         if (mutedRef.current) {
+          queue.cancel();
           stopBargeInMonitor();
           setErrorText(null);
           setState("muted");
           stateRef.current = "muted";
           return;
         }
-        setState("speaking");
-        stateRef.current = "speaking";
-        logVoiceTiming("tts-request-start", turnStartedAt, { replyLanguage });
-        console.log("[AskPranaVoice] speak started", { replyLanguage });
-        // Acquire VAD and its rolling pre-buffer before output begins. The
-        // previous playback callback left a device-start gap at reply onset.
-        // The turn was claimed before the request, so an interruption during
-        // Thinking or while the reply is being prepared cancels it instead of
-        // being silently overwritten. The monitor is usually already running.
-        const speechTurn = turnToken;
+        queue.close();
         await startBargeInMonitor();
-        if (speechTurn !== speechTurnRef.current || !sessionActiveRef.current) return;
-        const spoken = await speakAskPranaText(cleanedAnswer, replyLanguage, {
-          shouldPlay: () =>
-            sessionActiveRef.current &&
-            !mutedRef.current &&
-            speechTurn === speechTurnRef.current,
-          onPlaybackStart: () => {
-            if (speechTurn === speechTurnRef.current) {
-              bargeInPlaybackStartedAtRef.current = Date.now();
-            }
-            // This marks playback being handed to the platform. Browsers do not
-            // expose a reliable cross-engine first-sample callback.
-            logVoiceTiming("audio-playback-requested", turnStartedAt);
-            if (process.env.NODE_ENV !== "production") {
-              console.debug("[AskPranaVoiceTiming] response-to-playback-requested", {
-                elapsedMs: Math.round(performance.now() - responseReceivedAt),
-              });
-            }
-          },
-          keepMicrophoneActive: true,
-        });
-        // A newer owner (barge-in, orb tap, typed message, language change)
-        // has already started the next turn. Restarting listening here would
-        // collide with it and drop the user's interrupting question.
-        if (speechTurn !== speechTurnRef.current) return;
+        if (turnToken !== speechTurnRef.current || !sessionActiveRef.current) return;
+        const spoken = await queue.done;
+        if (speechQueueRef.current === queue) speechQueueRef.current = null;
+        if (turnToken !== speechTurnRef.current) return;
         stopBargeInMonitor();
         if (!sessionActiveRef.current) return;
         if (mutedRef.current || spoken.reason === "interrupted") {
@@ -1206,16 +1254,19 @@ export function AskPranaVoiceModeModal({
           }
         } else if (!spoken.spoke) {
           console.log("[AskPranaVoice] speak failed", spoken.reason);
-          // Show the answer on screen so it is not lost when audio fails.
           setCaptionsVisible(true);
+          setState("error");
+          stateRef.current = "error";
           setErrorText(
             spoken.reason ||
-              "Could not play speech. The reply is shown above — listening continues.",
+              "Could not play speech. The reply is shown above.",
           );
+          return;
         } else {
-          logVoiceTiming("voice-turn-complete", turnStartedAt, { provider: spoken.provider });
+          logVoiceTiming("voice-turn-complete", turnStartedAt, { provider: spoken.provider, turnId });
           console.log("[AskPranaVoice] speak finished", { provider: spoken.provider });
           setErrorText(null);
+          setRetryQuestion(null);
         }
         if (mutedRef.current || !sessionActiveRef.current) {
           setErrorText(null);
@@ -1227,15 +1278,20 @@ export function AskPranaVoiceModeModal({
         await startListeningSafely("resume");
       } catch (error) {
         console.log("[AskPranaVoice] turn failed:", error);
+        speechQueueRef.current?.cancel();
         if (!sessionActiveRef.current) return;
         if (turnToken !== speechTurnRef.current) return;
+        if (isAskPranaAbortError(error)) return;
         stopBargeInMonitor();
         setState("error");
+        stateRef.current = "error";
         setErrorText(
           error instanceof Error
             ? error.message
             : "Voice turn failed. You can keep using text chat.",
         );
+      } finally {
+        if (requestLockIdRef.current === lockId) requestLockRef.current = false;
       }
     },
     [
@@ -1322,6 +1378,12 @@ export function AskPranaVoiceModeModal({
         turnId,
         transcriptLength: transcript.trim().length,
       });
+      if (process.env.NODE_ENV !== "production") {
+        console.debug("[AskPranaVoiceTiming]", "transcript-finalized", {
+          turnId: `${sessionId}-${turnId}`,
+          at: Math.round(performance.now()),
+        });
+      }
       await runTurnFromTranscript(transcript.trim());
     } catch (error) {
       console.log("[AskPranaVoice] finish listen failed:", error);
@@ -1368,6 +1430,8 @@ export function AskPranaVoiceModeModal({
         speechTurnRef.current += 1;
         heldAskRef.current = null;
         pendingAskRef.current = null;
+        speechQueueRef.current?.cancel();
+        speechQueueRef.current = null;
         stopBargeInMonitor();
         onCancelAsk?.();
         await stopAskPranaSpeech();
@@ -1382,7 +1446,10 @@ export function AskPranaVoiceModeModal({
     try {
       if (current === "speaking") {
         speechTurnRef.current += 1;
+        speechQueueRef.current?.cancel();
+        speechQueueRef.current = null;
         stopBargeInMonitor();
+        onCancelAsk?.();
         await stopAskPranaSpeech();
         await startListeningSafely("interrupt");
         return;
@@ -1418,7 +1485,10 @@ export function AskPranaVoiceModeModal({
     if (next) {
       await onCancelListening();
       speechTurnRef.current += 1;
+      speechQueueRef.current?.cancel();
+      speechQueueRef.current = null;
       stopBargeInMonitor();
+      onCancelAsk?.();
       await stopAskPranaSpeech();
       setErrorText(null);
       setState("muted");
@@ -1427,7 +1497,7 @@ export function AskPranaVoiceModeModal({
     }
     await stopAskPranaSpeech();
     await startListeningSafely("resume");
-  }, [onCancelListening, startListeningSafely, stopBargeInMonitor]);
+  }, [onCancelAsk, onCancelListening, startListeningSafely, stopBargeInMonitor]);
 
   const handleEnd = useCallback(async () => {
     await cleanupSession();
@@ -1444,14 +1514,17 @@ export function AskPranaVoiceModeModal({
       setLanguageMenuOpen(false);
       setErrorText(null);
       speechTurnRef.current += 1;
+      speechQueueRef.current?.cancel();
+      speechQueueRef.current = null;
       stopBargeInMonitor();
+      onCancelAsk?.();
       await stopAskPranaSpeech();
       await onLanguageChange(code);
       if (!sessionActiveRef.current) return;
       setActiveLanguage(code);
       await startListeningSafely("resume");
     },
-    [activeLanguage, onLanguageChange, startListeningSafely, stopBargeInMonitor],
+    [activeLanguage, onCancelAsk, onLanguageChange, startListeningSafely, stopBargeInMonitor],
   );
 
   const handleSendTyped = useCallback(async () => {
@@ -1461,6 +1534,8 @@ export function AskPranaVoiceModeModal({
     onChangeDraft("");
     speechTurnRef.current += 1;
     heldAskRef.current = null;
+    speechQueueRef.current?.cancel();
+    speechQueueRef.current = null;
     if (pendingAskRef.current) {
       // A typed question replaces one that is still loading.
       pendingAskRef.current = null;
@@ -1507,11 +1582,31 @@ export function AskPranaVoiceModeModal({
     return () => onRegisterActions?.(null);
   }, [visible, variant, handleMuteToggle, handleEnd, handleSendTyped, onRegisterActions]);
 
+  useEffect(() => {
+    if (state !== "processing") {
+      setSlowAnswer(false);
+      return;
+    }
+    const timer = setTimeout(() => setSlowAnswer(true), 8_000);
+    return () => clearTimeout(timer);
+  }, [state]);
+
+  const handleRetry = useCallback(() => {
+    if (requestLockRef.current || stateRef.current === "processing" || stateRef.current === "speaking") {
+      return;
+    }
+    const question = retryQuestion?.trim();
+    if (!question) return;
+    void runTurnFromTranscript(question);
+  }, [retryQuestion, runTurnFromTranscript]);
+
   const statusLabel = (() => {
     if (state === "listening") return "Listening…";
-    if (state === "processing") return "Thinking… Tap the orb to cancel.";
-    if (state === "finalizing" || isTranscribing || isSending) return "Thinking…";
-    if (state === "speaking") return "Speaking… Tap the orb to interrupt.";
+    if (state === "finalizing" || isTranscribing) return "Finishing your question…";
+    if (state === "processing") {
+      return slowAnswer ? "This is taking longer than usual…" : "Preparing your answer…";
+    }
+    if (state === "speaking") return "Speaking…";
     if (state === "interrupted") return "Listening…";
     if (state === "muted") return "Muted";
     if (state === "reconnecting") return "Reconnecting…";
@@ -1556,7 +1651,16 @@ export function AskPranaVoiceModeModal({
     return (
       <View pointerEvents="box-none" style={styles.overlayHost}>
         {orb}
+        {statusLabel ? <Text style={styles.status}>{statusLabel}</Text> : null}
+        {submittedQuestion ? (
+          <Text style={styles.overlayTranscript} numberOfLines={3}>{submittedQuestion}</Text>
+        ) : null}
         {errorText ? <Text style={styles.errorHint}>{errorText}</Text> : null}
+        {state === "error" && retryQuestion ? (
+          <Pressable onPress={handleRetry} style={styles.retryBtn} accessibilityRole="button" accessibilityLabel="Retry">
+            <Text style={styles.retryText}>Retry</Text>
+          </Pressable>
+        ) : null}
       </View>
     );
   }
@@ -1602,6 +1706,14 @@ export function AskPranaVoiceModeModal({
         <View style={styles.stage}>
           {orb}
           {statusLabel ? <Text style={styles.status}>{statusLabel}</Text> : null}
+          {submittedQuestion ? (
+            <Text style={styles.caption} numberOfLines={3}>{submittedQuestion}</Text>
+          ) : null}
+          {state === "error" && retryQuestion ? (
+            <Pressable onPress={handleRetry} style={styles.retryBtn} accessibilityRole="button" accessibilityLabel="Retry">
+              <Text style={styles.retryText}>Retry</Text>
+            </Pressable>
+          ) : null}
           {captionsVisible && lines.length ? (
             <Text style={styles.caption} numberOfLines={3}>
               {lines[lines.length - 1]?.text}
@@ -1789,6 +1901,20 @@ const styles = StyleSheet.create({
     fontSize: 13,
     textAlign: "center",
     paddingHorizontal: 16,
+  },
+  retryBtn: {
+    minHeight: 36,
+    borderRadius: 18,
+    backgroundColor: colors.primary,
+    paddingHorizontal: 16,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  retryText: {
+    color: colors.white,
+    fontFamily: ASK_PRANA_FONT_FAMILY,
+    fontSize: 14,
+    fontWeight: "600",
   },
   bottomBar: {
     flexDirection: "row",
