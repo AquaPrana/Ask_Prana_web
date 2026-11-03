@@ -2493,6 +2493,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
     pendingAttachmentUploadsRef.current.get(id)?.abort();
     pendingAttachmentUploadsRef.current.delete(id);
     setPendingAttachments((current) => current.filter((item) => item.id !== id));
+    setAttachmentError(null);
   }, []);
 
   const retryPendingAttachment = useCallback((id: string) => {

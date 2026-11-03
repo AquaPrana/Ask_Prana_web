@@ -1293,12 +1293,11 @@ export default function AskPranaScreen() {
                           ) : null}
                           <Pressable
                             onPress={() => removePendingAttachment(item.id)}
-                            disabled={isSending}
                             style={styles.pendingRemove}
                             accessibilityRole="button"
-                            accessibilityLabel="Remove attachment"
+                            accessibilityLabel={`Remove ${item.fileName}`}
                           >
-                            <Feather name="x" size={12} color={colors.white} />
+                            <Feather name="x" size={16} color={colors.white} />
                           </Pressable>
                           {item.status === "failed" && item.error ? <Text style={styles.pendingItemError} numberOfLines={2}>{item.error}</Text> : null}
                         </View>
@@ -2020,14 +2019,16 @@ const styles = StyleSheet.create({
   },
   pendingRemove: {
     position: "absolute",
-    top: -6,
-    right: -6,
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: colors.textDark,
+    top: -4,
+    right: -4,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "#111827",
     alignItems: "center",
     justifyContent: "center",
+    zIndex: 2,
+    elevation: 2,
   },
   pendingRetry: {
     position: "absolute",
