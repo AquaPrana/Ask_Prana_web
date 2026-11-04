@@ -9,9 +9,9 @@ const corsHeaders = {
 };
 
 const OPENAI_TRANSCRIBE_URL = "https://api.openai.com/v1/audio/transcriptions";
-/** whisper-1 is more reliable for browser MediaRecorder webm/opus than gpt-4o-mini-transcribe. */
-const OPENAI_TRANSCRIBE_MODEL = "whisper-1";
-const OPENAI_TRANSCRIBE_FALLBACK_MODEL = "gpt-4o-mini-transcribe";
+/** Current recorded-audio model. It returns provider-detected languages. */
+const OPENAI_TRANSCRIBE_MODEL = "gpt-transcribe";
+const SUPPORTED_AUDIO_LANGUAGES = ["te", "hi", "en"] as const;
 
 const AUDIO_MIME_BY_EXTENSION: Record<string, string> = {
   // .m4a is an MPEG-4 audio container. OpenAI accepts it reliably with the
@@ -36,6 +36,30 @@ function jsonResponse(body: Record<string, unknown>, status = 200) {
     status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
+}
+
+type TranscribeErrorCode =
+  | "APP_SESSION_INVALID"
+  | "INVALID_AUDIO"
+  | "TRANSCRIBE_CONFIG"
+  | "PROVIDER_AUTH"
+  | "PROVIDER_QUOTA"
+  | "PROVIDER_RATE_LIMIT"
+  | "PROVIDER_TIMEOUT"
+  | "PROVIDER_UNAVAILABLE"
+  | "PROVIDER_STREAM";
+
+function errorResponse(code: TranscribeErrorCode, status: number) {
+  return jsonResponse({ error: "Voice transcription is unavailable.", code }, status);
+}
+
+function providerFailure(status: number, body: string): { code: TranscribeErrorCode; status: number } {
+  const detail = body.toLowerCase();
+  if (status === 401 || status === 403) return { code: "PROVIDER_AUTH", status: 502 };
+  if (status === 429 && /(quota|credit|billing|insufficient)/.test(detail)) return { code: "PROVIDER_QUOTA", status: 503 };
+  if (status === 429) return { code: "PROVIDER_RATE_LIMIT", status: 429 };
+  if (status === 408 || status === 504) return { code: "PROVIDER_TIMEOUT", status: 504 };
+  return { code: "PROVIDER_UNAVAILABLE", status: 503 };
 }
 
 function extensionOf(fileName: string) {
@@ -127,18 +151,6 @@ function mapSttLanguage(raw: string): "en" | "te" | "hi" | null {
 }
 
 /**
- * One HTTP request calls whisper-1 at most twice, both times with `language`.
- * gpt-4o-mini-transcribe is used at most once, and only after a whisper API
- * failure. An empty whisper transcript does not switch models. One recording
- * uses one request, so the provider ceiling is 3.
- * Explicit te/hi/en is copied onto every call and is never replaced with null.
- */
-function containerWasAccepted(container: string, extension: string) {
-  const accepted = new Set(["webm", "mp4", "m4a", "wav", "ogg", "oga", "mpeg-4"]);
-  return accepted.has(container) || accepted.has(extension);
-}
-
-/**
  * Deployed with verify_jwt = false because Ask Prana issues opaque `ap_`
  * session tokens, so authenticate here the same way the ask-prana function
  * does. Without this the endpoint would spend OpenAI credits for anyone.
@@ -223,47 +235,74 @@ async function callOpenAiTranscribe(input: {
   const openAIForm = new FormData();
   openAIForm.append("file", input.file);
   openAIForm.append("model", input.model);
-  // Auto needs Whisper's detected language. json returns text only, so Auto
-  // uses verbose_json. An explicit te/hi/en request stays on that language.
-  openAIForm.append("response_format", input.language ? "json" : "verbose_json");
+  // Constrain only to the languages this product can safely answer. In Auto,
+  // the final event's language is provider audio evidence, not a script guess.
+  openAIForm.append("stream", "true");
   if (input.language) {
-    openAIForm.append("language", input.language);
+    openAIForm.append("languages[]", input.language);
+  } else {
+    for (const language of SUPPORTED_AUDIO_LANGUAGES) openAIForm.append("languages[]", language);
   }
 
-  const openaiResponse = await fetch(OPENAI_TRANSCRIBE_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${input.apiKey}`,
-    },
-    body: openAIForm,
-  });
-
-  const openaiBodyText = await openaiResponse.text();
-  let openaiData: Record<string, unknown> = {};
+  let openaiResponse: Response;
   try {
-    openaiData = openaiBodyText ? JSON.parse(openaiBodyText) : {};
+    openaiResponse = await fetch(OPENAI_TRANSCRIBE_URL, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${input.apiKey}` },
+      body: openAIForm,
+    });
   } catch {
     return {
       ok: false as const,
-      status: openaiResponse.status,
-      bodyText: openaiBodyText,
-      data: {} as Record<string, unknown>,
-      transcript: "",
-      detectedLanguage: null,
+      ...providerFailure(503, "network failure"),
     };
+  }
+  // HTTP errors are not streams; classify before consuming a possible body.
+  if (!openaiResponse.ok) {
+    const body = await openaiResponse.text().catch(() => "");
+    return { ok: false as const, ...providerFailure(openaiResponse.status, body) };
+  }
+
+  let bodyText = "";
+  try {
+    bodyText = await openaiResponse.text();
+  } catch {
+    return { ok: false as const, code: "PROVIDER_STREAM" as const, status: 502 };
+  }
+  const events: Record<string, unknown>[] = [];
+  for (const block of bodyText.split(/\r?\n\r?\n/)) {
+    const data = block.split(/\r?\n/).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trim()).join("\n");
+    if (!data) continue;
+    try {
+      const event = JSON.parse(data) as Record<string, unknown>;
+      if (!event || typeof event !== "object") throw new Error("invalid event");
+      events.push(event);
+    } catch {
+      return { ok: false as const, code: "PROVIDER_STREAM" as const, status: 502 };
+    }
+  }
+  const errorEvent = events.find((event) => event.type === "error" || event.error != null);
+  if (errorEvent) return { ok: false as const, ...providerFailure(503, "stream error") };
+  const doneEvents = events.filter((event) => event.type === "transcript.text.done");
+  // Partial deltas are never a completed question. Exactly one documented
+  // completion event is required, including for a valid but silent recording.
+  if (doneEvents.length !== 1) return { ok: false as const, code: "PROVIDER_STREAM" as const, status: 502 };
+  const openaiData = doneEvents[0];
+  if (typeof openaiData.text !== "string") {
+    return { ok: false as const, code: "PROVIDER_STREAM" as const, status: 502 };
   }
 
   const transcript =
     typeof openaiData.text === "string" ? openaiData.text.trim() : "";
-  const detectedLanguage = input.language ?? mapSttLanguage(
-    typeof openaiData.language === "string" ? openaiData.language : "",
-  );
+  const languages = Array.isArray(openaiData.languages) ? openaiData.languages : [];
+  const providerDetected = languages.length === 1 && languages[0] && typeof languages[0] === "object"
+    ? mapSttLanguage(String((languages[0] as Record<string, unknown>).code ?? ""))
+    : null;
+  // An explicit hint is not independent detection. Do not fabricate it here.
+  const detectedLanguage = input.language ? null : providerDetected;
 
   return {
     ok: openaiResponse.ok,
-    status: openaiResponse.status,
-    bodyText: openaiBodyText,
-    data: openaiData,
     transcript,
     detectedLanguage,
   };
@@ -277,21 +316,18 @@ serve(async (req) => {
   try {
     const userId = await authenticate(req);
     if (!userId) {
-      return jsonResponse({ error: "Invalid JWT or user not authenticated." }, 401);
+      return errorResponse("APP_SESSION_INVALID", 401);
     }
 
     const contentType = req.headers.get("content-type") ?? "";
     if (!contentType.toLowerCase().includes("multipart/form-data")) {
       console.error("[ask-prana-transcribe] expected multipart/form-data, got:", contentType);
-      return jsonResponse(
-        { error: "Voice transcription requires an audio file upload." },
-        400,
-      );
+      return errorResponse("INVALID_AUDIO", 400);
     }
 
     const incoming = await readMultipartAudio(req);
     if (!incoming) {
-      return jsonResponse({ error: "No audio file was received." }, 400);
+      return errorResponse("INVALID_AUDIO", 400);
     }
 
     if (!incoming.bytes || incoming.bytes.byteLength === 0 || incoming.size === 0) {
@@ -300,10 +336,7 @@ serve(async (req) => {
         incomingType: incoming.incomingType,
         size: incoming.size,
       });
-      return jsonResponse(
-        { error: "That voice message was empty. Please try recording again." },
-        400,
-      );
+      return errorResponse("INVALID_AUDIO", 400);
     }
 
     const actualContainer = detectAudioContainer(incoming.bytes);
@@ -319,27 +352,18 @@ serve(async (req) => {
         receivedContentType: incoming.incomingType,
         receivedFileSize: incoming.size,
       });
-      return jsonResponse(
-        { error: "The recording was not a supported audio container." },
-        400,
-      );
+      return errorResponse("INVALID_AUDIO", 400);
     }
 
     if (!OPENAI_AUDIO_EXTENSIONS.has(normalized.extension)) {
       console.error("[ask-prana-transcribe] unsupported audio extension:", normalized);
-      return jsonResponse(
-        { error: "That voice recording format isn't supported. Please try again." },
-        400,
-      );
+      return errorResponse("INVALID_AUDIO", 400);
     }
 
     const apiKey = Deno.env.get("OPENAI_API_KEY");
     if (!apiKey) {
       console.error("[ask-prana-transcribe] OPENAI_API_KEY missing");
-      return jsonResponse(
-        { error: "Transcription service is not configured." },
-        500,
-      );
+      return errorResponse("TRANSCRIBE_CONFIG", 503);
     }
 
     const openAIFile = new File([incoming.bytes], normalized.fileName, {
@@ -347,10 +371,6 @@ serve(async (req) => {
     });
     const sttLanguage = mapSttLanguage(incoming.language);
 
-    const whisperCalls = [
-      { model: OPENAI_TRANSCRIBE_MODEL, language: sttLanguage },
-      { model: OPENAI_TRANSCRIBE_MODEL, language: sttLanguage },
-    ];
     console.log("[AskPranaAudio] transcription started", {
       receivedFileName: incoming.fileName,
       receivedContentType: incoming.incomingType,
@@ -362,77 +382,22 @@ serve(async (req) => {
       sentFileSize: openAIFile.size,
       actualContainer,
       sttLanguage,
-      maxWhisperAttempts: whisperCalls.length,
+      maxProviderAttempts: 1,
     });
 
-    let providerAttempts = 0;
-    let whisperApiFailure = false;
-    let transcript = "";
-    let detectedLanguage: "en" | "te" | "hi" | null = null;
-    for (const attempt of whisperCalls) {
-      providerAttempts += 1;
-      const result = await callOpenAiTranscribe({
-        apiKey,
-        file: openAIFile,
-        model: attempt.model,
-        language: attempt.language,
-      });
-      if (!result.ok) whisperApiFailure = true;
-      if (result.transcript) {
-        transcript = result.transcript;
-        detectedLanguage = result.detectedLanguage;
-        break;
-      }
-      if (providerAttempts < whisperCalls.length) {
-        console.warn("[ask-prana-transcribe] whisper attempt had no transcript; retrying whisper-1 with the same language", {
-          status: result.status,
-          hadTranscript: false,
-          languageSent: attempt.language,
-          whisperApiFailure,
-        });
-      }
-    }
-
-    if (transcript || !whisperApiFailure) {
+    const result = await callOpenAiTranscribe({ apiKey, file: openAIFile, model: OPENAI_TRANSCRIBE_MODEL, language: sttLanguage });
+    if (result.ok) {
       return jsonResponse({
-        transcript,
+        transcript: result.transcript,
         languageSent: sttLanguage,
-        detectedLanguage: transcript ? detectedLanguage : null,
-        providerAttempts,
+        languageHint: sttLanguage,
+        detectedLanguage: result.detectedLanguage,
+        providerAttempts: 1,
       });
     }
-
-    providerAttempts += 1;
-    console.warn("[ask-prana-transcribe] whisper-1 API failed; trying the fallback model with the same language", {
-      languageSent: sttLanguage,
-      model: OPENAI_TRANSCRIBE_FALLBACK_MODEL,
-    });
-    const fallback = await callOpenAiTranscribe({
-      apiKey,
-      file: openAIFile,
-      model: OPENAI_TRANSCRIBE_FALLBACK_MODEL,
-      language: sttLanguage,
-    });
-    if (fallback.ok || containerWasAccepted(actualContainer, normalized.extension)) {
-      if (!fallback.ok) {
-        console.warn("[ask-prana-transcribe] fallback failed for an accepted container; asking the user to repeat", {
-          status: fallback.status,
-          container: actualContainer,
-          extension: normalized.extension,
-          languageSent: sttLanguage,
-          providerAttempts,
-        });
-      }
-      return jsonResponse({
-        transcript: fallback.ok ? fallback.transcript : "",
-        languageSent: sttLanguage,
-        detectedLanguage: fallback.ok ? fallback.detectedLanguage : null,
-        providerAttempts,
-      });
-    }
-
-    console.error("[ask-prana-transcribe] OpenAI API error", {
-      openaiStatus: fallback.status,
+    console.error("[ask-prana-transcribe] provider failed", {
+      code: result.code,
+      status: result.status,
       receivedContentType: incoming.incomingType,
       receivedFileName: incoming.fileName,
       receivedFileSize: incoming.size,
@@ -441,19 +406,9 @@ serve(async (req) => {
       sentFileSize: openAIFile.size,
       actualContainer,
     });
-    return jsonResponse(
-      {
-        error: "Unable to transcribe audio.",
-        detail:
-          typeof (fallback.data as { error?: { message?: string } })?.error
-            ?.message === "string"
-            ? (fallback.data as { error: { message: string } }).error.message
-            : undefined,
-      },
-      400,
-    );
+    return errorResponse(result.code, result.status);
   } catch (err) {
     console.error("[ask-prana-transcribe] unhandled error:", err);
-    return jsonResponse({ error: "Unable to transcribe audio." }, 500);
+    return errorResponse("PROVIDER_UNAVAILABLE", 503);
   }
 });

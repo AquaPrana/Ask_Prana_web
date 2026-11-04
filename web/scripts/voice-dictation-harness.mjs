@@ -213,35 +213,18 @@ try {
 
   for (const language of ["te", "hi", "en"]) {
     const attempts = planCloudTranscriptionAttempts(language);
-    assert(attempts.length === 2, `${language} should have two whisper attempts`);
+    assert(attempts.length === 1, `${language} should have one bounded provider attempt`);
     assert(
-      attempts.every((attempt) => attempt.model === "whisper-1" && attempt.language === language),
-      `${language} must stay on whisper-1 for both attempts`,
+      attempts.every((attempt) => attempt.model === "gpt-transcribe" && attempt.language === language),
+      `${language} must stay explicit on gpt-transcribe`,
     );
   }
   const automatic = planCloudTranscriptionAttempts(null);
   assert(
-    automatic.every((attempt) => attempt.model === "whisper-1" && attempt.language === null),
-    "automatic detection stays automatic on every whisper attempt",
+    automatic.every((attempt) => attempt.model === "gpt-transcribe" && attempt.language === null),
+    "automatic detection stays automatic on its provider request",
   );
-  assert(
-    shouldUseFallbackModel([
-      { ok: true, transcript: "" },
-      { ok: true, transcript: "" },
-    ]) === false,
-    "an empty whisper transcript does not call the fallback model",
-  );
-  assert(
-    shouldUseFallbackModel([{ ok: false, transcript: "" }]) === false,
-    "the fallback model waits until whisper-1 has been tried twice",
-  );
-  assert(
-    shouldUseFallbackModel([
-      { ok: false, transcript: "" },
-      { ok: false, transcript: "" },
-    ]) === true,
-    "a whisper API failure may use the fallback model once",
-  );
+  assert(shouldUseFallbackModel([{ ok: false, transcript: "" }]) === false, "provider failures do not create a hidden fallback request");
   assert(recognizedTranscriptionContainer("webm") === true, "Brave WebM is an accepted recording");
   assert(
     isRejectedAudioContainerError("That voice recording format isn't supported. Please try again.") === true,
@@ -266,7 +249,7 @@ try {
   assert(cloudTranscriptionLanguage("te") === "te", "Telugu cloud transcription uses te");
   assert(cloudTranscriptionLanguage("hi") === "hi", "Hindi cloud transcription uses hi");
   assert(cloudTranscriptionLanguage("en") === "en", "English cloud transcription uses en");
-  assert(MAX_PROVIDER_CALLS_PER_RECORDING === 3, "one recording may use at most three provider calls");
+  assert(MAX_PROVIDER_CALLS_PER_RECORDING === 1, "one recording may use at most one provider call");
 
   const teluguQuestion = "నా చెరువులో ఆక్సిజన్ తగ్గింది. ఏం చేయాలి?";
   const teluguFeed = "రొయ్యలు మేత తినడం లేదు. కారణం ఏమిటి?";
@@ -317,12 +300,12 @@ try {
   assert(resolveSpokenReplyLanguage({ mode: "auto", detected: "english" }) === "en", "Auto uses Whisper's English audio language");
   assert(resolveSpokenReplyLanguage({ mode: "auto", detected: "tamil" }) === null, "Auto does not accept an unsupported language when the transcript is missing");
   assert(resolveSpokenReplyLanguage({ mode: "auto", detected: null }) === null, "Auto does not guess from the website language when no transcript is present");
-  assert(resolveSpokenReplyLanguage({ mode: "auto", detected: null, transcript: teluguQuestion }) === "te", "a Telugu transcript is accepted when Whisper omits the language");
-  assert(resolveSpokenReplyLanguage({ mode: "auto", detected: null, transcript: "मेरे तालाब में ऑक्सीजन कम है। मुझे क्या करना चाहिए?" }) === "hi", "a Hindi transcript is accepted when Whisper omits the language");
-  assert(resolveSpokenReplyLanguage({ mode: "auto", detected: null, transcript: "The oxygen in my pond is low. What should I do?" }) === "en", "an English transcript is accepted when Whisper omits the language");
-  const acceptedTelugu = acceptSpokenQuestion({ mode: "auto", transcript: teluguQuestion, detected: null });
-  const acceptedHindi = acceptSpokenQuestion({ mode: "auto", transcript: "मेरे तालाब में ऑक्सीजन कम है।", detected: null });
-  const acceptedEnglish = acceptSpokenQuestion({ mode: "auto", transcript: "The oxygen in my pond is low. What should I do?", detected: null });
+  assert(resolveSpokenReplyLanguage({ mode: "auto", detected: null, transcript: teluguQuestion }) === null, "Auto without audio detection does not infer Telugu from script");
+  assert(resolveSpokenReplyLanguage({ mode: "auto", detected: null, transcript: "मेरे तालाब में ऑक्सीजन कम है। मुझे क्या करना चाहिए?" }) === null, "Auto + Devanagari transcript does not select Hindi");
+  assert(resolveSpokenReplyLanguage({ mode: "auto", detected: null, transcript: "The oxygen in my pond is low. What should I do?" }) === null, "Auto + Latin transcript does not select English");
+  const acceptedTelugu = acceptSpokenQuestion({ mode: "auto", transcript: teluguQuestion, detected: "te" });
+  const acceptedHindi = acceptSpokenQuestion({ mode: "auto", transcript: "मेरे तालाब में ऑक्सीजन कम है।", detected: "hi" });
+  const acceptedEnglish = acceptSpokenQuestion({ mode: "auto", transcript: "The oxygen in my pond is low. What should I do?", detected: "en" });
   const emptyQuestion = acceptSpokenQuestion({ mode: "auto", transcript: "   ", detected: "telugu" });
   const explicitTelugu = acceptSpokenQuestion({ mode: "te", transcript: devanagariMisread, detected: "hi" });
   assert(acceptedTelugu.action === "accept" && acceptedTelugu.language === "te" && acceptedTelugu.text === teluguQuestion, "a Telugu question is sent to Ask Prana");
@@ -337,13 +320,19 @@ try {
   assert(isStaleVoiceCapture(null, 3) === true, "a missing capture cannot be transcribed");
 
   const edge = readFileSync(new URL("../../supabase/functions/ask-prana-transcribe/index.ts", import.meta.url), "utf8");
-  assert(!edge.includes("language: null"), "the transcribe function must not drop an explicit language");
-  assert(edge.includes("language: attempt.language"), "each whisper call uses the resolved language");
-  assert(edge.includes("language: sttLanguage"), "the fallback model uses the resolved language");
-  assert(edge.includes("if (!result.ok) whisperApiFailure = true"), "an empty whisper transcript is not an API failure");
-  assert(edge.includes("if (transcript || !whisperApiFailure)"), "an empty whisper result returns without the fallback model");
-  assert(edge.includes("containerWasAccepted(actualContainer, normalized.extension)"), "an accepted container does not become a format error");
-  assert(edge.includes('input.language ? "json" : "verbose_json"'), "Auto transcription asks Whisper for the detected audio language");
+  assert(edge.includes('const OPENAI_TRANSCRIBE_MODEL = "gpt-transcribe"'), "recorded audio uses the current transcription model");
+  assert(edge.includes('openAIForm.append("stream", "true")'), "Auto receives the provider final detection event");
+  assert(edge.includes("SUPPORTED_AUDIO_LANGUAGES"), "Auto detection is bounded to Telugu, Hindi, and English");
+  assert(edge.includes("const detectedLanguage = input.language ? null : providerDetected"), "an explicit hint is not reported as independent detection");
+  assert(edge.includes('event.type === "transcript.text.done"'), "only the documented completion event completes streaming transcription");
+  assert(edge.includes('doneEvents.length !== 1'), "partial, malformed, or incomplete streams fail rather than returning partial text");
+  assert(edge.includes('event.type === "error" || event.error != null'), "provider stream error events remain service failures");
+  assert(edge.includes('if (!openaiResponse.ok)'), "provider HTTP failure is checked before stream consumption");
+  assert(edge.includes('"PROVIDER_QUOTA"'), "quota failures have a stable error code");
+  assert(edge.includes('"PROVIDER_RATE_LIMIT"'), "rate limits have a stable error code");
+  assert(edge.includes('"PROVIDER_AUTH"'), "provider authentication has a stable error code");
+  assert(edge.includes('"APP_SESSION_INVALID"'), "invalid app sessions have a stable error code");
+  assert(!edge.includes("containerWasAccepted"), "accepted WebM bytes cannot convert a provider failure into success");
   assert(edge.includes('value.startsWith("te-")'), "te-IN stays Telugu in the edge function");
   assert(edge.includes('value.startsWith("hi-")'), "hi-IN stays Hindi in the edge function");
   assert(edge.includes('value.startsWith("en-")'), "en-IN stays English in the edge function");

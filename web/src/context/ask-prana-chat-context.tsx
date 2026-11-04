@@ -423,6 +423,20 @@ function voiceErrorMessage(error: unknown) {
   if (detail === "VOICE_FORMAT" || normalized.includes("unsupported audio")) {
     return "That voice recording format isn't supported. Please try again.";
   }
+  if (detail === "VOICE_SESSION") {
+    return "Your sign-in session has expired. Please sign in again.";
+  }
+  if (detail === "VOICE_CREDITS") {
+    return "Speech service credits are unavailable right now. Please try again later.";
+  }
+  if (detail === "VOICE_RATE_LIMIT") {
+    return "The speech service is temporarily busy. Please wait a moment and tap Retry.";
+  }
+  if (detail === "VOICE_TIMEOUT" || detail === "VOICE_SERVICE" || detail === "VOICE_SERVICE_AUTH") {
+    return detail === "VOICE_SERVICE_AUTH"
+      ? "The speech service is temporarily unavailable. Please try again later."
+      : "The speech service is temporarily unavailable. Tap Retry.";
+  }
   if (
     detail === "VOICE_NETWORK" ||
     normalized.includes("failed to fetch") ||

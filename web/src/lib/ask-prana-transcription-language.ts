@@ -1,26 +1,15 @@
-import {
-  detectMessageLanguageHint,
-  getAskPranaLanguageOption,
-  isPredominantlyLatinMessage,
-  type AskPranaSpeechLanguageCode,
-} from "./ask-prana-language";
+import { getAskPranaLanguageOption, type AskPranaSpeechLanguageCode } from "./ask-prana-language";
 
 /**
  * Attempt budget for one Voice Chat recording.
  *
- * One HTTP request may call whisper-1 twice, both times with that request's
- * language. Explicit `te`, `hi`, or `en` is never replaced with automatic
- * detection. gpt-4o-mini-transcribe is called at most once, and only after a
- * whisper-1 API failure. An empty whisper transcript does not use it.
- *
- * The client sends one request per recording. A non-empty Telugu, Hindi, or
- * English transcript is kept; it is not discarded for a second request.
- * Maximum provider calls for one recording: 3.
+ * The client sends exactly one gpt-transcribe request per recording. Explicit
+ * `te`, `hi`, or `en` is never replaced with automatic detection. Auto is
+ * constrained to the three supported input languages and remains unresolved
+ * if the provider cannot identify one. Maximum provider calls: 1.
  */
-export const WHISPER_CALLS_PER_REQUEST = 2;
-export const FALLBACK_CALLS_PER_REQUEST = 1;
-export const CLOUD_TRANSCRIPTION_ATTEMPTS_PER_REQUEST =
-  WHISPER_CALLS_PER_REQUEST + FALLBACK_CALLS_PER_REQUEST;
+/** gpt-transcribe detects one bounded recording once; it is not retried blindly. */
+export const CLOUD_TRANSCRIPTION_ATTEMPTS_PER_REQUEST = 1;
 export const VOICE_TRANSCRIPTION_REQUESTS_PER_RECORDING = 1;
 export const MAX_PROVIDER_CALLS_PER_RECORDING =
   CLOUD_TRANSCRIPTION_ATTEMPTS_PER_REQUEST * VOICE_TRANSCRIPTION_REQUESTS_PER_RECORDING;
@@ -28,7 +17,7 @@ export const MAX_PROVIDER_CALLS_PER_RECORDING =
 export type CloudSttLanguage = "en" | "te" | "hi" | null;
 
 export type CloudTranscriptionAttempt = {
-  model: "whisper-1";
+  model: "gpt-transcribe";
   language: CloudSttLanguage;
 };
 
@@ -60,12 +49,9 @@ export function mapRequestedSttLanguage(raw: string | null | undefined): CloudSt
   return null;
 }
 
-/** Both whisper-1 attempts keep the request language, including intentional automatic detection. */
+/** One provider pass preserves the explicit hint, or detects within the supported set. */
 export function planCloudTranscriptionAttempts(language: CloudSttLanguage): CloudTranscriptionAttempt[] {
-  return [
-    { model: "whisper-1", language },
-    { model: "whisper-1", language },
-  ];
+  return [{ model: "gpt-transcribe", language }];
 }
 
 export type ProviderTranscriptionResult = {
@@ -73,15 +59,10 @@ export type ProviderTranscriptionResult = {
   transcript: string;
 };
 
-/**
- * The fallback model runs only after whisper-1 has been tried twice and one
- * of those calls failed at the API. Two empty transcripts stay on whisper-1.
- */
+/** No hidden fallback: service/auth/quota failures must remain visible. */
 export function shouldUseFallbackModel(whisperResults: ProviderTranscriptionResult[]): boolean {
-  if (whisperResults.length < WHISPER_CALLS_PER_REQUEST) return false;
-  const apiFailure = whisperResults.some((result) => !result.ok);
-  const transcript = whisperResults.some((result) => result.transcript.trim().length > 0);
-  return apiFailure && !transcript;
+  void whisperResults;
+  return false;
 }
 
 const ACCEPTED_RECORDING_CONTAINERS = new Set([
@@ -133,9 +114,9 @@ export function cloudLanguageForRecognition(mode: AskPranaRecognitionMode): "aut
 
 /**
  * Explicit recognition wins and is never replaced by Auto.
- * Auto prefers Whisper's telugu/hindi/english detection. When that field is
- * missing, a clear Telugu, Devanagari, or English transcript still chooses
- * the reply language. Website language is not used.
+ * Auto accepts only actual provider audio-language detection. A transcript's
+ * script can be wrong (for example Telugu rendered in Devanagari), so it is
+ * never evidence of the original spoken language. Website language is not used.
  */
 export function resolveSpokenReplyLanguage(input: {
   mode: AskPranaRecognitionMode;
@@ -145,16 +126,6 @@ export function resolveSpokenReplyLanguage(input: {
   if (input.mode === "te" || input.mode === "hi" || input.mode === "en") return input.mode;
   const detected = mapRequestedSttLanguage(input.detected);
   if (detected === "te" || detected === "hi" || detected === "en") return detected;
-  return languageFromTranscript(input.transcript ?? "");
-}
-
-function languageFromTranscript(transcript: string): AskPranaSpeechLanguageCode | null {
-  const hint = detectMessageLanguageHint(transcript);
-  if (hint === "te" || hint === "hi") return hint;
-  if (isPredominantlyLatinMessage(transcript)) return "en";
-  const latin = transcript.match(/[A-Za-z]/g)?.length ?? 0;
-  const indic = transcript.match(/[\u0900-\u097F\u0C00-\u0C7F]/g)?.length ?? 0;
-  if (latin >= 3 && indic === 0) return "en";
   return null;
 }
 

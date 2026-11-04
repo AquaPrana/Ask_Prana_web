@@ -6,15 +6,11 @@ import {
 } from "../lib/supabase";
 import { splitCompleteSentences } from "../lib/ask-prana-sentences";
 import { explicitReplyLanguageLabel } from "../lib/ask-prana-translation-policy";
-import {
-  loadAskPranaPreferredLanguage,
-  type AskPranaSpeechLanguageCode,
-} from "../lib/ask-prana-language";
+import { type AskPranaSpeechLanguageCode } from "../lib/ask-prana-language";
 import {
   acceptSpokenQuestion,
   cloudLanguageForRecognition,
   isRejectedAudioContainerError,
-  resolveSpokenReplyLanguage,
   type AskPranaRecognitionMode,
 } from "../lib/ask-prana-transcription-language";
 import { getCurrentUserProfile, resolveFarmerDisplayName } from "./profile";
@@ -778,6 +774,13 @@ function normalizeGeneratedFile(
 function classifyTranscribeError(technical: string): Error {
   const normalized = technical.toLowerCase();
   console.log("[askPrana] transcribe failed:", technical);
+  if (technical === "APP_SESSION_INVALID") return new Error("VOICE_SESSION");
+  if (technical === "INVALID_AUDIO") return new Error("VOICE_FORMAT");
+  if (technical === "PROVIDER_AUTH" || technical === "TRANSCRIBE_CONFIG") return new Error("VOICE_SERVICE_AUTH");
+  if (technical === "PROVIDER_QUOTA") return new Error("VOICE_CREDITS");
+  if (technical === "PROVIDER_RATE_LIMIT") return new Error("VOICE_RATE_LIMIT");
+  if (technical === "PROVIDER_TIMEOUT") return new Error("VOICE_TIMEOUT");
+  if (technical === "PROVIDER_UNAVAILABLE" || technical === "PROVIDER_STREAM") return new Error("VOICE_SERVICE");
   if (
     normalized.includes("failed to fetch") ||
     normalized.includes("network request failed") ||
@@ -841,13 +844,6 @@ function appendVoiceFile(
   formData.append("file", blob, fileName);
 }
 
-/**
- * Scripts Ask Prana cannot show or translate: Bengali, Gurmukhi, Gujarati,
- * Odia, Tamil (U+0980-U+0BFF) and Kannada, Malayalam, Sinhala
- * (U+0C80-U+0DFF). Telugu and Devanagari are outside these ranges.
- */
-const UNSUPPORTED_INDIC_SCRIPT = /[\u0980-\u0BFF\u0C80-\u0DFF]/;
-
 type TranscribeInput = {
   uri: string;
   blob: Blob;
@@ -857,22 +853,11 @@ type TranscribeInput = {
 };
 
 /**
- * An automatic transcription that comes back in an unsupported Indic script
- * is tried once more in the saved app language. Explicit te/hi/en is never
- * replaced here. Voice Chat's Telugu retry lives in transcribeVoiceRecording
- * and is limited to one extra request.
+ * Composer transcription is one provider attempt. Do not use UI language or
+ * transcript script to retry/translate a recording in another language.
  */
 export async function transcribeAskPranaAudio(input: TranscribeInput) {
   const first = await transcribeAskPranaAudioOnce(input);
-  const isAuto = (input.language ?? "").trim().toLowerCase() === "auto";
-  if (!isAuto || !UNSUPPORTED_INDIC_SCRIPT.test(first.transcript)) return first.transcript;
-  try {
-    const preferred = await loadAskPranaPreferredLanguage();
-    const retry = await transcribeAskPranaAudioOnce({ ...input, language: preferred });
-    if (retry.transcript && !UNSUPPORTED_INDIC_SCRIPT.test(retry.transcript)) return retry.transcript;
-  } catch (error) {
-    console.log("[askPrana] transcription retry in selected language failed:", error);
-  }
   return first.transcript;
 }
 
@@ -932,12 +917,12 @@ async function transcribeAskPranaAudioOnce(input: TranscribeInput): Promise<{
     throw classifyTranscribeError(formatUnknownError(error));
   }
 
-  let data: { transcript?: string; error?: unknown; detectedLanguage?: string | null } | null = null;
+  let data: { transcript?: string; error?: unknown; code?: unknown; detectedLanguage?: string | null } | null = null;
   const rawText = await response.text();
   console.log("[AskPranaAudio] upload completed", { status: response.status });
   try {
     data = rawText
-      ? (JSON.parse(rawText) as { transcript?: string; error?: unknown; detectedLanguage?: string | null })
+      ? (JSON.parse(rawText) as { transcript?: string; error?: unknown; code?: unknown; detectedLanguage?: string | null })
       : null;
   } catch {
     console.log("[askPrana] transcribe API error response", rawText);
@@ -949,8 +934,10 @@ async function transcribeAskPranaAudioOnce(input: TranscribeInput): Promise<{
   if (!response.ok || data?.error) {
     console.log("[askPrana] transcribe API error response", rawText);
     const message =
-      typeof data?.error === "string"
-        ? data.error
+      typeof data?.code === "string"
+        ? data.code
+        : typeof data?.error === "string"
+          ? data.error
         : `HTTP ${response.status}: Unable to transcribe audio.`;
     const detail =
       data &&
@@ -966,13 +953,13 @@ async function transcribeAskPranaAudioOnce(input: TranscribeInput): Promise<{
     transcriptLength: data?.transcript?.trim().length ?? 0,
     detectedLanguage: data?.detectedLanguage ?? null,
   });
-  const detected = resolveSpokenReplyLanguage({
-    mode: "auto",
-    detected: data?.detectedLanguage,
-  });
   return {
     transcript: data?.transcript?.trim() ?? "",
-    detectedLanguage: detected,
+    // This is provider detection only. `languageHint` is deliberately not
+    // converted into detection by the client or used for Auto resolution.
+    detectedLanguage: data?.detectedLanguage === "te" || data?.detectedLanguage === "hi" || data?.detectedLanguage === "en"
+      ? data.detectedLanguage
+      : null,
   };
 }
 
@@ -990,10 +977,8 @@ export function logVoiceTranscription(detail: {
 
 /**
  * Transcribe one Voice Chat recording.
- * whisper-1 runs at most twice. The fallback model runs only after a Whisper
- * API failure, not because the transcript was empty. One recording stays
- * within three provider calls. A non-empty Telugu, Hindi, or English question
- * is returned unchanged.
+ * One bounded gpt-transcribe request per recording. Auto only proceeds with
+ * actual provider audio-language detection; otherwise the UI asks for a choice.
  */
 export type VoiceListenResult =
   | { status: "ok"; text: string; language: AskPranaSpeechLanguageCode }
