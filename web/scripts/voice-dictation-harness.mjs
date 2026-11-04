@@ -3,6 +3,7 @@
 // It uses Vite's installed TypeScript loader; no test framework is required.
 import { readFileSync } from "node:fs";
 import { createServer } from "vite";
+import { parseProviderTranscription } from "../../supabase/functions/ask-prana-transcribe/parse-provider-transcription.mjs";
 
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 const assert = (condition, message) => {
@@ -199,10 +200,13 @@ try {
     browserRecognitionLanguage,
     cloudTranscriptionLanguage,
     decideVoiceTranscript,
+    documentedUploadForRecording,
+    encodeWavPcm,
     isRejectedAudioContainerError,
     isStaleVoiceCapture,
     mapRequestedSttLanguage,
     planCloudTranscriptionAttempts,
+    providerAudioFileCode,
     acceptSpokenQuestion,
     recognitionModeFrom,
     recognizedTranscriptionContainer,
@@ -226,6 +230,36 @@ try {
   );
   assert(shouldUseFallbackModel([{ ok: false, transcript: "" }]) === false, "provider failures do not create a hidden fallback request");
   assert(recognizedTranscriptionContainer("webm") === true, "Brave WebM is an accepted recording");
+  const webmUpload = documentedUploadForRecording("audio/webm;codecs=opus");
+  assert(
+    webmUpload.container === "wav" && webmUpload.mimeType === "audio/wav" && webmUpload.fileName === "askprana-recording.wav",
+    "browser WebM/Opus is uploaded as documented WAV",
+  );
+  assert(documentedUploadForRecording("audio/wav").container === "original", "an existing WAV recording is not remuxed again");
+  assert(documentedUploadForRecording("audio/mp4").container === "original", "an MPEG-4 recording stays in its container");
+  const wavBytes = encodeWavPcm(new Float32Array([0, 0.5, -0.5]), 16000);
+  assert(
+    String.fromCharCode(...wavBytes.slice(0, 4)) === "RIFF" && String.fromCharCode(...wavBytes.slice(8, 12)) === "WAVE",
+    "the remux writes a RIFF WAV header",
+  );
+  assert(
+    providerAudioFileCode({
+      recognizedContainer: "webm",
+      uploadedContainer: "webm",
+      providerParam: "file",
+      providerMessage: "Audio file might be corrupted or unsupported",
+    }) === null,
+    "a recognized WebM recording is not returned as PROVIDER_AUDIO_FILE",
+  );
+  assert(
+    providerAudioFileCode({
+      recognizedContainer: "unknown",
+      uploadedContainer: "unknown",
+      providerParam: "file",
+      providerMessage: "Audio file might be corrupted or unsupported",
+    }) === "PROVIDER_AUDIO_FILE",
+    "a real corrupted file is still PROVIDER_AUDIO_FILE",
+  );
   assert(
     isRejectedAudioContainerError("That voice recording format isn't supported. Please try again.") === true,
     "a rejected container is a format error",
@@ -319,14 +353,60 @@ try {
   assert(isStaleVoiceCapture(capture, 4) === true, "a language change invalidates the in-flight recording");
   assert(isStaleVoiceCapture(null, 3) === true, "a missing capture cannot be transcribed");
 
+  const client = readFileSync(new URL("../src/services/ask-prana.ts", import.meta.url), "utf8");
+  const recorder = readFileSync(new URL("../src/web/shims/expo-audio.ts", import.meta.url), "utf8");
+  assert(!client.includes("decodeAudioData"), "WebM is not decoded before upload");
+  assert(recorder.includes("capturingPcm"), "the browser recording keeps microphone PCM samples");
+  assert(recorder.includes("encodeWavPcm"), "those samples are uploaded as 16-bit WAV");
+  assert(recorder.includes('type: "audio/wav"'), "the recording blob is WAV");
+  const completed = parseProviderTranscription(
+    'data: {"type":"transcript.text.delta","delta":"Hello"}\n\ndata: {"type":"transcript.text.done","text":"Hello pond","languages":[{"code":"en"}]}\n\n',
+    "text/event-stream",
+  );
+  assert(completed.ok && completed.transcript === "Hello pond" && completed.languageCodes[0] === "en", "a completed stream keeps the transcript and English detection");
+  const withTerminal = parseProviderTranscription(
+    'data: {"type":"transcript.text.done","text":"నమస్కారం","languages":[{"code":"te"}]}\n\ndata: [DONE]\n\n',
+    "text/event-stream",
+  );
+  assert(withTerminal.ok && withTerminal.transcript === "నమస్కారం" && withTerminal.sawTerminal && withTerminal.languageCodes[0] === "te", "a completion followed by [DONE] stays a Telugu transcript");
+  const crlf = parseProviderTranscription(
+    'data: {"type":"transcript.text.delta","delta":"मेरे"}\r\n\r\ndata: {"type":"transcript.text.done","text":"मेरे तालाब","languages":[{"code":"hi"}]}\r\n\r\n',
+    "text/event-stream",
+  );
+  assert(crlf.ok && crlf.transcript === "मेरे तालाब" && crlf.languageCodes[0] === "hi", "CRLF framing keeps a Hindi completion");
+  const commented = parseProviderTranscription(
+    ': keep-alive\n\ndata: {"type":"transcript.text.done","text":"oxygen","languages":[{"code":"en"}]}\n\n',
+    "text/event-stream",
+  );
+  assert(commented.ok && commented.transcript === "oxygen", "SSE comments and empty blocks are ignored");
+  const providerError = parseProviderTranscription(
+    'data: {"type":"error","error":{"message":"upstream"}}\n\n',
+    "text/event-stream",
+  );
+  assert(!providerError.ok && providerError.reason === "provider-error", "a provider error event is not a transcript");
+  const missing = parseProviderTranscription(
+    'data: {"type":"transcript.text.delta","delta":"only partial"}\n\ndata: [DONE]\n\n',
+    "text/event-stream",
+  );
+  assert(!missing.ok && missing.reason === "missing-completion", "deltas without completion stay a stream failure");
+  const malformed = parseProviderTranscription('data: {not-json}\n\n', "text/event-stream");
+  assert(!malformed.ok && malformed.reason === "malformed-event", "a malformed event is not empty speech");
+  const silent = parseProviderTranscription(
+    'data: {"type":"transcript.text.done","text":"","languages":[]}\n\ndata: [DONE]\n\n',
+    "text/event-stream",
+  );
+  assert(silent.ok && silent.transcript === "" && silent.languageCodes.length === 0, "a completed empty transcript is silent speech");
+  const jsonBody = parseProviderTranscription(
+    '{"text":"The oxygen is low","languages":[{"code":"en"}]}',
+    "application/json",
+  );
+  assert(jsonBody.ok && jsonBody.transcript === "The oxygen is low", "a non-streaming JSON body uses the JSON completion path");
   const edge = readFileSync(new URL("../../supabase/functions/ask-prana-transcribe/index.ts", import.meta.url), "utf8");
   assert(edge.includes('const OPENAI_TRANSCRIBE_MODEL = "gpt-transcribe"'), "recorded audio uses the current transcription model");
   assert(edge.includes('openAIForm.append("stream", "true")'), "Auto receives the provider final detection event");
   assert(edge.includes("SUPPORTED_AUDIO_LANGUAGES"), "Auto detection is bounded to Telugu, Hindi, and English");
   assert(edge.includes("const detectedLanguage = input.language ? null : providerDetected"), "an explicit hint is not reported as independent detection");
-  assert(edge.includes('event.type === "transcript.text.done"'), "only the documented completion event completes streaming transcription");
-  assert(edge.includes('doneEvents.length !== 1'), "partial, malformed, or incomplete streams fail rather than returning partial text");
-  assert(edge.includes('event.type === "error" || event.error != null'), "provider stream error events remain service failures");
+  assert(edge.includes("parseProviderTranscription"), "the function uses the shared transcription parser");
   assert(edge.includes('if (!openaiResponse.ok)'), "provider HTTP failure is checked before stream consumption");
   assert(edge.includes('"PROVIDER_QUOTA"'), "quota failures have a stable error code");
   assert(edge.includes('"PROVIDER_RATE_LIMIT"'), "rate limits have a stable error code");

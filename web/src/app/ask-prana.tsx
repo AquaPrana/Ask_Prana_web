@@ -1545,7 +1545,7 @@ export default function AskPranaScreen() {
               <Text style={styles.recordingHint}>
                 {t("askPrana.transcribingHint")}
               </Text>
-            ) : hasFailedRecording && !isRecording ? (
+            ) : hasFailedRecording && !isRecording && !voiceInline ? (
               <View style={styles.failedRecordingRow}>
                 <Text style={styles.failedRecordingText}>
                   Voice message couldn't be processed.

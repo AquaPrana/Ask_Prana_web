@@ -3,10 +3,12 @@ import { getAskPranaLanguageOption, type AskPranaSpeechLanguageCode } from "./as
 /**
  * Attempt budget for one Voice Chat recording.
  *
- * The client sends exactly one gpt-transcribe request per recording. Explicit
- * `te`, `hi`, or `en` is never replaced with automatic detection. Auto is
- * constrained to the three supported input languages and remains unresolved
- * if the provider cannot identify one. Maximum provider calls: 1.
+ * The client sends exactly one gpt-transcribe request per recording. A browser
+ * WebM/Opus recording is remuxed locally to WAV first; that remux is not a
+ * provider call. Explicit `te`, `hi`, or `en` is never replaced with automatic
+ * detection. Auto is constrained to the three supported input languages and
+ * remains unresolved if the provider cannot identify one. Maximum provider
+ * calls: 1.
  */
 /** gpt-transcribe detects one bounded recording once; it is not retried blindly. */
 export const CLOUD_TRANSCRIPTION_ATTEMPTS_PER_REQUEST = 1;
@@ -75,9 +77,83 @@ const ACCEPTED_RECORDING_CONTAINERS = new Set([
   "mpeg-4",
 ]);
 
-/** True when the bytes were already accepted as a recording Whisper can receive. */
+/** True when the bytes were already accepted as a recording the provider can receive. */
 export function recognizedTranscriptionContainer(containerOrExtension: string): boolean {
   return ACCEPTED_RECORDING_CONTAINERS.has(containerOrExtension.trim().toLowerCase());
+}
+
+/**
+ * gpt-transcribe lists WebM, but its file-transcription examples upload WAV.
+ * MediaRecorder's `audio/webm;codecs=opus` file is rejected with `param: "file"`.
+ * Those recordings are uploaded as WAV. WAV, MP4, and MPEG stay unchanged.
+ */
+export function documentedUploadForRecording(containerOrMime: string): {
+  container: "wav" | "original";
+  mimeType: string;
+  fileName: string;
+} {
+  const value = containerOrMime.trim().toLowerCase();
+  if (value.includes("webm") || value.includes("ogg") || value.includes("oga")) {
+    return { container: "wav", mimeType: "audio/wav", fileName: "askprana-recording.wav" };
+  }
+  return { container: "original", mimeType: "", fileName: "" };
+}
+
+/**
+ * A recognized WebM or Ogg recording is remuxed before the provider sees it,
+ * so that recording is not reported as PROVIDER_AUDIO_FILE. A file the
+ * provider still rejects after remux, or a container that was never a
+ * recording, stays a real audio-file failure.
+ */
+export function providerAudioFileCode(input: {
+  recognizedContainer: string;
+  uploadedContainer: string;
+  providerParam: string | null;
+  providerMessage: string;
+}): "PROVIDER_AUDIO_FILE" | null {
+  const detail = input.providerMessage.toLowerCase();
+  const fileRejected =
+    input.providerParam === "file" || /(corrupted|unsupported).{0,30}audio/.test(detail);
+  if (!fileRejected) return null;
+  const recognized = input.recognizedContainer.trim().toLowerCase();
+  const uploaded = input.uploadedContainer.trim().toLowerCase();
+  if ((recognized === "webm" || recognized === "ogg") && (uploaded === "webm" || uploaded === "ogg")) {
+    return null;
+  }
+  return "PROVIDER_AUDIO_FILE";
+}
+
+/** 16-bit mono PCM WAV. The leading bytes are the RIFF header used for file transcription. */
+export function encodeWavPcm(samples: Float32Array, sampleRate: number): Uint8Array {
+  const bytesPerSample = 2;
+  const dataSize = samples.length * bytesPerSample;
+  const buffer = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buffer);
+  const writeString = (offset: number, value: string) => {
+    for (let index = 0; index < value.length; index += 1) {
+      view.setUint8(offset + index, value.charCodeAt(index));
+    }
+  };
+  writeString(0, "RIFF");
+  view.setUint32(4, 36 + dataSize, true);
+  writeString(8, "WAVE");
+  writeString(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * bytesPerSample, true);
+  view.setUint16(32, bytesPerSample, true);
+  view.setUint16(34, 16, true);
+  writeString(36, "data");
+  view.setUint32(40, dataSize, true);
+  let offset = 44;
+  for (let index = 0; index < samples.length; index += 1) {
+    const clamped = Math.max(-1, Math.min(1, samples[index] ?? 0));
+    view.setInt16(offset, clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff, true);
+    offset += 2;
+  }
+  return new Uint8Array(buffer);
 }
 
 /**

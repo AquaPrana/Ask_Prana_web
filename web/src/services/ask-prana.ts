@@ -10,6 +10,7 @@ import { type AskPranaSpeechLanguageCode } from "../lib/ask-prana-language";
 import {
   acceptSpokenQuestion,
   cloudLanguageForRecognition,
+  documentedUploadForRecording,
   isRejectedAudioContainerError,
   type AskPranaRecognitionMode,
 } from "../lib/ask-prana-transcription-language";
@@ -777,9 +778,13 @@ function classifyTranscribeError(technical: string): Error {
   if (technical === "APP_SESSION_INVALID") return new Error("VOICE_SESSION");
   if (technical === "INVALID_AUDIO") return new Error("VOICE_FORMAT");
   if (technical === "PROVIDER_AUTH" || technical === "TRANSCRIBE_CONFIG") return new Error("VOICE_SERVICE_AUTH");
+  if (technical === "PROVIDER_INVALID_REQUEST") return new Error("VOICE_PROVIDER_REQUEST");
+  if (technical === "PROVIDER_AUDIO_FILE") return new Error("VOICE_AUDIO_PROCESSING");
+  if (technical === "PROVIDER_MODEL_UNAVAILABLE") return new Error("VOICE_PROVIDER_MODEL");
   if (technical === "PROVIDER_QUOTA") return new Error("VOICE_CREDITS");
   if (technical === "PROVIDER_RATE_LIMIT") return new Error("VOICE_RATE_LIMIT");
   if (technical === "PROVIDER_TIMEOUT") return new Error("VOICE_TIMEOUT");
+  if (technical === "PROVIDER_NETWORK") return new Error("VOICE_NETWORK");
   if (technical === "PROVIDER_UNAVAILABLE" || technical === "PROVIDER_STREAM") return new Error("VOICE_SERVICE");
   if (
     normalized.includes("failed to fetch") ||
@@ -852,6 +857,17 @@ type TranscribeInput = {
   language?: string | null;
 };
 
+function useDocumentedRecording(input: TranscribeInput): TranscribeInput {
+  const described = `${input.mimeType ?? ""} ${input.blob.type ?? ""} ${input.fileName ?? ""}`;
+  if (!described.toLowerCase().includes("wav")) return input;
+  const upload = documentedUploadForRecording("audio/wav");
+  return {
+    ...input,
+    mimeType: "audio/wav",
+    fileName: upload.fileName || "askprana-recording.wav",
+  };
+}
+
 /**
  * Composer transcription is one provider attempt. Do not use UI language or
  * transcript script to retry/translate a recording in another language.
@@ -879,23 +895,24 @@ async function transcribeAskPranaAudioOnce(input: TranscribeInput): Promise<{
     throw new Error("VOICE_SHORT");
   }
 
+  const prepared = await useDocumentedRecording(input);
   const fileName =
-    input.fileName?.trim() ||
+    prepared.fileName?.trim() ||
     (Platform.OS === "web" ? `askprana-recording.webm` : `askprana-recording.mp4`);
-  const mimeType = mimeTypeForOpenAIAudio(fileName, input.mimeType ?? input.blob.type);
+  const mimeType = mimeTypeForOpenAIAudio(fileName, prepared.mimeType ?? prepared.blob.type);
   const fileExtension = extensionFromAudioName(fileName);
 
   console.log("[AskPranaAudio] upload started", {
     fileExtension,
     mimeType,
     fileName,
-    fileSize: input.blob.size,
-    blobType: input.blob.type || null,
+    fileSize: prepared.blob.size,
+    blobType: prepared.blob.type || null,
     platform: Platform.OS,
   });
 
   const formData = new FormData();
-  appendVoiceFile(formData, input.blob, fileName, mimeType);
+  appendVoiceFile(formData, prepared.blob, fileName, mimeType);
   formData.append("fileName", fileName);
   if (input.language?.trim()) {
     formData.append("language", input.language.trim());

@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
+import { parseProviderTranscription } from "./parse-provider-transcription.mjs";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -43,23 +44,52 @@ type TranscribeErrorCode =
   | "INVALID_AUDIO"
   | "TRANSCRIBE_CONFIG"
   | "PROVIDER_AUTH"
+  | "PROVIDER_INVALID_REQUEST"
+  | "PROVIDER_AUDIO_FILE"
+  | "PROVIDER_MODEL_UNAVAILABLE"
   | "PROVIDER_QUOTA"
   | "PROVIDER_RATE_LIMIT"
   | "PROVIDER_TIMEOUT"
   | "PROVIDER_UNAVAILABLE"
-  | "PROVIDER_STREAM";
+  | "PROVIDER_STREAM"
+  | "PROVIDER_NETWORK";
 
-function errorResponse(code: TranscribeErrorCode, status: number) {
-  return jsonResponse({ error: "Voice transcription is unavailable.", code }, status);
+function errorResponse(code: TranscribeErrorCode, status: number, correlationId: string) {
+  return jsonResponse({ error: "Voice transcription is unavailable.", code, correlationId }, status);
 }
 
 function providerFailure(status: number, body: string): { code: TranscribeErrorCode; status: number } {
   const detail = body.toLowerCase();
   if (status === 401 || status === 403) return { code: "PROVIDER_AUTH", status: 502 };
+  if (status === 400 || status === 422) {
+    const parsed = safeProviderError(body);
+    if (parsed.param === "file" || /(corrupted|unsupported).{0,30}audio/.test(detail)) {
+      return { code: "PROVIDER_AUDIO_FILE", status: 422 };
+    }
+    return { code: "PROVIDER_INVALID_REQUEST", status: 400 };
+  }
+  if (status === 404) return { code: "PROVIDER_MODEL_UNAVAILABLE", status: 502 };
   if (status === 429 && /(quota|credit|billing|insufficient)/.test(detail)) return { code: "PROVIDER_QUOTA", status: 503 };
   if (status === 429) return { code: "PROVIDER_RATE_LIMIT", status: 429 };
   if (status === 408 || status === 504) return { code: "PROVIDER_TIMEOUT", status: 504 };
-  return { code: "PROVIDER_UNAVAILABLE", status: 503 };
+  if (status >= 500) return { code: "PROVIDER_UNAVAILABLE", status: 503 };
+  return { code: "PROVIDER_UNAVAILABLE", status: 502 };
+}
+
+function safeProviderError(body: string) {
+  const fallback = body.replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 240);
+  try {
+    const parsed = JSON.parse(body) as { error?: { code?: unknown; type?: unknown; param?: unknown; message?: unknown } };
+    const error = parsed?.error;
+    return {
+      code: typeof error?.code === "string" ? error.code.slice(0, 80) : null,
+      type: typeof error?.type === "string" ? error.type.slice(0, 80) : null,
+      param: typeof error?.param === "string" ? error.param.slice(0, 80) : null,
+      message: typeof error?.message === "string" ? error.message.replace(/[\r\n\t]+/g, " ").slice(0, 240) : fallback,
+    };
+  } catch {
+    return { code: null, type: null, param: null, message: fallback };
+  }
 }
 
 function extensionOf(fileName: string) {
@@ -254,55 +284,61 @@ async function callOpenAiTranscribe(input: {
   } catch {
     return {
       ok: false as const,
-      ...providerFailure(503, "network failure"),
+      code: "PROVIDER_NETWORK" as const,
+      status: 502,
+      diagnostic: { stage: "connection", upstreamStatus: null, providerRequestId: null, providerError: null },
     };
   }
   // HTTP errors are not streams; classify before consuming a possible body.
   if (!openaiResponse.ok) {
     const body = await openaiResponse.text().catch(() => "");
-    return { ok: false as const, ...providerFailure(openaiResponse.status, body) };
+    return {
+      ok: false as const,
+      ...providerFailure(openaiResponse.status, body),
+      diagnostic: {
+        stage: "http-response",
+        upstreamStatus: openaiResponse.status,
+        providerRequestId: openaiResponse.headers.get("x-request-id") ?? openaiResponse.headers.get("request-id"),
+        providerError: safeProviderError(body),
+      },
+    };
   }
 
   let bodyText = "";
   try {
     bodyText = await openaiResponse.text();
   } catch {
-    return { ok: false as const, code: "PROVIDER_STREAM" as const, status: 502 };
+    return { ok: false as const, code: "PROVIDER_STREAM" as const, status: 502, diagnostic: { stage: "body-read", upstreamStatus: openaiResponse.status, providerRequestId: openaiResponse.headers.get("x-request-id") ?? openaiResponse.headers.get("request-id"), providerError: null } };
   }
-  const events: Record<string, unknown>[] = [];
-  for (const block of bodyText.split(/\r?\n\r?\n/)) {
-    const data = block.split(/\r?\n/).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trim()).join("\n");
-    if (!data) continue;
-    try {
-      const event = JSON.parse(data) as Record<string, unknown>;
-      if (!event || typeof event !== "object") throw new Error("invalid event");
-      events.push(event);
-    } catch {
-      return { ok: false as const, code: "PROVIDER_STREAM" as const, status: 502 };
-    }
-  }
-  const errorEvent = events.find((event) => event.type === "error" || event.error != null);
-  if (errorEvent) return { ok: false as const, ...providerFailure(503, "stream error") };
-  const doneEvents = events.filter((event) => event.type === "transcript.text.done");
-  // Partial deltas are never a completed question. Exactly one documented
-  // completion event is required, including for a valid but silent recording.
-  if (doneEvents.length !== 1) return { ok: false as const, code: "PROVIDER_STREAM" as const, status: 502 };
-  const openaiData = doneEvents[0];
-  if (typeof openaiData.text !== "string") {
-    return { ok: false as const, code: "PROVIDER_STREAM" as const, status: 502 };
+  const contentType = openaiResponse.headers.get("content-type") ?? "";
+  const parsed = parseProviderTranscription(bodyText, contentType);
+  if (!parsed.ok) {
+    return {
+      ok: false as const,
+      code: "PROVIDER_STREAM" as const,
+      status: 502,
+      diagnostic: {
+        stage: "stream-parsing",
+        upstreamStatus: openaiResponse.status,
+        contentType,
+        parseReason: parsed.reason,
+        doneCount: parsed.doneCount,
+        sawTerminal: parsed.sawTerminal,
+        providerRequestId: openaiResponse.headers.get("x-request-id") ?? openaiResponse.headers.get("request-id"),
+        providerError: null,
+      },
+    };
   }
 
-  const transcript =
-    typeof openaiData.text === "string" ? openaiData.text.trim() : "";
-  const languages = Array.isArray(openaiData.languages) ? openaiData.languages : [];
-  const providerDetected = languages.length === 1 && languages[0] && typeof languages[0] === "object"
-    ? mapSttLanguage(String((languages[0] as Record<string, unknown>).code ?? ""))
+  const transcript = parsed.transcript;
+  const providerDetected = parsed.languageCodes.length === 1
+    ? mapSttLanguage(parsed.languageCodes[0] ?? "")
     : null;
   // An explicit hint is not independent detection. Do not fabricate it here.
   const detectedLanguage = input.language ? null : providerDetected;
 
   return {
-    ok: openaiResponse.ok,
+    ok: true as const,
     transcript,
     detectedLanguage,
   };
@@ -314,20 +350,21 @@ serve(async (req) => {
   }
 
   try {
+    const correlationId = crypto.randomUUID();
     const userId = await authenticate(req);
     if (!userId) {
-      return errorResponse("APP_SESSION_INVALID", 401);
+      return errorResponse("APP_SESSION_INVALID", 401, correlationId);
     }
 
     const contentType = req.headers.get("content-type") ?? "";
     if (!contentType.toLowerCase().includes("multipart/form-data")) {
       console.error("[ask-prana-transcribe] expected multipart/form-data, got:", contentType);
-      return errorResponse("INVALID_AUDIO", 400);
+      return errorResponse("INVALID_AUDIO", 400, correlationId);
     }
 
     const incoming = await readMultipartAudio(req);
     if (!incoming) {
-      return errorResponse("INVALID_AUDIO", 400);
+      return errorResponse("INVALID_AUDIO", 400, correlationId);
     }
 
     if (!incoming.bytes || incoming.bytes.byteLength === 0 || incoming.size === 0) {
@@ -336,7 +373,7 @@ serve(async (req) => {
         incomingType: incoming.incomingType,
         size: incoming.size,
       });
-      return errorResponse("INVALID_AUDIO", 400);
+      return errorResponse("INVALID_AUDIO", 400, correlationId);
     }
 
     const actualContainer = detectAudioContainer(incoming.bytes);
@@ -352,20 +389,25 @@ serve(async (req) => {
         receivedContentType: incoming.incomingType,
         receivedFileSize: incoming.size,
       });
-      return errorResponse("INVALID_AUDIO", 400);
+      return errorResponse("INVALID_AUDIO", 400, correlationId);
     }
 
     if (!OPENAI_AUDIO_EXTENSIONS.has(normalized.extension)) {
       console.error("[ask-prana-transcribe] unsupported audio extension:", normalized);
-      return errorResponse("INVALID_AUDIO", 400);
+      return errorResponse("INVALID_AUDIO", 400, correlationId);
     }
 
     const apiKey = Deno.env.get("OPENAI_API_KEY");
     if (!apiKey) {
       console.error("[ask-prana-transcribe] OPENAI_API_KEY missing");
-      return errorResponse("TRANSCRIBE_CONFIG", 503);
+      return errorResponse("TRANSCRIBE_CONFIG", 503, correlationId);
     }
 
+    // Browser MediaRecorder WebM/Opus is remuxed to WAV by the client before
+    // this request. gpt-transcribe's documented file examples are WAV, and it
+    // rejects `audio/webm;codecs=opus` with param "file". A WAV upload is
+    // detected above as RIFF. A provider file rejection after that remains
+    // PROVIDER_AUDIO_FILE.
     const openAIFile = new File([incoming.bytes], normalized.fileName, {
       type: normalized.mimeType,
     });
@@ -398,6 +440,10 @@ serve(async (req) => {
     console.error("[ask-prana-transcribe] provider failed", {
       code: result.code,
       status: result.status,
+      correlationId,
+      upstream: result.diagnostic,
+      requestedModel: OPENAI_TRANSCRIBE_MODEL,
+      requestedLanguages: sttLanguage ? [sttLanguage] : SUPPORTED_AUDIO_LANGUAGES,
       receivedContentType: incoming.incomingType,
       receivedFileName: incoming.fileName,
       receivedFileSize: incoming.size,
@@ -406,9 +452,9 @@ serve(async (req) => {
       sentFileSize: openAIFile.size,
       actualContainer,
     });
-    return errorResponse(result.code, result.status);
+    return errorResponse(result.code, result.status, correlationId);
   } catch (err) {
     console.error("[ask-prana-transcribe] unhandled error:", err);
-    return errorResponse("PROVIDER_UNAVAILABLE", 503);
+    return errorResponse("PROVIDER_UNAVAILABLE", 503, crypto.randomUUID());
   }
 });

@@ -318,6 +318,35 @@ async function describeRecordedAudioContainer(blob: Blob): Promise<string | null
   return "unknown";
 }
 
+/** Browser-side decode gate: WebM header/size alone does not prove playable audio. */
+async function verifyRecordedAudioDecodes(blob: Blob): Promise<{ durationSec: number | null; reason: string | null }> {
+  if (Platform.OS !== "web" || typeof Audio === "undefined") return { durationSec: null, reason: null };
+  const url = URL.createObjectURL(blob);
+  try {
+    return await new Promise((resolve) => {
+      const audio = new Audio();
+      const finish = (durationSec: number | null, reason: string | null) => {
+        audio.removeAttribute("src");
+        audio.load();
+        resolve({ durationSec, reason });
+      };
+      const timer = setTimeout(() => finish(null, "metadata-timeout"), 4_000);
+      audio.onloadedmetadata = () => {
+        clearTimeout(timer);
+        const duration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : null;
+        finish(duration, duration ? null : "invalid-duration");
+      };
+      audio.onerror = () => {
+        clearTimeout(timer);
+        finish(null, "decode-error");
+      };
+      audio.src = url;
+    });
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 function resolveRecordedAudioMeta(uri: string, blobType?: string | null) {
   const extension = extensionFromUri(uri);
 
@@ -436,6 +465,15 @@ function voiceErrorMessage(error: unknown) {
     return detail === "VOICE_SERVICE_AUTH"
       ? "The speech service is temporarily unavailable. Please try again later."
       : "The speech service is temporarily unavailable. Tap Retry.";
+  }
+  if (detail === "VOICE_PROVIDER_REQUEST") {
+    return "The speech service rejected this recording request. Please try again later.";
+  }
+  if (detail === "VOICE_AUDIO_PROCESSING") {
+    return "That recording could not be processed. Please record it again.";
+  }
+  if (detail === "VOICE_PROVIDER_MODEL") {
+    return "The speech transcription model is unavailable. Please try again later.";
   }
   if (
     detail === "VOICE_NETWORK" ||
@@ -2543,6 +2581,9 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
 
   const prepareVoiceModeSession = useCallback(() => {
     voiceModeSessionStartedRef.current = false;
+    // A composer Retry row belongs to a composer recording, not this Voice Chat.
+    failedRecordingRef.current = null;
+    setHasFailedRecording(false);
     console.log("[AskPranaVoice] prepareVoiceModeSession");
   }, []);
 
@@ -3195,6 +3236,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
 
       const audioMeta = resolveRecordedAudioMeta(uri, blob.type);
       const actualContainer = await describeRecordedAudioContainer(blob);
+      const decoded = await verifyRecordedAudioDecodes(blob);
       console.log("[AskPranaAudio] recording finalized", {
         platform: Platform.OS,
         uriExtension: audioMeta.uriExtension || null,
@@ -3203,7 +3245,18 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         byteSize: blob.size,
         durationSec,
         actualContainer,
+        decodedDurationSec: decoded.durationSec,
+        decodeFailure: decoded.reason,
       });
+
+      if (decoded.reason) {
+        if (audioRecordingSourceRef.current === "voice") {
+          voiceListenResultRef.current = { status: "error", message: voiceErrorMessage("VOICE_FORMAT") };
+        } else {
+          Alert.alert("Recording failed", "That recording could not be decoded. Please try again.");
+        }
+        return null;
+      }
 
       if (
         !OPENAI_TRANSCRIBE_EXTENSIONS.has(audioMeta.extension) ||

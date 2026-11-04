@@ -104,6 +104,8 @@ class Emitter {
   }
 }
 
+import { encodeWavPcm } from "../../lib/ask-prana-transcription-language";
+
 const RECORDING_STATUS_UPDATE = "recordingStatusUpdate";
 const PLAYBACK_STATUS_UPDATE = "playbackStatusUpdate";
 
@@ -120,6 +122,16 @@ export class AudioRecorder extends Emitter {
   private analyserBuffer: Float32Array<ArrayBuffer> | null = null;
   private analyserSource: MediaStreamAudioSourceNode | null = null;
   private meteringEnabled = false;
+  /** Installed at recorder creation so no final or early dataavailable chunk is lost. */
+  private recordingChunks: BlobPart[] = [];
+  private stopping: Promise<void> | null = null;
+  /** Microphone PCM collected during the take. WebM from MediaRecorder is not decoded. */
+  private pcmChunks: Float32Array[] = [];
+  private frozenSamples: Float32Array = new Float32Array(0);
+  private pcmSampleRate = 48000;
+  private capturingPcm = false;
+  private pcmProcessor: ScriptProcessorNode | null = null;
+  private pcmGain: GainNode | null = null;
 
   constructor(private options: WebRecordingOptions) {
     super();
@@ -140,6 +152,11 @@ export class AudioRecorder extends Emitter {
       );
     }
     this.clearTimeouts();
+    // A recorder instance represents one capture. Clear only before its first
+    // start, never while final dataavailable events can still arrive.
+    if (this.mediaRecorder.state === "inactive") this.recordingChunks = [];
+    const context = getAudioContext();
+    if (context.state === "suspended") void context.resume();
     if (this.mediaRecorder.state === "paused") this.mediaRecorder.resume();
     else this.mediaRecorder.start();
     if (options?.forDuration !== undefined) {
@@ -162,44 +179,49 @@ export class AudioRecorder extends Emitter {
         "Cannot start an audio recording without initializing a MediaRecorder. Run prepareToRecordAsync() before attempting to start an audio recording.",
       );
     }
+    if (this.stopping) return this.stopping;
     const recorder = this.mediaRecorder;
-    const data = await new Promise<Blob>((resolve, reject) => {
-      const chunks: BlobPart[] = [];
+    this.stopping = new Promise<void>((resolve, reject) => {
       const cleanup = () => {
-        recorder.removeEventListener("dataavailable", onData);
         recorder.removeEventListener("stop", onStop);
         recorder.removeEventListener("error", onError);
       };
-      const onData = (event: BlobEvent) => {
-        if (event.data?.size > 0) chunks.push(event.data);
-      };
       const onStop = () => {
-        cleanup();
-        resolve(new Blob(chunks, { type: recorder.mimeType || "audio/webm" }));
+        // MediaRecorder specifies dataavailable before stop. Deferring one task
+        // also protects Chromium implementations that queue the final callback.
+        setTimeout(() => {
+          cleanup();
+          const data = this.wavFromCapturedSamples();
+          if (!data) {
+            reject(new Error("The browser returned an empty audio recording."));
+            return;
+          }
+          const url = URL.createObjectURL(data);
+          this.uri = url;
+          this.mediaRecorder = null;
+          this.stopping = null;
+          this.emit(RECORDING_STATUS_UPDATE, { id: this.id, isFinished: true, hasError: false, error: null, url });
+          resolve();
+        }, 0);
       };
       const onError = () => {
         cleanup();
+        this.stopping = null;
         reject(new Error("The browser could not finalize the audio recording."));
       };
-      recorder.addEventListener("dataavailable", onData);
       recorder.addEventListener("stop", onStop);
       recorder.addEventListener("error", onError);
       try {
-        // Ask Chromium to flush the final chunk before ending the stream.
-        recorder.requestData();
+        // Flush before stopping; the persistent listener above collects both
+        // this chunk and the terminal chunk without a listener-registration race.
+        if (recorder.state === "recording") recorder.requestData();
         recorder.stop();
       } catch (error) {
         cleanup();
         reject(error);
       }
     });
-    this.mediaRecorder = null;
-    if (data.size === 0) {
-      throw new Error("The browser returned an empty audio recording.");
-    }
-    const url = URL.createObjectURL(data);
-    this.uri = url;
-    this.emit(RECORDING_STATUS_UPDATE, { id: this.id, isFinished: true, hasError: false, error: null, url });
+    return this.stopping;
   }
 
   getStatus() {
@@ -253,20 +275,30 @@ export class AudioRecorder extends Emitter {
     else recorderOptions.bitsPerSecond = 128000;
 
     const mediaRecorder = new MediaRecorder(stream, recorderOptions);
+    mediaRecorder.addEventListener("dataavailable", (event) => {
+      if (event.data?.size > 0) this.recordingChunks.push(event.data);
+    });
+    this.startPcmCapture(stream);
     mediaRecorder.addEventListener("pause", () => {
+      this.capturingPcm = false;
       this.currentTime = this.getDurationMillis();
       this.mediaRecorderIsRecording = false;
     });
     mediaRecorder.addEventListener("resume", () => {
+      this.capturingPcm = true;
       this.uptimeOfLastStartResume = Date.now();
       this.mediaRecorderIsRecording = true;
     });
     mediaRecorder.addEventListener("start", () => {
+      this.pcmChunks = [];
+      this.frozenSamples = new Float32Array(0);
+      this.capturingPcm = true;
       this.uptimeOfLastStartResume = Date.now();
       this.currentTime = 0;
       this.mediaRecorderIsRecording = true;
     });
     mediaRecorder.addEventListener("stop", () => {
+      this.freezeCapturedSamples();
       this.currentTime = 0;
       this.mediaRecorderIsRecording = false;
       this.stream = null;
@@ -279,6 +311,59 @@ export class AudioRecorder extends Emitter {
       stream.getTracks().forEach((track) => track.stop());
     });
     return mediaRecorder;
+  }
+
+  private startPcmCapture(stream: MediaStream) {
+    const context = getAudioContext();
+    if (context.state === "suspended") void context.resume();
+    this.pcmSampleRate = context.sampleRate || 48000;
+    this.pcmChunks = [];
+    this.frozenSamples = new Float32Array(0);
+    const source = this.analyserSource ?? context.createMediaStreamSource(stream);
+    if (!this.analyserSource) this.analyserSource = source;
+    const processor = context.createScriptProcessor(4096, 1, 1);
+    processor.onaudioprocess = (event) => {
+      if (!this.capturingPcm) return;
+      const input = event.inputBuffer.getChannelData(0);
+      if (!input.length) return;
+      this.pcmChunks.push(new Float32Array(input));
+    };
+    const gain = context.createGain();
+    gain.gain.value = 0;
+    source.connect(processor);
+    processor.connect(gain);
+    gain.connect(context.destination);
+    this.pcmProcessor = processor;
+    this.pcmGain = gain;
+  }
+
+  private freezeCapturedSamples() {
+    this.capturingPcm = false;
+    const chunks = this.pcmChunks;
+    this.pcmChunks = [];
+    let length = 0;
+    for (const chunk of chunks) length += chunk.length;
+    const mixed = new Float32Array(length);
+    let offset = 0;
+    for (const chunk of chunks) {
+      mixed.set(chunk, offset);
+      offset += chunk.length;
+    }
+    this.frozenSamples = mixed;
+    this.pcmProcessor?.disconnect();
+    this.pcmGain?.disconnect();
+    this.pcmProcessor = null;
+    this.pcmGain = null;
+  }
+
+  private wavFromCapturedSamples(): Blob | null {
+    const samples = this.frozenSamples;
+    this.frozenSamples = new Float32Array(0);
+    if (samples.length < 160) return null;
+    const wav = encodeWavPcm(samples, this.pcmSampleRate || 48000);
+    const bytes = new ArrayBuffer(wav.byteLength);
+    new Uint8Array(bytes).set(wav);
+    return new Blob([bytes], { type: "audio/wav" });
   }
 
   private getMeteringLevel() {
