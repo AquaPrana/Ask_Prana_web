@@ -6,15 +6,18 @@ import {
 /**
  * Attempt budget for one Voice Chat recording.
  *
- * The Edge Function makes at most 2 provider calls for a single HTTP request,
- * and both use the language of that request. Explicit `te`, `hi`, or `en` is
- * never replaced with automatic detection.
+ * One HTTP request may call whisper-1 twice, both times with that request's
+ * language. Explicit `te`, `hi`, or `en` is never replaced with automatic
+ * detection. gpt-4o-mini-transcribe is called at most once, and only after a
+ * whisper-1 API failure. An empty whisper transcript does not use it.
  *
  * The client may send one extra HTTP request when a Telugu recording comes
- * back as Devanagari. That second request uses the same 2-call budget.
- * Maximum provider calls for one recording: 4.
+ * back as Devanagari. Maximum provider calls for one recording: 6.
  */
-export const CLOUD_TRANSCRIPTION_ATTEMPTS_PER_REQUEST = 2;
+export const WHISPER_CALLS_PER_REQUEST = 2;
+export const FALLBACK_CALLS_PER_REQUEST = 1;
+export const CLOUD_TRANSCRIPTION_ATTEMPTS_PER_REQUEST =
+  WHISPER_CALLS_PER_REQUEST + FALLBACK_CALLS_PER_REQUEST;
 export const VOICE_TRANSCRIPTION_REQUESTS_PER_RECORDING = 2;
 export const MAX_PROVIDER_CALLS_PER_RECORDING =
   CLOUD_TRANSCRIPTION_ATTEMPTS_PER_REQUEST * VOICE_TRANSCRIPTION_REQUESTS_PER_RECORDING;
@@ -22,7 +25,7 @@ export const MAX_PROVIDER_CALLS_PER_RECORDING =
 export type CloudSttLanguage = "en" | "te" | "hi" | null;
 
 export type CloudTranscriptionAttempt = {
-  model: "primary" | "fallback";
+  model: "whisper-1";
   language: CloudSttLanguage;
 };
 
@@ -54,12 +57,58 @@ export function mapRequestedSttLanguage(raw: string | null | undefined): CloudSt
   return null;
 }
 
-/** Both attempts keep the request language, including intentional automatic detection. */
+/** Both whisper-1 attempts keep the request language, including intentional automatic detection. */
 export function planCloudTranscriptionAttempts(language: CloudSttLanguage): CloudTranscriptionAttempt[] {
   return [
-    { model: "primary", language },
-    { model: "fallback", language },
+    { model: "whisper-1", language },
+    { model: "whisper-1", language },
   ];
+}
+
+export type ProviderTranscriptionResult = {
+  ok: boolean;
+  transcript: string;
+};
+
+/**
+ * The fallback model runs only after whisper-1 has been tried twice and one
+ * of those calls failed at the API. Two empty transcripts stay on whisper-1.
+ */
+export function shouldUseFallbackModel(whisperResults: ProviderTranscriptionResult[]): boolean {
+  if (whisperResults.length < WHISPER_CALLS_PER_REQUEST) return false;
+  const apiFailure = whisperResults.some((result) => !result.ok);
+  const transcript = whisperResults.some((result) => result.transcript.trim().length > 0);
+  return apiFailure && !transcript;
+}
+
+const ACCEPTED_RECORDING_CONTAINERS = new Set([
+  "webm",
+  "mp4",
+  "m4a",
+  "wav",
+  "ogg",
+  "oga",
+  "mpeg-4",
+]);
+
+/** True when the bytes were already accepted as a recording Whisper can receive. */
+export function recognizedTranscriptionContainer(containerOrExtension: string): boolean {
+  return ACCEPTED_RECORDING_CONTAINERS.has(containerOrExtension.trim().toLowerCase());
+}
+
+/**
+ * A format alert is only for a container or extension this service rejected.
+ * A provider message that merely contains "format" is a model failure.
+ */
+export function isRejectedAudioContainerError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("voice recording format isn't supported") ||
+    normalized.includes("voice recording format is not supported") ||
+    normalized.includes("not a supported audio container") ||
+    normalized.includes("unsupported audio extension") ||
+    normalized.includes("unsupported audio container")
+  );
 }
 
 export type VoiceCaptureSnapshot = {

@@ -199,19 +199,59 @@ try {
     browserRecognitionLanguage,
     cloudTranscriptionLanguage,
     decideVoiceTranscript,
+    isRejectedAudioContainerError,
     isStaleVoiceCapture,
     mapRequestedSttLanguage,
     planCloudTranscriptionAttempts,
+    recognizedTranscriptionContainer,
+    shouldUseFallbackModel,
     suggestsTeluguMisread,
   } = await server.ssrLoadModule("/src/lib/ask-prana-transcription-language.ts");
 
   for (const language of ["te", "hi", "en"]) {
     const attempts = planCloudTranscriptionAttempts(language);
-    assert(attempts.length === 2, `${language} should have a primary and fallback attempt`);
-    assert(attempts[0].language === language && attempts[1].language === language, `${language} must survive both attempts`);
+    assert(attempts.length === 2, `${language} should have two whisper attempts`);
+    assert(
+      attempts.every((attempt) => attempt.model === "whisper-1" && attempt.language === language),
+      `${language} must stay on whisper-1 for both attempts`,
+    );
   }
   const automatic = planCloudTranscriptionAttempts(null);
-  assert(automatic[0].language === null && automatic[1].language === null, "automatic detection stays automatic on every attempt");
+  assert(
+    automatic.every((attempt) => attempt.model === "whisper-1" && attempt.language === null),
+    "automatic detection stays automatic on every whisper attempt",
+  );
+  assert(
+    shouldUseFallbackModel([
+      { ok: true, transcript: "" },
+      { ok: true, transcript: "" },
+    ]) === false,
+    "an empty whisper transcript does not call the fallback model",
+  );
+  assert(
+    shouldUseFallbackModel([{ ok: false, transcript: "" }]) === false,
+    "the fallback model waits until whisper-1 has been tried twice",
+  );
+  assert(
+    shouldUseFallbackModel([
+      { ok: false, transcript: "" },
+      { ok: false, transcript: "" },
+    ]) === true,
+    "a whisper API failure may use the fallback model once",
+  );
+  assert(recognizedTranscriptionContainer("webm") === true, "Brave WebM is an accepted recording");
+  assert(
+    isRejectedAudioContainerError("That voice recording format isn't supported. Please try again.") === true,
+    "a rejected container is a format error",
+  );
+  assert(
+    isRejectedAudioContainerError("Invalid file format. Supported formats: ['webm']") === false,
+    "a fallback format failure for recognized WebM does not become VOICE_FORMAT",
+  );
+  assert(
+    isRejectedAudioContainerError("The model does not support this format for language te") === false,
+    "a model or language failure is not a format alert",
+  );
   assert(mapRequestedSttLanguage("te-IN") === "te", "te-IN is Telugu");
   assert(mapRequestedSttLanguage("hi-IN") === "hi", "hi-IN is Hindi");
   assert(mapRequestedSttLanguage("en-IN") === "en", "en-IN is English");
@@ -223,7 +263,7 @@ try {
   assert(cloudTranscriptionLanguage("te") === "te", "Telugu cloud transcription uses te");
   assert(cloudTranscriptionLanguage("hi") === "hi", "Hindi cloud transcription uses hi");
   assert(cloudTranscriptionLanguage("en") === "en", "English cloud transcription uses en");
-  assert(MAX_PROVIDER_CALLS_PER_RECORDING === 4, "one recording may use at most four provider calls");
+  assert(MAX_PROVIDER_CALLS_PER_RECORDING === 6, "one recording may use at most six provider calls");
 
   const teluguQuestion = "నా చెరువులో ఆక్సిజన్ తగ్గింది. ఏం చేయాలి?";
   const teluguFeed = "రొయ్యలు మేత తినడం లేదు. కారణం ఏమిటి?";
@@ -266,8 +306,11 @@ try {
 
   const edge = readFileSync(new URL("../../supabase/functions/ask-prana-transcribe/index.ts", import.meta.url), "utf8");
   assert(!edge.includes("language: null"), "the transcribe function must not drop an explicit language");
-  assert(edge.includes("language: attempts[0].language"), "the first provider call uses the resolved language");
-  assert(edge.includes("language: attempts[1].language"), "the fallback provider call uses the resolved language");
+  assert(edge.includes("language: attempt.language"), "each whisper call uses the resolved language");
+  assert(edge.includes("language: sttLanguage"), "the fallback model uses the resolved language");
+  assert(edge.includes("if (!result.ok) whisperApiFailure = true"), "an empty whisper transcript is not an API failure");
+  assert(edge.includes("if (transcript || !whisperApiFailure)"), "an empty whisper result returns without the fallback model");
+  assert(edge.includes("containerWasAccepted(actualContainer, normalized.extension)"), "an accepted container does not become a format error");
   assert(edge.includes('value.startsWith("te-")'), "te-IN stays Telugu in the edge function");
   assert(edge.includes('value.startsWith("hi-")'), "hi-IN stays Hindi in the edge function");
   assert(edge.includes('value.startsWith("en-")'), "en-IN stays English in the edge function");

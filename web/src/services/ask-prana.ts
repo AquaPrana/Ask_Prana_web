@@ -12,6 +12,7 @@ import {
 } from "../lib/ask-prana-language";
 import {
   decideVoiceTranscript,
+  isRejectedAudioContainerError,
   suggestsTeluguMisread,
 } from "../lib/ask-prana-transcription-language";
 import { getCurrentUserProfile, resolveFarmerDisplayName } from "./profile";
@@ -789,12 +790,7 @@ function classifyTranscribeError(technical: string): Error {
   ) {
     return new Error("VOICE_CREDITS");
   }
-  if (
-    normalized.includes("unsupported") ||
-    normalized.includes("invalid file") ||
-    normalized.includes("invalid audio") ||
-    normalized.includes("format")
-  ) {
+  if (isRejectedAudioContainerError(technical)) {
     return new Error("VOICE_FORMAT");
   }
   return new Error("VOICE_TRANSCRIBE");
@@ -982,8 +978,8 @@ export function logVoiceTranscription(detail: {
 /**
  * Transcribe one Voice Chat recording in its captured language.
  * At most one extra request is made, and only when Telugu comes back as
- * Devanagari. Each request is still limited by the Edge Function to two
- * provider calls, so one recording stays within four provider calls.
+ * Devanagari. Each request calls whisper-1 at most twice and the fallback
+ * model at most once, so one recording stays within six provider calls.
  * Returns null when the user should repeat; the questionable text is not returned.
  */
 export async function transcribeVoiceRecording(input: TranscribeInput & {

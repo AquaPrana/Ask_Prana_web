@@ -127,15 +127,15 @@ function mapSttLanguage(raw: string): "en" | "te" | "hi" | null {
 }
 
 /**
- * One HTTP request makes at most two provider calls. Both use `language`.
- * A voice recording may add one client retry, so the provider ceiling is 4.
+ * One HTTP request calls whisper-1 at most twice, both times with `language`.
+ * gpt-4o-mini-transcribe is used at most once, and only after a whisper API
+ * failure. An empty whisper transcript does not switch models. A recording
+ * may add one client retry, so the provider ceiling is 6.
  * Explicit te/hi/en is copied onto every call and is never replaced with null.
  */
-function transcriptionAttempts(language: "en" | "te" | "hi" | null) {
-  return [
-    { model: OPENAI_TRANSCRIBE_MODEL, language },
-    { model: OPENAI_TRANSCRIBE_FALLBACK_MODEL, language },
-  ];
+function containerWasAccepted(container: string, extension: string) {
+  const accepted = new Set(["webm", "mp4", "m4a", "wav", "ogg", "oga", "mpeg-4"]);
+  return accepted.has(container) || accepted.has(extension);
 }
 
 /**
@@ -340,7 +340,10 @@ serve(async (req) => {
     });
     const sttLanguage = mapSttLanguage(incoming.language);
 
-    const attempts = transcriptionAttempts(sttLanguage);
+    const whisperCalls = [
+      { model: OPENAI_TRANSCRIBE_MODEL, language: sttLanguage },
+      { model: OPENAI_TRANSCRIBE_MODEL, language: sttLanguage },
+    ];
     console.log("[AskPranaAudio] transcription started", {
       receivedFileName: incoming.fileName,
       receivedContentType: incoming.incomingType,
@@ -352,63 +355,92 @@ serve(async (req) => {
       sentFileSize: openAIFile.size,
       actualContainer,
       sttLanguage,
-      maxProviderAttempts: attempts.length,
+      maxWhisperAttempts: whisperCalls.length,
     });
 
-    let result = await callOpenAiTranscribe({
-      apiKey,
-      file: openAIFile,
-      model: attempts[0].model,
-      language: attempts[0].language,
-    });
-    let providerAttempts = 1;
-
-    if (!result.ok || !result.transcript) {
+    let providerAttempts = 0;
+    let whisperApiFailure = false;
+    let transcript = "";
+    for (const attempt of whisperCalls) {
       providerAttempts += 1;
-      console.warn("[ask-prana-transcribe] primary attempt failed; retrying with the same language", {
-        status: result.status,
-        hadTranscript: Boolean(result.transcript),
-        languageSent: attempts[1].language,
-        model: attempts[1].model,
-      });
-      result = await callOpenAiTranscribe({
+      const result = await callOpenAiTranscribe({
         apiKey,
         file: openAIFile,
-        model: attempts[1].model,
-        language: attempts[1].language,
+        model: attempt.model,
+        language: attempt.language,
+      });
+      if (!result.ok) whisperApiFailure = true;
+      if (result.transcript) {
+        transcript = result.transcript;
+        break;
+      }
+      if (providerAttempts < whisperCalls.length) {
+        console.warn("[ask-prana-transcribe] whisper attempt had no transcript; retrying whisper-1 with the same language", {
+          status: result.status,
+          hadTranscript: false,
+          languageSent: attempt.language,
+          whisperApiFailure,
+        });
+      }
+    }
+
+    if (transcript || !whisperApiFailure) {
+      return jsonResponse({
+        transcript,
+        languageSent: sttLanguage,
+        providerAttempts,
       });
     }
 
-    if (!result.ok) {
-      console.error("[ask-prana-transcribe] OpenAI API error", {
-        openaiStatus: result.status,
-        openaiBody: result.data,
-        openaiBodyText: result.bodyText?.slice(0, 800),
-        receivedContentType: incoming.incomingType,
-        receivedFileName: incoming.fileName,
-        receivedFileSize: incoming.size,
-        sentFileName: openAIFile.name,
-        sentFileType: openAIFile.type,
-        sentFileSize: openAIFile.size,
-      });
-      return jsonResponse(
-        {
-          error: "Unable to transcribe audio.",
-          detail:
-            typeof (result.data as { error?: { message?: string } })?.error
-              ?.message === "string"
-              ? (result.data as { error: { message: string } }).error.message
-              : undefined,
-        },
-        400,
-      );
-    }
-
-    return jsonResponse({
-      transcript: result.transcript,
+    providerAttempts += 1;
+    console.warn("[ask-prana-transcribe] whisper-1 API failed; trying the fallback model with the same language", {
       languageSent: sttLanguage,
-      providerAttempts,
+      model: OPENAI_TRANSCRIBE_FALLBACK_MODEL,
     });
+    const fallback = await callOpenAiTranscribe({
+      apiKey,
+      file: openAIFile,
+      model: OPENAI_TRANSCRIBE_FALLBACK_MODEL,
+      language: sttLanguage,
+    });
+    if (fallback.ok || containerWasAccepted(actualContainer, normalized.extension)) {
+      if (!fallback.ok) {
+        console.warn("[ask-prana-transcribe] fallback failed for an accepted container; asking the user to repeat", {
+          status: fallback.status,
+          container: actualContainer,
+          extension: normalized.extension,
+          languageSent: sttLanguage,
+          providerAttempts,
+        });
+      }
+      return jsonResponse({
+        transcript: fallback.ok ? fallback.transcript : "",
+        languageSent: sttLanguage,
+        providerAttempts,
+      });
+    }
+
+    console.error("[ask-prana-transcribe] OpenAI API error", {
+      openaiStatus: fallback.status,
+      receivedContentType: incoming.incomingType,
+      receivedFileName: incoming.fileName,
+      receivedFileSize: incoming.size,
+      sentFileName: openAIFile.name,
+      sentFileType: openAIFile.type,
+      sentFileSize: openAIFile.size,
+      actualContainer,
+    });
+    return jsonResponse(
+      {
+        error: "Unable to transcribe audio.",
+        detail:
+          typeof (fallback.data as { error?: { message?: string } })?.error
+            ?.message === "string"
+            ? (fallback.data as { error: { message: string } }).error.message
+            : undefined,
+      },
+      400,
+    );
   } catch (err) {
     console.error("[ask-prana-transcribe] unhandled error:", err);
     return jsonResponse({ error: "Unable to transcribe audio." }, 500);
