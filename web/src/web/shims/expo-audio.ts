@@ -411,7 +411,9 @@ export class AudioPlayer extends Emitter {
 
   private statusFromMedia() {
     const m = this.media;
-    const playing = !!(m.currentTime > 0 && !m.paused && !m.ended && m.readyState > 2);
+    // readyState often stays at HAVE_CURRENT_DATA (2) on Android Chrome/Brave
+    // while audio is already audible. currentTime is the playback signal.
+    const playing = !m.paused && !m.ended && m.currentTime > 0;
     return {
       id: this.id,
       isLoaded: true,

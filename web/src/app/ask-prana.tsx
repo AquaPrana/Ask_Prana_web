@@ -323,6 +323,7 @@ export default function AskPranaScreen() {
     startAudioRecording,
     stopAudioRecordingToComposer,
     stopAudioRecordingToTranscript,
+    clearVoiceLiveTranscript,
     hasFailedRecording,
     retryFailedRecording,
     discardFailedRecording,
@@ -1140,9 +1141,10 @@ export default function AskPranaScreen() {
                 void stopAskPranaSpeech();
                 void cancelAudioRecording();
               }}
-              onStartListening={() =>
-                startAudioRecording({ source: "voice", throwOnFailure: true })
+              onStartListening={(language) =>
+                startAudioRecording({ source: "voice", throwOnFailure: true, language })
               }
+              onClearLiveTranscript={clearVoiceLiveTranscript}
               onCancelListening={cancelAudioRecording}
               onStopListeningToTranscript={stopAudioRecordingToTranscript}
               onAsk={async (question, context, handlers) => askFromVoiceMode(question, context, handlers)}

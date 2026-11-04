@@ -28,6 +28,27 @@ type AskPranaSpeakOptions = {
 
 let activePlayer: ReturnType<typeof createAudioPlayer> | null = null;
 let speakGeneration = 0;
+let speechOutputActive = false;
+let speechOutputIdleAt = 0;
+
+function markSpeechOutputStarted() {
+  speechOutputActive = true;
+}
+
+function markSpeechOutputStopped() {
+  speechOutputActive = false;
+  speechOutputIdleAt = Date.now();
+}
+
+/** True only while a voice reply we started is still the active output. */
+export function isAskPranaSpeechOutputActive() {
+  return speechOutputActive;
+}
+
+/** Covers the short tail after stop, when a speaker can still be audible. */
+export function wasAskPranaSpeechOutputRecent(withinMs = 1200) {
+  return speechOutputActive || Date.now() - speechOutputIdleAt < withinMs;
+}
 const ttsAbortControllers = new Set<AbortController>();
 const failedDeviceVoices = new Set<string>();
 const activeAudioUrls = new Set<string>();
@@ -50,6 +71,7 @@ function resumeWebSpeech() {
 
 export async function stopAskPranaSpeech() {
   speakGeneration += 1;
+  markSpeechOutputStopped();
   for (const controller of ttsAbortControllers) controller.abort();
   ttsAbortControllers.clear();
   for (const url of activeAudioUrls) {
@@ -167,8 +189,23 @@ function speakChunkWithExpoSpeech(
     // cloud voice is used instead of a silent "Speaking".
     const startTimer = setTimeout(() => {
       if (started || generation !== speakGeneration) return;
-      void Speech.stop();
-      finish({ spoke: false, provider: "none", reason: "The device voice did not start." });
+      void (async () => {
+        if (started || generation !== speakGeneration) return;
+        let engineSpeaking = false;
+        try {
+          engineSpeaking = await Speech.isSpeakingAsync();
+        } catch {
+          engineSpeaking = false;
+        }
+        if (started || generation !== speakGeneration) return;
+        if (engineSpeaking) {
+          started = true;
+          onStarted?.();
+          return;
+        }
+        void Speech.stop();
+        finish({ spoke: false, provider: "none", reason: "The device voice did not start." });
+      })();
     }, 4_000);
     // If a piece still never reports its end (audio-device change, engine
     // hiccup), skip it after a bounded wait instead of stalling the reply.
@@ -195,6 +232,7 @@ function speakChunkWithExpoSpeech(
       rate: 0.95,
       pitch: 1,
       onStart: () => {
+        if (generation !== speakGeneration || started) return;
         started = true;
         onStarted?.();
       },
@@ -352,6 +390,8 @@ function playCloudUri(
     let settled = false;
     let everPlayed = false;
     let replayed = false;
+    let lastTime = 0;
+    let lastAdvanceAt = started;
     const finish = (result: AskPranaSpeakResult, stop: boolean) => {
       if (settled) return;
       settled = true;
@@ -374,11 +414,19 @@ function playCloudUri(
       }
       const status = player.currentStatus;
       const elapsed = Date.now() - started;
-      if (status?.playing && !everPlayed) {
+      const time = Number(status?.currentTime ?? 0);
+      if (time > lastTime + 0.01) {
+        lastTime = time;
+        lastAdvanceAt = Date.now();
+      }
+      // Android browsers can play cloud audio while status.playing stays
+      // false. Advancing currentTime means this sentence is audible.
+      if (!everPlayed && (status?.playing || time > 0.05)) {
         everPlayed = true;
         onStarted?.();
       }
-      if (status?.didJustFinish || (everPlayed && !status?.playing && elapsed > 800)) {
+      const stalled = Date.now() - lastAdvanceAt > 800;
+      if (status?.didJustFinish || (everPlayed && stalled && !status?.playing)) {
         finish({ spoke: true, provider: "openai-tts" }, false);
         return;
       }
@@ -439,12 +487,14 @@ export function createAskPranaSpeechQueue(
   const finish = (result: AskPranaSpeakResult) => {
     if (settled) return;
     settled = true;
+    if (generation === speakGeneration) markSpeechOutputStopped();
     resolveDone(result);
     wake();
   };
   const reportStart = () => {
     if (startReported) return;
     startReported = true;
+    markSpeechOutputStarted();
     options?.onPlaybackStart?.();
   };
   const ensureMode = () => {

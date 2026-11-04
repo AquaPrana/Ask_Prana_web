@@ -680,6 +680,8 @@ type AskPranaChatContextValue = {
     source?: "composer" | "voice";
     /** Voice mode needs a rejected promise to leave its listening state. */
     throwOnFailure?: boolean;
+    /** Selected Voice Chat language. Drives browser and cloud transcription. */
+    language?: AskPranaSpeechLanguageCode;
   }) => Promise<void>;
   /**
    * @deprecated Composer dictation must never auto-send. Prefer
@@ -692,6 +694,8 @@ type AskPranaChatContextValue = {
   stopAudioRecordingToComposer: () => Promise<string | null>;
   /** Stop mic and return transcript only (for voice conversation turns). */
   stopAudioRecordingToTranscript: () => Promise<string | null>;
+  /** Remove a display-only voice partial without cancelling a live microphone. */
+  clearVoiceLiveTranscript: () => void;
   /** A composer recording whose transcription failed and can be retried. */
   hasFailedRecording: boolean;
   retryFailedRecording: () => Promise<string | null>;
@@ -829,6 +833,8 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
   // the recognizer can detect Telugu/Hindi/English code switching. Composer
   // dictation intentionally keeps the low-latency browser recognizer.
   const audioRecordingSourceRef = useRef<"composer" | "voice">("composer");
+  /** Language selected for the voice recording that is currently open. */
+  const voiceTranscriptionLanguageRef = useRef<AskPranaSpeechLanguageCode>("en");
   const draftRef = useRef("");
   const messagesRef = useRef<ChatMessage[]>([]);
   const welcomeReadyRef = useRef(false);
@@ -2743,9 +2749,14 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
     },
     [isSending, isRecording, isTranscribing, uploadPendingAttachment],
   );
+  const clearVoiceLiveTranscript = useCallback(() => {
+    setVoiceLiveTranscript("");
+  }, []);
+
   const startAudioRecording = useCallback(async (options?: {
     source?: "composer" | "voice";
     throwOnFailure?: boolean;
+    language?: AskPranaSpeechLanguageCode;
   }) => {
     clearStuckRecordingFlag();
     const source = options?.source ?? "composer";
@@ -2779,6 +2790,14 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
     if (source === "voice") {
       // A new utterance replaces any cancelled display-only bubble.
       setVoiceLiveTranscript("");
+      const selectedLanguage = options?.language
+        ? mapToAskPranaLanguageCode(options.language)
+        : await loadAskPranaPreferredLanguage();
+      if (operationEpoch !== dictationEpochRef.current) {
+        voiceBusyRef.current = false;
+        return;
+      }
+      voiceTranscriptionLanguageRef.current = selectedLanguage;
     }
 
     // Voice Chat remains on browser SpeechRecognition for its continuous,
@@ -2793,7 +2812,9 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
     ) {
       try {
         recordingGuardUntilRef.current = Date.now() + 4000;
-        const preferredLanguage = await loadAskPranaPreferredLanguage();
+        const preferredLanguage = source === "voice"
+          ? voiceTranscriptionLanguageRef.current
+          : await loadAskPranaPreferredLanguage();
         // Close/cancel may happen while the language preference is loading.
         // Never allow that stale invocation to acquire a fresh browser mic.
         if (operationEpoch !== dictationEpochRef.current) {
@@ -3124,19 +3145,18 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         return null;
       }
 
-      const preferredLanguage = await loadAskPranaPreferredLanguage();
+      const preferredLanguage = audioRecordingSourceRef.current === "voice"
+        ? voiceTranscriptionLanguageRef.current
+        : await loadAskPranaPreferredLanguage();
       const transcribeInput = {
         uri,
         blob,
         mimeType: audioMeta.mimeType,
         fileName: audioMeta.fileName,
-        // Do not constrain voice conversation to the response language:
-        // Whisper's automatic language detection handles code-switched
-        // Telugu/Hindi/English and short English aquaculture terms.
-        language:
-          audioRecordingSourceRef.current === "voice"
-            ? "auto"
-            : preferredLanguage,
+        // Voice Chat and composer dictation both follow the selected
+        // language. Automatic detection was transcribing speaker echo and
+        // unclear audio into an unrelated script.
+        language: preferredLanguage,
       };
       let transcript = "";
       try {
@@ -3296,6 +3316,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       stopAudioRecordingAndSend,
       stopAudioRecordingToComposer,
       stopAudioRecordingToTranscript,
+      clearVoiceLiveTranscript,
       hasFailedRecording,
       retryFailedRecording,
       discardFailedRecording,
@@ -3347,6 +3368,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       stopAudioRecordingAndSend,
       stopAudioRecordingToComposer,
       stopAudioRecordingToTranscript,
+      clearVoiceLiveTranscript,
       hasFailedRecording,
       retryFailedRecording,
       discardFailedRecording,

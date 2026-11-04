@@ -45,6 +45,88 @@ async function getVoices(): Promise<SpeechSynthesisVoice[]> {
   });
 }
 
+type ActiveSpeech = {
+  settled: boolean;
+  started: boolean;
+  sawSilence: boolean;
+  silentTicks: number;
+  startedAt: number;
+  lastResume: number;
+  poll: ReturnType<typeof setInterval> | null;
+  onStart?: SpeechOptions["onStart"];
+  onDone?: SpeechOptions["onDone"];
+  onStopped?: SpeechOptions["onStopped"];
+  onError?: SpeechOptions["onError"];
+};
+
+let activeSpeech: ActiveSpeech | null = null;
+
+function engineBusy(s: SpeechSynthesis) {
+  return Boolean(s.speaking || s.pending);
+}
+
+function settleSpeech(record: ActiveSpeech, kind: "done" | "stopped" | "error", error?: Error) {
+  if (record.settled) return;
+  record.settled = true;
+  if (record.poll) {
+    clearInterval(record.poll);
+    record.poll = null;
+  }
+  if (activeSpeech === record) activeSpeech = null;
+  if (kind === "done") record.onDone?.();
+  else if (kind === "stopped") record.onStopped?.();
+  else record.onError?.(error ?? new Error("speech error"));
+}
+
+/**
+ * Android Chrome and Brave often play speechSynthesis audio without ever
+ * firing utterance onstart or onend. Watch the engine itself so playback
+ * status follows the sound, including across queued sentences.
+ */
+function watchSpeech(s: SpeechSynthesis, record: ActiveSpeech) {
+  if (record.settled) return;
+  const active = engineBusy(s);
+  if (!record.started) {
+    if (!active) record.sawSilence = true;
+    const waited = Date.now() - record.startedAt;
+    if (active && (record.sawSilence || waited >= 150)) {
+      record.started = true;
+      record.silentTicks = 0;
+      record.onStart?.();
+    }
+    return;
+  }
+  if (active) {
+    record.silentTicks = 0;
+    // Long Android utterances pause themselves unless synthesis is resumed.
+    const now = Date.now();
+    if (now - record.lastResume > 10_000) {
+      record.lastResume = now;
+      try { s.resume(); } catch { /* ignore */ }
+    }
+    return;
+  }
+  record.silentTicks += 1;
+  if (record.silentTicks >= 8) settleSpeech(record, "done");
+}
+
+function beginSpeech(s: SpeechSynthesis, message: SpeechSynthesisUtterance, record: ActiveSpeech) {
+  if (record.settled) return;
+  message.onstart = () => {
+    if (record.settled || record.started) return;
+    record.started = true;
+    record.silentTicks = 0;
+    record.onStart?.();
+  };
+  message.onend = () => settleSpeech(record, "done");
+  message.onpause = () => settleSpeech(record, "stopped");
+  message.onerror = (event) =>
+    settleSpeech(record, "error", new Error(String(event.error ?? "speech error")));
+  s.speak(message);
+  try { s.resume(); } catch { /* ignore */ }
+  record.poll = setInterval(() => watchSpeech(s, record), 50);
+}
+
 export function speak(text: string, options: SpeechOptions = {}): void {
   const s = synth();
   if (!s) {
@@ -55,28 +137,40 @@ export function speak(text: string, options: SpeechOptions = {}): void {
     options.onError?.(new Error(`Speech input text is too long! Limit of input length is: ${maxSpeechInputLength}`));
     return;
   }
-  void (async () => {
-    const message = new SpeechSynthesisUtterance();
-    if (typeof options.rate === "number") message.rate = options.rate;
-    if (typeof options.pitch === "number") message.pitch = options.pitch;
-    if (typeof options.language === "string") message.lang = options.language;
-    if (typeof options.volume === "number") message.volume = options.volume;
-    if (typeof options.voice === "string") {
-      const voices = await getVoices();
-      const voice = voices[Math.max(0, voices.findIndex((v) => v.voiceURI === options.voice))];
+  if (activeSpeech && !activeSpeech.settled) settleSpeech(activeSpeech, "stopped");
+  const message = new SpeechSynthesisUtterance();
+  if (typeof options.rate === "number") message.rate = options.rate;
+  if (typeof options.pitch === "number") message.pitch = options.pitch;
+  if (typeof options.language === "string") message.lang = options.language;
+  if (typeof options.volume === "number") message.volume = options.volume;
+  if (options.onResume) message.onresume = options.onResume;
+  if (options.onMark) message.onmark = options.onMark;
+  if (options.onBoundary) message.onboundary = options.onBoundary;
+  const record: ActiveSpeech = {
+    settled: false,
+    started: false,
+    sawSilence: !engineBusy(s),
+    silentTicks: 0,
+    startedAt: Date.now(),
+    lastResume: Date.now(),
+    poll: null,
+    onStart: options.onStart,
+    onDone: options.onDone,
+    onStopped: options.onStopped,
+    onError: options.onError,
+  };
+  activeSpeech = record;
+  message.text = text;
+  if (typeof options.voice === "string") {
+    void getVoices().then((voices) => {
+      if (record.settled) return;
+      const voice = voices.find((item) => item.voiceURI === options.voice);
       if (voice) message.voice = voice;
-    }
-    if (options.onResume) message.onresume = options.onResume;
-    if (options.onMark) message.onmark = options.onMark;
-    if (options.onBoundary) message.onboundary = options.onBoundary;
-    message.onstart = (e) => options.onStart?.(e);
-    message.onend = (e) => options.onDone?.(e);
-    message.onpause = (e) => options.onStopped?.(e);
-    // Same mapping as expo-speech's web module: every synthesis error goes to onError.
-    message.onerror = (e) => options.onError?.(new Error(String(e.error ?? "speech error")));
-    message.text = text;
-    s.speak(message);
-  })();
+      beginSpeech(s, message, record);
+    });
+    return;
+  }
+  beginSpeech(s, message, record);
 }
 
 export async function getAvailableVoicesAsync(): Promise<Voice[]> {
@@ -97,6 +191,7 @@ export async function isSpeakingAsync(): Promise<boolean> {
 }
 
 export async function stop(): Promise<void> {
+  if (activeSpeech && !activeSpeech.settled) settleSpeech(activeSpeech, "stopped");
   synth()?.cancel();
 }
 

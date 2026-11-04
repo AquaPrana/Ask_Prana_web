@@ -83,7 +83,9 @@ try {
     onPartial: () => {}, onError: () => {}, onUtteranceEnd: () => { fallbackCount += 1; },
   });
   MockRecognition.instances.at(-1).result("second question", true);
-  await sleep(1_650);
+  // Two words count as unfinished, so the no-speech-end fallback waits
+  // 2400 ms plus the 1400 ms unfinished extension.
+  await sleep(4_000);
   assert(fallbackCount === 1, "missing-speechend fallback did not finalize exactly once");
   await fallback.stop();
 
@@ -121,7 +123,77 @@ try {
     assert(text === `turn ${turn}`, `consecutive turn ${turn} did not resolve cleanly`);
   }
 
-  console.log("Voice dictation harness passed: final transcript, missing-speechend fallback, late-final preservation, pause cancellation, and five consecutive sessions.");
+  const { isAssistantEchoTranscript, isUnclearVoiceTranscript } = await server.ssrLoadModule(
+    "/src/lib/ask-prana-voice-transcript.ts",
+  );
+  assert(isUnclearVoiceTranscript("  ") === true, "blank recognition should be unclear");
+  assert(isUnclearVoiceTranscript("Thanks for watching!") === true, "non-speech hallucination should be unclear");
+  assert(isUnclearVoiceTranscript("Хай вам спавно! Хавані!") === false, "an unexpected script is not discarded by itself");
+  assert(isUnclearVoiceTranscript("How much feed for my pond?") === false, "a real question should be kept");
+  assert(
+    isAssistantEchoTranscript("oxygen stays low in the pond", "Oxygen stays low in the pond today.") === true,
+    "assistant audio should match as echo",
+  );
+  assert(
+    isAssistantEchoTranscript("what about salinity", "Oxygen stays low in the pond today.") === false,
+    "a different interruption should not match as echo",
+  );
+
+  class MockUtterance {
+    constructor() {
+      this.text = "";
+      this.lang = "";
+      this.onstart = null;
+      this.onend = null;
+      this.onerror = null;
+      this.onpause = null;
+    }
+  }
+  globalThis.SpeechSynthesisUtterance = MockUtterance;
+  const synth = {
+    speaking: false,
+    pending: false,
+    speak() {
+      this.speaking = true;
+    },
+    cancel() {
+      this.speaking = false;
+      this.pending = false;
+    },
+    resume() {},
+    getVoices() { return []; },
+  };
+  globalThis.window.speechSynthesis = synth;
+  const { speak, stop } = await server.ssrLoadModule("/src/web/shims/expo-speech.ts");
+  const events = [];
+  speak("The pond is ready.", {
+    language: "en-IN",
+    onStart: () => events.push("start"),
+    onDone: () => events.push("done"),
+    onStopped: () => events.push("stopped"),
+  });
+  await sleep(120);
+  assert(events[0] === "start", "playback start should be detected without an onstart event");
+  synth.speaking = false;
+  await sleep(500);
+  assert(events[1] === "done", "playback end should be detected without an onend event");
+
+  const cancelled = [];
+  synth.speaking = false;
+  speak("Another sentence.", {
+    onStart: () => cancelled.push("start"),
+    onDone: () => cancelled.push("done"),
+    onStopped: () => cancelled.push("stopped"),
+  });
+  await sleep(80);
+  await stop();
+  synth.speaking = false;
+  await sleep(500);
+  assert(cancelled.includes("start"), "the cancelled sentence had started");
+  assert(cancelled.includes("stopped"), "stop should settle the active sentence");
+  assert(!cancelled.includes("done"), "a cancelled sentence must not also report completion");
+
+  console.log("Voice dictation harness passed: final transcript, missing-speechend fallback, late-final preservation, pause cancellation, five consecutive sessions, transcript checks, and playback events.");
 } finally {
   await server.close();
 }

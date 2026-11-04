@@ -25,11 +25,17 @@ import {
 } from "../lib/ask-prana-language";
 import {
   createAskPranaSpeechQueue,
+  isAskPranaSpeechOutputActive,
   resetAskPranaVoiceSpeechSession,
   stopAskPranaSpeech,
+  wasAskPranaSpeechOutputRecent,
   type AskPranaSpeechQueue,
 } from "../lib/ask-prana-speech";
 import { splitCompleteSentences } from "../lib/ask-prana-sentences";
+import {
+  isAssistantEchoTranscript,
+  isUnclearVoiceTranscript,
+} from "../lib/ask-prana-voice-transcript";
 import { transcribeAskPranaAudio } from "../services/ask-prana";
 import {
   setVoiceAutoStopListener,
@@ -101,7 +107,9 @@ type Props = {
   draft: string;
   onChangeDraft: (value: string) => void;
   onClose: () => void;
-  onStartListening: () => Promise<void>;
+  onStartListening: (language: AskPranaSpeechLanguageCode) => Promise<void>;
+  /** Drops a display-only partial so a rejected turn cannot remain on screen. */
+  onClearLiveTranscript?: () => void;
   onCancelListening: () => Promise<void>;
   onStopListeningToTranscript: () => Promise<string | null>;
   onAsk: (
@@ -475,7 +483,10 @@ function wordCount(text: string) {
   return text.trim() ? text.trim().split(/\s+/).length : 0;
 }
 
-async function transcribeInterruption(wav: Blob): Promise<string> {
+async function transcribeInterruption(
+  wav: Blob,
+  language: AskPranaSpeechLanguageCode,
+): Promise<string> {
   try {
     const transcript = await Promise.race([
       transcribeAskPranaAudio({
@@ -483,7 +494,7 @@ async function transcribeInterruption(wav: Blob): Promise<string> {
         blob: wav,
         mimeType: "audio/wav",
         fileName: "voice-interruption.wav",
-        language: "auto",
+        language,
       }),
       new Promise<string>((resolve) =>
         setTimeout(() => resolve(""), BARGE_IN_TRANSCRIBE_TIMEOUT_MS),
@@ -519,6 +530,7 @@ export function AskPranaVoiceModeModal({
   onChangeDraft,
   onClose,
   onStartListening,
+  onClearLiveTranscript,
   onCancelListening,
   onStopListeningToTranscript,
   onAsk,
@@ -548,6 +560,10 @@ export function AskPranaVoiceModeModal({
   const [retryQuestion, setRetryQuestion] = useState<string | null>(null);
   const [activeLanguage, setActiveLanguage] =
     useState<AskPranaSpeechLanguageCode>(language);
+  const [captionTurn, setCaptionTurn] = useState(0);
+  const activeLanguageRef = useRef<AskPranaSpeechLanguageCode>(language);
+  /** Assistant text already handed to speech, used to ignore its own echo. */
+  const recentSpokenRef = useRef("");
   const loopArmedRef = useRef(false);
   const sessionActiveRef = useRef(false);
   const stateRef = useRef<VoiceModeState>("idle");
@@ -597,6 +613,7 @@ export function AskPranaVoiceModeModal({
 
   useEffect(() => {
     if (visible) {
+      activeLanguageRef.current = language;
       setActiveLanguage(language);
     }
   }, [visible, language]);
@@ -779,6 +796,15 @@ export function AskPranaVoiceModeModal({
         smoothed = smoothed ? smoothed * 0.6 + rms * 0.4 : rms;
 
         if (!capturing) {
+          // Playback can be audible before React leaves "Preparing". Treat
+          // that output as the assistant, not as a new question.
+          if (
+            isAskPranaSpeechOutputActive() &&
+            bargeInPlaybackStartedAtRef.current == null
+          ) {
+            bargeInPlaybackStartedAtRef.current = now;
+            voicedRun = 0;
+          }
           const playbackAt = bargeInPlaybackStartedAtRef.current;
           const learningEcho =
             playbackAt != null && now - playbackAt < BARGE_IN_ECHO_LEARN_MS;
@@ -919,9 +945,13 @@ export function AskPranaVoiceModeModal({
   }, [onCancelAsk, onCancelListening, stopBargeInMonitor]);
 
   const startListeningSafely = useCallback(
-    async (reason: "open" | "resume" | "retry" | "interrupt" | "visibility") => {
+    async (
+      reason: "open" | "resume" | "retry" | "interrupt" | "visibility",
+      languageOverride?: AskPranaSpeechLanguageCode,
+    ) => {
       const sessionId = voiceSessionIdRef.current;
       const attemptId = ++listeningAttemptRef.current;
+      const listenLanguage = languageOverride ?? activeLanguageRef.current;
       if (!sessionActiveRef.current || mutedRef.current) return false;
       if (
         Platform.OS === "web" &&
@@ -933,18 +963,24 @@ export function AskPranaVoiceModeModal({
       }
 
       turnInFlightRef.current = false;
+      setSubmittedQuestion(null);
+      onClearLiveTranscript?.();
       if (reason !== "interrupt" && interruptCaptureRef.current) {
         // A capture left over from a failed interruption must not be merged
         // into an unrelated later turn.
         stopBargeInMonitor();
       }
-      setState("listening");
-      stateRef.current = "listening";
+      // After a reply, stay on Speaking until the next microphone is actually open.
+      const showListeningNow = reason !== "resume";
+      if (showListeningNow) {
+        setState("listening");
+        stateRef.current = "listening";
+      }
       setErrorText(null);
       logVoiceLifecycle("recognition-start-requested", { sessionId, attemptId, reason });
       for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
-          await onStartListening();
+          await onStartListening(listenLanguage);
           if (
             !sessionActiveRef.current ||
             voiceSessionIdRef.current !== sessionId ||
@@ -953,6 +989,10 @@ export function AskPranaVoiceModeModal({
             // A close/new session won while startup was awaiting permission.
             await onCancelListening();
             return false;
+          }
+          if (!showListeningNow) {
+            setState("listening");
+            stateRef.current = "listening";
           }
           logVoiceLifecycle("recognition-started", { sessionId, attemptId, reason, attempt });
           return true;
@@ -995,7 +1035,7 @@ export function AskPranaVoiceModeModal({
       }
       return false;
     },
-    [onCancelListening, onStartListening, stopBargeInMonitor],
+    [onCancelListening, onClearLiveTranscript, onStartListening, stopBargeInMonitor],
   );
 
   useEffect(() => {
@@ -1093,6 +1133,7 @@ export function AskPranaVoiceModeModal({
         length: cleaned.length,
       });
       if (!resume) appendLine("user", cleaned);
+      recentSpokenRef.current = "";
       setSubmittedQuestion(cleaned);
       setRetryQuestion(cleaned);
       setState("processing");
@@ -1101,6 +1142,7 @@ export function AskPranaVoiceModeModal({
       // This turn owns the conversation until the user interrupts, taps the
       // orb, types, mutes or changes language (each bumps speechTurnRef).
       const turnToken = ++speechTurnRef.current;
+      setCaptionTurn(turnToken);
       const turnId = `${voiceSessionIdRef.current}-${turnToken}`;
       const logTurn = (stage: string, detail?: Record<string, unknown>) => {
         if (process.env.NODE_ENV === "production") return;
@@ -1131,11 +1173,14 @@ export function AskPranaVoiceModeModal({
             !mutedRef.current &&
             turnToken === speechTurnRef.current,
           onPlaybackStart: () => {
-            if (turnToken !== speechTurnRef.current) return;
+            if (!sessionActiveRef.current || turnToken !== speechTurnRef.current) return;
             playbackStarted = true;
             bargeInPlaybackStartedAtRef.current = Date.now();
-            setState("speaking");
-            stateRef.current = "speaking";
+            // Stay on Speaking for every later sentence of this same reply.
+            if (stateRef.current !== "speaking") {
+              setState("speaking");
+              stateRef.current = "speaking";
+            }
             logTurn("first-playback", {
               speechEndToFirstAudioMs:
                 speechEndedAt == null ? null : Math.round(performance.now() - speechEndedAt),
@@ -1145,6 +1190,7 @@ export function AskPranaVoiceModeModal({
         });
         speechQueueRef.current = queue;
         const rememberSentence = (sentence: string) => {
+          recentSpokenRef.current = `${recentSpokenRef.current} ${sentence}`.trim();
           setLines((current) => {
             const id = `assistant-${turnToken}`;
             const last = current[current.length - 1];
@@ -1344,7 +1390,7 @@ export function AskPranaVoiceModeModal({
         const hadSpeech = capture.hadSpeech();
         const wav = capture.takeWav();
         if (wav && (hadSpeech || recognized)) {
-          const captured = await transcribeInterruption(wav);
+          const captured = await transcribeInterruption(wav, activeLanguageRef.current);
           if (captured && wordCount(captured) >= wordCount(recognized)) {
             transcript = captured;
           }
@@ -1357,21 +1403,46 @@ export function AskPranaVoiceModeModal({
         }
       }
       if (isStale()) return;
-      if (!transcript && heldAsk) {
-        // Only a noise interrupted Thinking: carry on with the original answer.
-        logVoiceLifecycle("thinking-interruption-empty-resuming", { sessionId, turnId });
-        await runTurnFromTranscript("", heldAsk);
+      const askToRepeat = async () => {
+        logVoiceLifecycle("transcript-unclear", { sessionId, turnId });
+        onClearLiveTranscript?.();
+        const listening = await startListeningSafely("retry");
+        if (
+          listening &&
+          sessionActiveRef.current &&
+          voiceSessionIdRef.current === sessionId &&
+          !mutedRef.current
+        ) {
+          setErrorText("I couldn't understand that. Please say it again.");
+        }
+      };
+      if (isUnclearVoiceTranscript(transcript)) {
+        if (heldAsk) {
+          // Noise during Thinking is not a new question.
+          logVoiceLifecycle("thinking-interruption-empty-resuming", { sessionId, turnId });
+          await runTurnFromTranscript("", heldAsk);
+          return;
+        }
+        console.log("[AskPranaVoice] unclear transcript — keep listening");
+        await askToRepeat();
+        return;
+      }
+      if (
+        wasAskPranaSpeechOutputRecent() &&
+        isAssistantEchoTranscript(transcript, recentSpokenRef.current)
+      ) {
+        logVoiceLifecycle("assistant-echo-ignored", { sessionId, turnId });
+        onClearLiveTranscript?.();
+        if (heldAsk) {
+          await runTurnFromTranscript("", heldAsk);
+          return;
+        }
+        await startListeningSafely("retry");
         return;
       }
       if (transcript && heldAsk) {
         // A real new question replaces the one still loading.
         onCancelAsk?.();
-      }
-      if (!transcript) {
-        console.log("[AskPranaVoice] empty transcript — keep listening");
-        logVoiceLifecycle("transcript-empty", { sessionId, turnId });
-        await startListeningSafely("retry");
-        return;
       }
       logVoiceLifecycle("transcript-finalized", {
         sessionId,
@@ -1395,7 +1466,7 @@ export function AskPranaVoiceModeModal({
       // reply had failed, making both mic entry points look broken.
       setErrorText(voiceTurnErrorMessage(error));
     }
-  }, [onCancelAsk, onStopListeningToTranscript, runTurnFromTranscript, startListeningSafely]);
+  }, [onCancelAsk, onClearLiveTranscript, onStopListeningToTranscript, runTurnFromTranscript, startListeningSafely]);
 
   useEffect(() => {
     finishListeningTurnRef.current = finishListeningTurn;
@@ -1519,10 +1590,11 @@ export function AskPranaVoiceModeModal({
       stopBargeInMonitor();
       onCancelAsk?.();
       await stopAskPranaSpeech();
+      activeLanguageRef.current = code;
+      setActiveLanguage(code);
       await onLanguageChange(code);
       if (!sessionActiveRef.current) return;
-      setActiveLanguage(code);
-      await startListeningSafely("resume");
+      await startListeningSafely("resume", code);
     },
     [activeLanguage, onCancelAsk, onLanguageChange, startListeningSafely, stopBargeInMonitor],
   );
@@ -1626,6 +1698,11 @@ export function AskPranaVoiceModeModal({
         : state === "processing" || state === "finalizing"
           ? 1.012
           : 1;
+  const showTurnCaption = state === "processing" || state === "speaking";
+  const userCaption = showTurnCaption ? submittedQuestion : null;
+  const assistantCaption = showTurnCaption && captionsVisible
+    ? lines.find((line) => line.id === `assistant-${captionTurn}`)?.text ?? null
+    : null;
   const orb = (
     <Pressable
       onPress={() => {
@@ -1652,8 +1729,14 @@ export function AskPranaVoiceModeModal({
       <View pointerEvents="box-none" style={styles.overlayHost}>
         {orb}
         {statusLabel ? <Text style={styles.status}>{statusLabel}</Text> : null}
-        {submittedQuestion ? (
-          <Text style={styles.overlayTranscript} numberOfLines={3}>{submittedQuestion}</Text>
+        {userCaption ? (
+          <Text
+            style={styles.overlayTranscript}
+            numberOfLines={3}
+            accessibilityLabel={`You said: ${userCaption}`}
+          >
+            {userCaption}
+          </Text>
         ) : null}
         {errorText ? <Text style={styles.errorHint}>{errorText}</Text> : null}
         {state === "error" && retryQuestion ? (
@@ -1706,17 +1789,27 @@ export function AskPranaVoiceModeModal({
         <View style={styles.stage}>
           {orb}
           {statusLabel ? <Text style={styles.status}>{statusLabel}</Text> : null}
-          {submittedQuestion ? (
-            <Text style={styles.caption} numberOfLines={3}>{submittedQuestion}</Text>
+          {userCaption ? (
+            <Text
+              style={styles.caption}
+              numberOfLines={3}
+              accessibilityLabel={`You said: ${userCaption}`}
+            >
+              {userCaption}
+            </Text>
           ) : null}
           {state === "error" && retryQuestion ? (
             <Pressable onPress={handleRetry} style={styles.retryBtn} accessibilityRole="button" accessibilityLabel="Retry">
               <Text style={styles.retryText}>Retry</Text>
             </Pressable>
           ) : null}
-          {captionsVisible && lines.length ? (
-            <Text style={styles.caption} numberOfLines={3}>
-              {lines[lines.length - 1]?.text}
+          {assistantCaption ? (
+            <Text
+              style={styles.caption}
+              numberOfLines={3}
+              accessibilityLabel={`Ask Prana said: ${assistantCaption}`}
+            >
+              {assistantCaption}
             </Text>
           ) : null}
           {errorText && state !== "error" ? (
