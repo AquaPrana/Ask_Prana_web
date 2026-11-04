@@ -1,6 +1,7 @@
 // Dependency-free regression harness for the browser SpeechRecognition wrapper.
 // Run with: node scripts/voice-dictation-harness.mjs
 // It uses Vite's installed TypeScript loader; no test framework is required.
+import { readFileSync } from "node:fs";
 import { createServer } from "vite";
 
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -193,7 +194,85 @@ try {
   assert(cancelled.includes("stopped"), "stop should settle the active sentence");
   assert(!cancelled.includes("done"), "a cancelled sentence must not also report completion");
 
-  console.log("Voice dictation harness passed: final transcript, missing-speechend fallback, late-final preservation, pause cancellation, five consecutive sessions, transcript checks, and playback events.");
+  const {
+    MAX_PROVIDER_CALLS_PER_RECORDING,
+    browserRecognitionLanguage,
+    cloudTranscriptionLanguage,
+    decideVoiceTranscript,
+    isStaleVoiceCapture,
+    mapRequestedSttLanguage,
+    planCloudTranscriptionAttempts,
+    suggestsTeluguMisread,
+  } = await server.ssrLoadModule("/src/lib/ask-prana-transcription-language.ts");
+
+  for (const language of ["te", "hi", "en"]) {
+    const attempts = planCloudTranscriptionAttempts(language);
+    assert(attempts.length === 2, `${language} should have a primary and fallback attempt`);
+    assert(attempts[0].language === language && attempts[1].language === language, `${language} must survive both attempts`);
+  }
+  const automatic = planCloudTranscriptionAttempts(null);
+  assert(automatic[0].language === null && automatic[1].language === null, "automatic detection stays automatic on every attempt");
+  assert(mapRequestedSttLanguage("te-IN") === "te", "te-IN is Telugu");
+  assert(mapRequestedSttLanguage("hi-IN") === "hi", "hi-IN is Hindi");
+  assert(mapRequestedSttLanguage("en-IN") === "en", "en-IN is English");
+  assert(mapRequestedSttLanguage("auto") === null && mapRequestedSttLanguage("") === null, "only an automatic request omits the language");
+  assert(mapRequestedSttLanguage("ta-IN") === null, "an unknown language is not silently replaced with English");
+  assert(browserRecognitionLanguage("te") === "te-IN", "Telugu browser recognition uses te-IN");
+  assert(browserRecognitionLanguage("hi") === "hi-IN", "Hindi browser recognition uses hi-IN");
+  assert(browserRecognitionLanguage("en") === "en-IN", "English browser recognition uses en-IN");
+  assert(cloudTranscriptionLanguage("te") === "te", "Telugu cloud transcription uses te");
+  assert(cloudTranscriptionLanguage("hi") === "hi", "Hindi cloud transcription uses hi");
+  assert(cloudTranscriptionLanguage("en") === "en", "English cloud transcription uses en");
+  assert(MAX_PROVIDER_CALLS_PER_RECORDING === 4, "one recording may use at most four provider calls");
+
+  const teluguQuestion = "నా చెరువులో ఆక్సిజన్ తగ్గింది. ఏం చేయాలి?";
+  const teluguFeed = "రొయ్యలు మేత తినడం లేదు. కారణం ఏమిటి?";
+  const teluguPh = "నా చెరువులో pH ఎక్కువగా ఉంది.";
+  const devanagariMisread = "ननि की गला तीस् कोळसन जागरतिलो तिलिय जियव लिनो.";
+  assert(suggestsTeluguMisread("te", teluguQuestion) === false, "a Telugu question is not a misread");
+  assert(suggestsTeluguMisread("te", teluguFeed) === false, "a Telugu feed question is not a misread");
+  assert(suggestsTeluguMisread("te", teluguPh) === false, "Telugu with pH is not a misread");
+  assert(suggestsTeluguMisread("te", "oxygen level is low in my pond") === false, "an English aquaculture sentence is kept");
+  assert(suggestsTeluguMisread("hi", devanagariMisread) === false, "Hindi speech in Devanagari is kept");
+  assert(suggestsTeluguMisread("te", devanagariMisread) === true, "Telugu requested as Devanagari is a misread signal");
+
+  const accepted = decideVoiceTranscript({ language: "te", first: teluguPh });
+  assert(accepted.action === "accept" && accepted.retryCount === 0 && accepted.text === teluguPh, "mixed Telugu and pH is accepted once");
+  const retryStillWrong = decideVoiceTranscript({
+    language: "te",
+    first: devanagariMisread,
+    retry: devanagariMisread,
+  });
+  assert(
+    retryStillWrong.action === "repeat" && retryStillWrong.retryCount === 1 && !("text" in retryStillWrong),
+    "a second Devanagari result is not submitted",
+  );
+  const retryRecovered = decideVoiceTranscript({
+    language: "te",
+    first: devanagariMisread,
+    retry: teluguQuestion,
+  });
+  assert(
+    retryRecovered.action === "accept" && retryRecovered.retryCount === 1 && retryRecovered.text === teluguQuestion,
+    "the explicit Telugu retry replaces the mismatched text",
+  );
+  const hindi = decideVoiceTranscript({ language: "hi", first: "झींगा खाना नहीं खा रहा है" });
+  assert(hindi.action === "accept" && hindi.text.startsWith("झींगा"), "Hindi is accepted without a script retry");
+
+  const capture = { epoch: 3, turnId: "voice-3", language: "te", provider: "cloud-recorder" };
+  assert(isStaleVoiceCapture(capture, 3) === false, "the recording that just started is current");
+  assert(isStaleVoiceCapture(capture, 4) === true, "a language change invalidates the in-flight recording");
+  assert(isStaleVoiceCapture(null, 3) === true, "a missing capture cannot be transcribed");
+
+  const edge = readFileSync(new URL("../../supabase/functions/ask-prana-transcribe/index.ts", import.meta.url), "utf8");
+  assert(!edge.includes("language: null"), "the transcribe function must not drop an explicit language");
+  assert(edge.includes("language: attempts[0].language"), "the first provider call uses the resolved language");
+  assert(edge.includes("language: attempts[1].language"), "the fallback provider call uses the resolved language");
+  assert(edge.includes('value.startsWith("te-")'), "te-IN stays Telugu in the edge function");
+  assert(edge.includes('value.startsWith("hi-")'), "hi-IN stays Hindi in the edge function");
+  assert(edge.includes('value.startsWith("en-")'), "en-IN stays English in the edge function");
+
+  console.log("Voice dictation harness passed: final transcript, missing-speechend fallback, late-final preservation, pause cancellation, five consecutive sessions, transcript checks, playback events, and transcription language.");
 } finally {
   await server.close();
 }

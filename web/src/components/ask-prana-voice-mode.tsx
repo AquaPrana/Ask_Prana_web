@@ -36,7 +36,7 @@ import {
   isAssistantEchoTranscript,
   isUnclearVoiceTranscript,
 } from "../lib/ask-prana-voice-transcript";
-import { transcribeAskPranaAudio } from "../services/ask-prana";
+import { logVoiceTranscription, transcribeVoiceRecording } from "../services/ask-prana";
 import {
   setVoiceAutoStopListener,
   setVoiceRecognitionErrorListener,
@@ -434,6 +434,9 @@ const BARGE_IN_CAPTURE_MIN_RMS = 0.015;
 const WAV_SAMPLE_RATE = 16000;
 
 type InterruptCapture = {
+  /** Language selected when this interruption began. */
+  language: AskPranaSpeechLanguageCode;
+  turnId: string;
   hadSpeech: () => boolean;
   /** Stops capture and returns 16 kHz mono WAV of the interruption. */
   takeWav: () => Blob | null;
@@ -486,23 +489,34 @@ function wordCount(text: string) {
 async function transcribeInterruption(
   wav: Blob,
   language: AskPranaSpeechLanguageCode,
+  turnId: string,
 ): Promise<string> {
   try {
     const transcript = await Promise.race([
-      transcribeAskPranaAudio({
+      transcribeVoiceRecording({
         uri: "voice-interruption.wav",
         blob: wav,
         mimeType: "audio/wav",
         fileName: "voice-interruption.wav",
         language,
+        turnId,
+        provider: "cloud-recorder",
       }),
-      new Promise<string>((resolve) =>
+      new Promise<string | null>((resolve) =>
         setTimeout(() => resolve(""), BARGE_IN_TRANSCRIBE_TIMEOUT_MS),
       ),
     ]);
-    return transcript.trim();
+    return transcript?.trim() ?? "";
   } catch (error) {
     console.log("[AskPranaVoice] interruption transcription failed:", error);
+    logVoiceTranscription({
+      turnId,
+      provider: "cloud-recorder",
+      selectedLanguage: language,
+      languageSent: language,
+      retryCount: 0,
+      reason: "interruption-failed",
+    });
     return "";
   }
 }
@@ -610,13 +624,6 @@ export function AskPranaVoiceModeModal({
   useEffect(() => {
     isRecordingRef.current = isRecording;
   }, [isRecording]);
-
-  useEffect(() => {
-    if (visible) {
-      activeLanguageRef.current = language;
-      setActiveLanguage(language);
-    }
-  }, [visible, language]);
 
   useEffect(() => {
     if (Platform.OS !== "web" || typeof window === "undefined") return;
@@ -857,6 +864,8 @@ export function AskPranaVoiceModeModal({
             capturing = true;
             voicedMs = voicedRun;
             interruptCaptureRef.current = {
+              language: activeLanguageRef.current,
+              turnId: `${voiceSessionIdRef.current}-${speechTurnRef.current + 1}`,
               hadSpeech: () => voicedMs >= BARGE_IN_MIN_VOICED_MS,
               takeWav: () => {
                 release();
@@ -1037,6 +1046,23 @@ export function AskPranaVoiceModeModal({
     },
     [onCancelListening, onClearLiveTranscript, onStartListening, stopBargeInMonitor],
   );
+
+  useEffect(() => {
+    if (!visible) return;
+    const previous = activeLanguageRef.current;
+    activeLanguageRef.current = language;
+    setActiveLanguage(language);
+    // The session opens on the website language. A later change cancels the
+    // recording that started in the previous language and listens again.
+    if (!sessionActiveRef.current || previous === language) return;
+    listeningAttemptRef.current += 1;
+    onClearLiveTranscript?.();
+    setSubmittedQuestion(null);
+    void onCancelListening().then(() => {
+      if (!sessionActiveRef.current || activeLanguageRef.current !== language) return;
+      void startListeningSafely("resume", language);
+    });
+  }, [language, onCancelListening, onClearLiveTranscript, startListeningSafely, visible]);
 
   useEffect(() => {
     interruptListeningRef.current = () => startListeningSafely("interrupt");
@@ -1390,7 +1416,11 @@ export function AskPranaVoiceModeModal({
         const hadSpeech = capture.hadSpeech();
         const wav = capture.takeWav();
         if (wav && (hadSpeech || recognized)) {
-          const captured = await transcribeInterruption(wav, activeLanguageRef.current);
+          const captured = await transcribeInterruption(
+            wav,
+            capture.language,
+            capture.turnId,
+          );
           if (captured && wordCount(captured) >= wordCount(recognized)) {
             transcript = captured;
           }
@@ -1402,7 +1432,7 @@ export function AskPranaVoiceModeModal({
           });
         }
       }
-      if (isStale()) return;
+      if (isStale() || (capture && capture.language !== activeLanguageRef.current)) return;
       const askToRepeat = async () => {
         logVoiceLifecycle("transcript-unclear", { sessionId, turnId });
         onClearLiveTranscript?.();
@@ -1584,6 +1614,9 @@ export function AskPranaVoiceModeModal({
 
       setLanguageMenuOpen(false);
       setErrorText(null);
+      listeningAttemptRef.current += 1;
+      onClearLiveTranscript?.();
+      setSubmittedQuestion(null);
       speechTurnRef.current += 1;
       speechQueueRef.current?.cancel();
       speechQueueRef.current = null;
@@ -1596,7 +1629,7 @@ export function AskPranaVoiceModeModal({
       if (!sessionActiveRef.current) return;
       await startListeningSafely("resume", code);
     },
-    [activeLanguage, onCancelAsk, onLanguageChange, startListeningSafely, stopBargeInMonitor],
+    [activeLanguage, onCancelAsk, onClearLiveTranscript, onLanguageChange, startListeningSafely, stopBargeInMonitor],
   );
 
   const handleSendTyped = useCallback(async () => {

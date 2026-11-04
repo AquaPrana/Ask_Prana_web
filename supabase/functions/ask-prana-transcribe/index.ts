@@ -117,13 +117,25 @@ function normalizeOpenAIAudio(
 
 function mapSttLanguage(raw: string): "en" | "te" | "hi" | null {
   const value = raw.trim().toLowerCase();
-  // Automatic detection is important for mixed Telugu/Hindi/English voice
-  // turns. A language hint makes Whisper less likely to retain English terms.
+  // Only an explicit automatic request omits the language. `te-IN`, `hi-IN`,
+  // and `en-IN` stay on that language; they are not guessed as English.
   if (!value || value === "auto" || value === "multilingual") return null;
-  if (value === "te" || value.includes("telugu")) return "te";
-  if (value === "hi" || value.includes("hindi")) return "hi";
-  if (value === "en" || value.includes("english")) return "en";
-  return "en";
+  if (value === "te" || value.startsWith("te-") || value.includes("telugu")) return "te";
+  if (value === "hi" || value.startsWith("hi-") || value.includes("hindi")) return "hi";
+  if (value === "en" || value.startsWith("en-") || value.includes("english")) return "en";
+  return null;
+}
+
+/**
+ * One HTTP request makes at most two provider calls. Both use `language`.
+ * A voice recording may add one client retry, so the provider ceiling is 4.
+ * Explicit te/hi/en is copied onto every call and is never replaced with null.
+ */
+function transcriptionAttempts(language: "en" | "te" | "hi" | null) {
+  return [
+    { model: OPENAI_TRANSCRIBE_MODEL, language },
+    { model: OPENAI_TRANSCRIBE_FALLBACK_MODEL, language },
+  ];
 }
 
 /**
@@ -328,6 +340,7 @@ serve(async (req) => {
     });
     const sttLanguage = mapSttLanguage(incoming.language);
 
+    const attempts = transcriptionAttempts(sttLanguage);
     console.log("[AskPranaAudio] transcription started", {
       receivedFileName: incoming.fileName,
       receivedContentType: incoming.incomingType,
@@ -339,42 +352,30 @@ serve(async (req) => {
       sentFileSize: openAIFile.size,
       actualContainer,
       sttLanguage,
-      model: OPENAI_TRANSCRIBE_MODEL,
+      maxProviderAttempts: attempts.length,
     });
 
     let result = await callOpenAiTranscribe({
       apiKey,
       file: openAIFile,
-      model: OPENAI_TRANSCRIBE_MODEL,
-      language: sttLanguage,
+      model: attempts[0].model,
+      language: attempts[0].language,
     });
+    let providerAttempts = 1;
 
-    // Retry without language hint if the first pass fails (helps mixed/noisy audio).
     if (!result.ok || !result.transcript) {
-      console.warn("[ask-prana-transcribe] primary attempt failed; retrying", {
+      providerAttempts += 1;
+      console.warn("[ask-prana-transcribe] primary attempt failed; retrying with the same language", {
         status: result.status,
-        body: result.bodyText?.slice(0, 400),
         hadTranscript: Boolean(result.transcript),
+        languageSent: attempts[1].language,
+        model: attempts[1].model,
       });
       result = await callOpenAiTranscribe({
         apiKey,
         file: openAIFile,
-        model: OPENAI_TRANSCRIBE_MODEL,
-        language: null,
-      });
-    }
-
-    // Last resort: alternate model for stubborn browser webm clips.
-    if (!result.ok || !result.transcript) {
-      console.warn("[ask-prana-transcribe] retrying with fallback model", {
-        model: OPENAI_TRANSCRIBE_FALLBACK_MODEL,
-        status: result.status,
-      });
-      result = await callOpenAiTranscribe({
-        apiKey,
-        file: openAIFile,
-        model: OPENAI_TRANSCRIBE_FALLBACK_MODEL,
-        language: sttLanguage,
+        model: attempts[1].model,
+        language: attempts[1].language,
       });
     }
 
@@ -403,7 +404,11 @@ serve(async (req) => {
       );
     }
 
-    return jsonResponse({ transcript: result.transcript });
+    return jsonResponse({
+      transcript: result.transcript,
+      languageSent: sttLanguage,
+      providerAttempts,
+    });
   } catch (err) {
     console.error("[ask-prana-transcribe] unhandled error:", err);
     return jsonResponse({ error: "Unable to transcribe audio." }, 500);

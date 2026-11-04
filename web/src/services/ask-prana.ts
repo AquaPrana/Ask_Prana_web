@@ -6,7 +6,14 @@ import {
 } from "../lib/supabase";
 import { splitCompleteSentences } from "../lib/ask-prana-sentences";
 import { explicitReplyLanguageLabel } from "../lib/ask-prana-translation-policy";
-import { loadAskPranaPreferredLanguage } from "../lib/ask-prana-language";
+import {
+  loadAskPranaPreferredLanguage,
+  type AskPranaSpeechLanguageCode,
+} from "../lib/ask-prana-language";
+import {
+  decideVoiceTranscript,
+  suggestsTeluguMisread,
+} from "../lib/ask-prana-transcription-language";
 import { getCurrentUserProfile, resolveFarmerDisplayName } from "./profile";
 
 export type AskPranaGeneratedFile = {
@@ -852,10 +859,10 @@ type TranscribeInput = {
 };
 
 /**
- * Voice Chat uses automatic language detection so mixed Telugu/Hindi/English
- * works, but it sometimes picks Tamil or Malayalam for Telugu speech. That
- * text could not be understood or translated and was saved into the chat.
- * In that case transcribe once more in the language selected in the app.
+ * An automatic transcription that comes back in an unsupported Indic script
+ * is tried once more in the saved app language. Explicit te/hi/en is never
+ * replaced here. Voice Chat's Telugu retry lives in transcribeVoiceRecording
+ * and is limited to one extra request.
  */
 export async function transcribeAskPranaAudio(input: TranscribeInput) {
   const transcript = await transcribeAskPranaAudioOnce(input);
@@ -958,4 +965,60 @@ async function transcribeAskPranaAudioOnce(input: TranscribeInput) {
     transcriptLength: data?.transcript?.trim().length ?? 0,
   });
   return data?.transcript?.trim() ?? "";
+}
+
+export function logVoiceTranscription(detail: {
+  turnId: string;
+  provider: "browser" | "cloud-recorder";
+  selectedLanguage: string;
+  languageSent: string;
+  retryCount: number;
+  reason: string;
+}) {
+  if (process.env.NODE_ENV === "production") return;
+  console.debug("[AskPranaVoiceTranscription]", detail);
+}
+
+/**
+ * Transcribe one Voice Chat recording in its captured language.
+ * At most one extra request is made, and only when Telugu comes back as
+ * Devanagari. Each request is still limited by the Edge Function to two
+ * provider calls, so one recording stays within four provider calls.
+ * Returns null when the user should repeat; the questionable text is not returned.
+ */
+export async function transcribeVoiceRecording(input: TranscribeInput & {
+  language: AskPranaSpeechLanguageCode;
+  turnId: string;
+  provider: "browser" | "cloud-recorder";
+}): Promise<string | null> {
+  const languageSent = input.language;
+  const first = await transcribeAskPranaAudio({ ...input, language: languageSent });
+  if (!suggestsTeluguMisread(languageSent, first)) {
+    const decision = decideVoiceTranscript({ language: languageSent, first });
+    logVoiceTranscription({
+      turnId: input.turnId,
+      provider: input.provider,
+      selectedLanguage: languageSent,
+      languageSent,
+      retryCount: decision.retryCount,
+      reason: decision.reason,
+    });
+    return decision.action === "accept" ? decision.text : null;
+  }
+  let retry = "";
+  try {
+    retry = await transcribeAskPranaAudio({ ...input, language: languageSent });
+  } catch (error) {
+    console.log("[askPrana] voice transcription retry failed:", error);
+  }
+  const decision = decideVoiceTranscript({ language: languageSent, first, retry });
+  logVoiceTranscription({
+    turnId: input.turnId,
+    provider: input.provider,
+    selectedLanguage: languageSent,
+    languageSent,
+    retryCount: decision.retryCount,
+    reason: decision.reason,
+  });
+  return decision.action === "accept" ? decision.text : null;
 }
