@@ -223,7 +223,9 @@ async function callOpenAiTranscribe(input: {
   const openAIForm = new FormData();
   openAIForm.append("file", input.file);
   openAIForm.append("model", input.model);
-  openAIForm.append("response_format", "json");
+  // Auto needs Whisper's detected language. json returns text only, so Auto
+  // uses verbose_json. An explicit te/hi/en request stays on that language.
+  openAIForm.append("response_format", input.language ? "json" : "verbose_json");
   if (input.language) {
     openAIForm.append("language", input.language);
   }
@@ -247,11 +249,15 @@ async function callOpenAiTranscribe(input: {
       bodyText: openaiBodyText,
       data: {} as Record<string, unknown>,
       transcript: "",
+      detectedLanguage: null,
     };
   }
 
   const transcript =
     typeof openaiData.text === "string" ? openaiData.text.trim() : "";
+  const detectedLanguage = input.language ?? mapSttLanguage(
+    typeof openaiData.language === "string" ? openaiData.language : "",
+  );
 
   return {
     ok: openaiResponse.ok,
@@ -259,6 +265,7 @@ async function callOpenAiTranscribe(input: {
     bodyText: openaiBodyText,
     data: openaiData,
     transcript,
+    detectedLanguage,
   };
 }
 
@@ -361,6 +368,7 @@ serve(async (req) => {
     let providerAttempts = 0;
     let whisperApiFailure = false;
     let transcript = "";
+    let detectedLanguage: "en" | "te" | "hi" | null = null;
     for (const attempt of whisperCalls) {
       providerAttempts += 1;
       const result = await callOpenAiTranscribe({
@@ -372,6 +380,7 @@ serve(async (req) => {
       if (!result.ok) whisperApiFailure = true;
       if (result.transcript) {
         transcript = result.transcript;
+        detectedLanguage = result.detectedLanguage;
         break;
       }
       if (providerAttempts < whisperCalls.length) {
@@ -388,6 +397,7 @@ serve(async (req) => {
       return jsonResponse({
         transcript,
         languageSent: sttLanguage,
+        detectedLanguage: transcript ? detectedLanguage : null,
         providerAttempts,
       });
     }
@@ -416,6 +426,7 @@ serve(async (req) => {
       return jsonResponse({
         transcript: fallback.ok ? fallback.transcript : "",
         languageSent: sttLanguage,
+        detectedLanguage: fallback.ok ? fallback.detectedLanguage : null,
         providerAttempts,
       });
     }

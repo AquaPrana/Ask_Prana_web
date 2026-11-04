@@ -43,10 +43,13 @@ import {
   type AskPranaAttachment,
   type AskPranaRequestContext,
   type AskPranaVoiceHandlers,
+  type VoiceListenResult,
 } from "../services/ask-prana";
 import {
   browserRecognitionLanguage,
+  cloudLanguageForRecognition,
   isStaleVoiceCapture,
+  recognitionModeFrom,
   type VoiceCaptureSnapshot,
 } from "../lib/ask-prana-transcription-language";
 import { stopAskPranaSpeech } from "../lib/ask-prana-speech";
@@ -687,8 +690,8 @@ type AskPranaChatContextValue = {
     source?: "composer" | "voice";
     /** Voice mode needs a rejected promise to leave its listening state. */
     throwOnFailure?: boolean;
-    /** Selected Voice Chat language. Drives browser and cloud transcription. */
-    language?: AskPranaSpeechLanguageCode;
+    /** Voice recognition mode. Auto detects each question; te/hi/en stay fixed. */
+    language?: string;
   }) => Promise<void>;
   /**
    * @deprecated Composer dictation must never auto-send. Prefer
@@ -701,6 +704,8 @@ type AskPranaChatContextValue = {
   stopAudioRecordingToComposer: () => Promise<string | null>;
   /** Stop mic and return transcript only (for voice conversation turns). */
   stopAudioRecordingToTranscript: () => Promise<string | null>;
+  /** Voice Chat stop. Includes the spoken language, or why the turn was not submitted. */
+  stopVoiceListening: () => Promise<VoiceListenResult>;
   /** Remove a display-only voice partial without cancelling a live microphone. */
   clearVoiceLiveTranscript: () => void;
   /** A composer recording whose transcription failed and can be retried. */
@@ -840,8 +845,9 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
   // the recognizer can detect Telugu/Hindi/English code switching. Composer
   // dictation intentionally keeps the low-latency browser recognizer.
   const audioRecordingSourceRef = useRef<"composer" | "voice">("composer");
-  /** Language selected for the voice recording that is currently open. */
-  const voiceTranscriptionLanguageRef = useRef<AskPranaSpeechLanguageCode>("en");
+  /** Recognition mode for the voice recording that is currently open. */
+  const voiceTranscriptionLanguageRef = useRef(recognitionModeFrom("auto"));
+  const voiceListenResultRef = useRef<VoiceListenResult>({ status: "cancelled" });
   /** Frozen when a voice recording starts so a later language change cannot alter it. */
   const voiceCaptureRef = useRef<VoiceCaptureSnapshot | null>(null);
   const draftRef = useRef("");
@@ -2765,7 +2771,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
   const startAudioRecording = useCallback(async (options?: {
     source?: "composer" | "voice";
     throwOnFailure?: boolean;
-    language?: AskPranaSpeechLanguageCode;
+    language?: string;
   }) => {
     clearStuckRecordingFlag();
     const source = options?.source ?? "composer";
@@ -2799,27 +2805,21 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
     if (source === "voice") {
       // A new utterance replaces any cancelled display-only bubble.
       setVoiceLiveTranscript("");
-      const explicitLanguage = options?.language
-        ? mapToAskPranaLanguageCode(options.language)
-        : null;
-      const captureLanguage = explicitLanguage ?? voiceTranscriptionLanguageRef.current;
+      const recognition = options?.language
+        ? recognitionModeFrom(options.language)
+        : voiceTranscriptionLanguageRef.current;
+      const useBrowser = recognition !== "auto"
+        && Platform.OS === "web"
+        && isWebDictationAvailable();
       const capture: VoiceCaptureSnapshot = {
         epoch: operationEpoch,
         turnId: `voice-${operationEpoch}-${Date.now().toString(36)}`,
-        language: captureLanguage,
-        provider: Platform.OS === "web" && isWebDictationAvailable() ? "browser" : "cloud-recorder",
+        language: recognition,
+        provider: useBrowser ? "browser" : "cloud-recorder",
       };
       voiceCaptureRef.current = capture;
-      voiceTranscriptionLanguageRef.current = captureLanguage;
-      if (!explicitLanguage) {
-        const savedLanguage = await loadAskPranaPreferredLanguage();
-        if (operationEpoch !== dictationEpochRef.current || isStaleVoiceCapture(voiceCaptureRef.current, operationEpoch)) {
-          voiceBusyRef.current = false;
-          return;
-        }
-        voiceCaptureRef.current = { ...capture, language: savedLanguage };
-        voiceTranscriptionLanguageRef.current = savedLanguage;
-      }
+      voiceTranscriptionLanguageRef.current = recognition;
+      voiceListenResultRef.current = { status: "cancelled" };
     }
 
     // Voice Chat remains on browser SpeechRecognition for its continuous,
@@ -2827,16 +2827,16 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
     // MediaRecorder path below: Android Brave does not consistently expose
     // SpeechRecognition, and only a finalized recording can be sent to the
     // existing transcription endpoint.
+    const voiceRecognition = voiceCaptureRef.current?.language ?? "auto";
     if (
       source === "voice" &&
+      voiceRecognition !== "auto" &&
       Platform.OS === "web" &&
       isWebDictationAvailable()
     ) {
       try {
         recordingGuardUntilRef.current = Date.now() + 4000;
-        const preferredLanguage = source === "voice"
-          ? voiceCaptureRef.current?.language ?? voiceTranscriptionLanguageRef.current
-          : await loadAskPranaPreferredLanguage();
+        const preferredLanguage = voiceRecognition;
         // Close/cancel may happen while the language preference is loading.
         // Never allow that stale invocation to acquire a fresh browser mic.
         if (operationEpoch !== dictationEpochRef.current) {
@@ -2960,7 +2960,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
           turnId: voiceCaptureRef.current.turnId,
           provider: "cloud-recorder",
           selectedLanguage: voiceCaptureRef.current.language,
-          languageSent: voiceCaptureRef.current.language,
+          languageSent: cloudLanguageForRecognition(voiceCaptureRef.current.language),
           retryCount: 0,
           reason: "recording-started",
         });
@@ -3027,6 +3027,9 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
     try {
       const transcript = (await session.stop()).trim();
       if (stopEpoch !== dictationEpochRef.current) {
+        if (webDictationSourceRef.current === "voice") {
+          voiceListenResultRef.current = { status: "cancelled" };
+        }
         return null;
       }
       if (!transcript) {
@@ -3035,6 +3038,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
           Alert.alert("Couldn't understand", voiceErrorMessage("VOICE_EMPTY"));
         } else {
           setVoiceLiveTranscript("");
+          voiceListenResultRef.current = { status: "repeat" };
         }
         return null;
       }
@@ -3050,6 +3054,13 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         // A browser result can be corrected between the last interim update
         // and stop(). Keep the temporary bubble in sync with that final text.
         setVoiceLiveTranscript(transcript);
+        const recognition = voiceCaptureRef.current?.language;
+        const language = recognition === "te" || recognition === "hi" || recognition === "en"
+          ? recognition
+          : null;
+        voiceListenResultRef.current = language
+          ? { status: "ok", text: transcript, language }
+          : { status: "choose-language" };
       }
 
       return transcript;
@@ -3160,7 +3171,11 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       }
 
       if (!blob || blob.size === 0) {
-        Alert.alert("Recording too short", voiceErrorMessage("VOICE_SHORT"));
+        if (audioRecordingSourceRef.current === "voice") {
+          voiceListenResultRef.current = { status: "repeat" };
+        } else {
+          Alert.alert("Recording too short", voiceErrorMessage("VOICE_SHORT"));
+        }
         return null;
       }
 
@@ -3182,7 +3197,14 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
           (audioMeta.uriExtension !== ANDROID_VOICE_FILE_EXTENSION ||
             (actualContainer !== null && actualContainer !== "mpeg-4")))
       ) {
-        Alert.alert("Unsupported audio", voiceErrorMessage("VOICE_FORMAT"));
+        if (audioRecordingSourceRef.current === "voice") {
+          voiceListenResultRef.current = {
+            status: "error",
+            message: voiceErrorMessage("VOICE_FORMAT"),
+          };
+        } else {
+          Alert.alert("Unsupported audio", voiceErrorMessage("VOICE_FORMAT"));
+        }
         return null;
       }
 
@@ -3191,30 +3213,48 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         ? captureAtStop
         : null;
       const preferredLanguage = voiceCapture
-        ? voiceCapture.language
+        ? cloudLanguageForRecognition(voiceCapture.language)
         : await loadAskPranaPreferredLanguage();
       const transcribeInput = {
         uri,
         blob,
         mimeType: audioMeta.mimeType,
         fileName: audioMeta.fileName,
-        // The language captured when this recording started. A later selector
-        // change belongs to the next recording, not this audio.
+        // The recognition mode captured when this recording started.
         language: preferredLanguage,
       };
       let transcript = "";
       try {
-        transcript = voiceCapture
-          ? (await transcribeVoiceRecording({
-              ...transcribeInput,
-              language: voiceCapture.language,
-              turnId: voiceCapture.turnId,
-              provider: "cloud-recorder",
-            })) ?? ""
-          : await transcribeAskPranaAudio(transcribeInput);
+        if (voiceCapture) {
+          const decision = await transcribeVoiceRecording({
+            ...transcribeInput,
+            recognition: voiceCapture.language,
+            turnId: voiceCapture.turnId,
+            provider: "cloud-recorder",
+          });
+          if (decision.action === "accept") {
+            voiceListenResultRef.current = {
+              status: "ok",
+              text: decision.text,
+              language: decision.language,
+            };
+            transcript = decision.text;
+          } else if (decision.action === "choose-language") {
+            voiceListenResultRef.current = { status: "choose-language" };
+            transcript = "";
+          } else {
+            voiceListenResultRef.current = { status: "repeat" };
+            transcript = "";
+          }
+        } else {
+          transcript = await transcribeAskPranaAudio(transcribeInput);
+        }
       } catch (error) {
         console.log("[AskPranaChat] transcription error:", error);
         if (epochAtStart !== dictationEpochRef.current) {
+          if (audioRecordingSourceRef.current === "voice") {
+            voiceListenResultRef.current = { status: "cancelled" };
+          }
           return null;
         }
         // Keep the composer recording so a network/server failure does not
@@ -3222,8 +3262,13 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         if (audioRecordingSourceRef.current !== "voice") {
           failedRecordingRef.current = transcribeInput;
           setHasFailedRecording(true);
+          Alert.alert("Transcription failed", voiceErrorMessage(error));
+        } else {
+          voiceListenResultRef.current = {
+            status: "error",
+            message: voiceErrorMessage(error),
+          };
         }
-        Alert.alert("Transcription failed", voiceErrorMessage(error));
         return null;
       }
 
@@ -3231,11 +3276,12 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         || (audioRecordingSourceRef.current === "voice" && isStaleVoiceCapture(captureAtStop, epochAtStart));
       if (captureCancelled) {
         if (audioRecordingSourceRef.current === "voice" && captureAtStop) {
+          voiceListenResultRef.current = { status: "cancelled" };
           logVoiceTranscription({
             turnId: captureAtStop.turnId,
             provider: "cloud-recorder",
             selectedLanguage: captureAtStop.language,
-            languageSent: captureAtStop.language,
+            languageSent: cloudLanguageForRecognition(captureAtStop.language),
             retryCount: 0,
             reason: "stale-epoch",
           });
@@ -3303,6 +3349,12 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
     }
     return captureRecordingTranscript();
   }, [captureRecordingTranscript, finishWebDictation]);
+
+  const stopVoiceListening = useCallback(async (): Promise<VoiceListenResult> => {
+    voiceListenResultRef.current = { status: "cancelled" };
+    await stopAudioRecordingToTranscript();
+    return voiceListenResultRef.current;
+  }, [stopAudioRecordingToTranscript]);
 
   const stopAudioRecordingToComposer = useCallback(async () => {
     if (webDictationRef.current) {
@@ -3379,6 +3431,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       stopAudioRecordingAndSend,
       stopAudioRecordingToComposer,
       stopAudioRecordingToTranscript,
+      stopVoiceListening,
       clearVoiceLiveTranscript,
       hasFailedRecording,
       retryFailedRecording,
@@ -3431,6 +3484,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       stopAudioRecordingAndSend,
       stopAudioRecordingToComposer,
       stopAudioRecordingToTranscript,
+      stopVoiceListening,
       clearVoiceLiveTranscript,
       hasFailedRecording,
       retryFailedRecording,

@@ -111,10 +111,44 @@ export function isRejectedAudioContainerError(message: string): boolean {
   );
 }
 
+/** Auto detects each question. The other three lock recognition until changed. */
+export type AskPranaRecognitionMode = "auto" | AskPranaSpeechLanguageCode;
+
+export function recognitionModeFrom(value: string | null | undefined): AskPranaRecognitionMode {
+  const raw = String(value ?? "").trim().toLowerCase();
+  if (!raw || raw === "auto" || raw === "multilingual") return "auto";
+  if (raw === "te" || raw.startsWith("te-") || raw.includes("telugu") || raw.includes("తెలుగు")) return "te";
+  if (raw === "hi" || raw.startsWith("hi-") || raw.includes("hindi") || raw.includes("हिन्दी") || raw.includes("हिंदी")) return "hi";
+  if (raw === "en" || raw.startsWith("en-") || raw.includes("english")) return "en";
+  return "auto";
+}
+
+/** Value sent to cloud transcription. Auto omits a language hint inside the function. */
+export function cloudLanguageForRecognition(mode: AskPranaRecognitionMode): "auto" | AskPranaSpeechLanguageCode {
+  return mode === "auto" ? "auto" : mode;
+}
+
+/**
+ * Explicit recognition wins. Auto uses only the provider's audio-language
+ * field, limited to Telugu, Hindi, and English. Website language and
+ * transcript script are not evidence.
+ * Returns null when Auto cannot place the audio in one of those three.
+ */
+export function resolveSpokenReplyLanguage(input: {
+  mode: AskPranaRecognitionMode;
+  detected?: string | null;
+}): AskPranaSpeechLanguageCode | null {
+  if (input.mode === "te" || input.mode === "hi" || input.mode === "en") return input.mode;
+  const detected = mapRequestedSttLanguage(input.detected);
+  if (detected === "te" || detected === "hi" || detected === "en") return detected;
+  return null;
+}
+
 export type VoiceCaptureSnapshot = {
   epoch: number;
   turnId: string;
-  language: AskPranaSpeechLanguageCode;
+  /** Recognition mode captured when this recording started. */
+  language: AskPranaRecognitionMode;
   provider: "browser" | "cloud-recorder";
 };
 

@@ -323,6 +323,7 @@ export default function AskPranaScreen() {
     startAudioRecording,
     stopAudioRecordingToComposer,
     stopAudioRecordingToTranscript,
+    stopVoiceListening,
     clearVoiceLiveTranscript,
     hasFailedRecording,
     retryFailedRecording,
@@ -1146,11 +1147,10 @@ export default function AskPranaScreen() {
               }
               onClearLiveTranscript={clearVoiceLiveTranscript}
               onCancelListening={cancelAudioRecording}
-              onStopListeningToTranscript={stopAudioRecordingToTranscript}
+              onStopListeningToTranscript={stopVoiceListening}
               onAsk={async (question, context, handlers) => askFromVoiceMode(question, context, handlers)}
-              onLanguageChange={async (code) => {
-                await cancelAudioRecording();
-                await handleSelectLanguage(code);
+              onLanguageChange={async () => {
+                // Recognition mode is not the website language.
               }}
               onMutedChange={setVoiceMuted}
               onRegisterActions={registerVoiceActions}

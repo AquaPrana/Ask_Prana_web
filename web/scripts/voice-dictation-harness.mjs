@@ -203,7 +203,9 @@ try {
     isStaleVoiceCapture,
     mapRequestedSttLanguage,
     planCloudTranscriptionAttempts,
+    recognitionModeFrom,
     recognizedTranscriptionContainer,
+    resolveSpokenReplyLanguage,
     shouldUseFallbackModel,
     suggestsTeluguMisread,
   } = await server.ssrLoadModule("/src/lib/ask-prana-transcription-language.ts");
@@ -298,6 +300,13 @@ try {
   );
   const hindi = decideVoiceTranscript({ language: "hi", first: "झींगा खाना नहीं खा रहा है" });
   assert(hindi.action === "accept" && hindi.text.startsWith("झींगा"), "Hindi is accepted without a script retry");
+  assert(recognitionModeFrom("auto") === "auto" && recognitionModeFrom("te-IN") === "te", "Auto stays Auto and te-IN is explicit Telugu");
+  assert(resolveSpokenReplyLanguage({ mode: "te", detected: "hi" }) === "te", "explicit Telugu is not replaced by a Hindi detection");
+  assert(resolveSpokenReplyLanguage({ mode: "auto", detected: "telugu" }) === "te", "Auto uses Whisper's Telugu audio language");
+  assert(resolveSpokenReplyLanguage({ mode: "auto", detected: "hindi" }) === "hi", "Auto uses Whisper's Hindi audio language");
+  assert(resolveSpokenReplyLanguage({ mode: "auto", detected: "english" }) === "en", "Auto uses Whisper's English audio language");
+  assert(resolveSpokenReplyLanguage({ mode: "auto", detected: "tamil" }) === null, "Auto does not accept a language outside Telugu, Hindi, and English");
+  assert(resolveSpokenReplyLanguage({ mode: "auto", detected: null }) === null, "Auto does not guess from the website language when audio evidence is missing");
 
   const capture = { epoch: 3, turnId: "voice-3", language: "te", provider: "cloud-recorder" };
   assert(isStaleVoiceCapture(capture, 3) === false, "the recording that just started is current");
@@ -311,6 +320,7 @@ try {
   assert(edge.includes("if (!result.ok) whisperApiFailure = true"), "an empty whisper transcript is not an API failure");
   assert(edge.includes("if (transcript || !whisperApiFailure)"), "an empty whisper result returns without the fallback model");
   assert(edge.includes("containerWasAccepted(actualContainer, normalized.extension)"), "an accepted container does not become a format error");
+  assert(edge.includes('input.language ? "json" : "verbose_json"'), "Auto transcription asks Whisper for the detected audio language");
   assert(edge.includes('value.startsWith("te-")'), "te-IN stays Telugu in the edge function");
   assert(edge.includes('value.startsWith("hi-")'), "hi-IN stays Hindi in the edge function");
   assert(edge.includes('value.startsWith("en-")'), "en-IN stays English in the edge function");

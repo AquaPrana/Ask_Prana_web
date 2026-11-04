@@ -11,9 +11,12 @@ import {
   type AskPranaSpeechLanguageCode,
 } from "../lib/ask-prana-language";
 import {
+  cloudLanguageForRecognition,
   decideVoiceTranscript,
   isRejectedAudioContainerError,
+  resolveSpokenReplyLanguage,
   suggestsTeluguMisread,
+  type AskPranaRecognitionMode,
 } from "../lib/ask-prana-transcription-language";
 import { getCurrentUserProfile, resolveFarmerDisplayName } from "./profile";
 
@@ -861,20 +864,23 @@ type TranscribeInput = {
  * and is limited to one extra request.
  */
 export async function transcribeAskPranaAudio(input: TranscribeInput) {
-  const transcript = await transcribeAskPranaAudioOnce(input);
+  const first = await transcribeAskPranaAudioOnce(input);
   const isAuto = (input.language ?? "").trim().toLowerCase() === "auto";
-  if (!isAuto || !UNSUPPORTED_INDIC_SCRIPT.test(transcript)) return transcript;
+  if (!isAuto || !UNSUPPORTED_INDIC_SCRIPT.test(first.transcript)) return first.transcript;
   try {
     const preferred = await loadAskPranaPreferredLanguage();
     const retry = await transcribeAskPranaAudioOnce({ ...input, language: preferred });
-    if (retry && !UNSUPPORTED_INDIC_SCRIPT.test(retry)) return retry;
+    if (retry.transcript && !UNSUPPORTED_INDIC_SCRIPT.test(retry.transcript)) return retry.transcript;
   } catch (error) {
     console.log("[askPrana] transcription retry in selected language failed:", error);
   }
-  return transcript;
+  return first.transcript;
 }
 
-async function transcribeAskPranaAudioOnce(input: TranscribeInput) {
+async function transcribeAskPranaAudioOnce(input: TranscribeInput): Promise<{
+  transcript: string;
+  detectedLanguage: AskPranaSpeechLanguageCode | null;
+}> {
   const auth = await requireAskPranaAuth();
   const config = getSupabasePublicConfig();
   const anonKey = (process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? "").trim();
@@ -927,12 +933,12 @@ async function transcribeAskPranaAudioOnce(input: TranscribeInput) {
     throw classifyTranscribeError(formatUnknownError(error));
   }
 
-  let data: { transcript?: string; error?: unknown } | null = null;
+  let data: { transcript?: string; error?: unknown; detectedLanguage?: string | null } | null = null;
   const rawText = await response.text();
   console.log("[AskPranaAudio] upload completed", { status: response.status });
   try {
     data = rawText
-      ? (JSON.parse(rawText) as { transcript?: string; error?: unknown })
+      ? (JSON.parse(rawText) as { transcript?: string; error?: unknown; detectedLanguage?: string | null })
       : null;
   } catch {
     console.log("[askPrana] transcribe API error response", rawText);
@@ -959,8 +965,16 @@ async function transcribeAskPranaAudioOnce(input: TranscribeInput) {
 
   console.log("[AskPranaAudio] transcription completed", {
     transcriptLength: data?.transcript?.trim().length ?? 0,
+    detectedLanguage: data?.detectedLanguage ?? null,
   });
-  return data?.transcript?.trim() ?? "";
+  const detected = resolveSpokenReplyLanguage({
+    mode: "auto",
+    detected: data?.detectedLanguage,
+  });
+  return {
+    transcript: data?.transcript?.trim() ?? "",
+    detectedLanguage: detected,
+  };
 }
 
 export function logVoiceTranscription(detail: {
@@ -982,39 +996,95 @@ export function logVoiceTranscription(detail: {
  * model at most once, so one recording stays within six provider calls.
  * Returns null when the user should repeat; the questionable text is not returned.
  */
+export type VoiceListenResult =
+  | { status: "ok"; text: string; language: AskPranaSpeechLanguageCode }
+  | { status: "repeat" }
+  | { status: "choose-language" }
+  | { status: "error"; message: string }
+  | { status: "cancelled" };
+
+export type VoiceTranscriptionDecision =
+  | {
+      action: "accept";
+      text: string;
+      language: AskPranaSpeechLanguageCode;
+      retryCount: 0 | 1;
+      reason: string;
+    }
+  | { action: "repeat"; retryCount: 0 | 1; reason: string }
+  | { action: "choose-language"; retryCount: 0 | 1; reason: string };
+
 export async function transcribeVoiceRecording(input: TranscribeInput & {
-  language: AskPranaSpeechLanguageCode;
+  recognition: AskPranaRecognitionMode;
   turnId: string;
   provider: "browser" | "cloud-recorder";
-}): Promise<string | null> {
-  const languageSent = input.language;
-  const first = await transcribeAskPranaAudio({ ...input, language: languageSent });
-  if (!suggestsTeluguMisread(languageSent, first)) {
-    const decision = decideVoiceTranscript({ language: languageSent, first });
+}): Promise<VoiceTranscriptionDecision> {
+  const languageSent = cloudLanguageForRecognition(input.recognition);
+  const first = await transcribeAskPranaAudioOnce({ ...input, language: languageSent });
+  const spoken = resolveSpokenReplyLanguage({
+    mode: input.recognition,
+    detected: first.detectedLanguage,
+  });
+  const misread = spoken === "te" && suggestsTeluguMisread("te", first.transcript);
+  if (!misread) {
+    const decision = finishVoiceTranscription({
+      recognition: input.recognition,
+      transcript: first.transcript,
+      detected: first.detectedLanguage,
+      retryCount: 0,
+    });
     logVoiceTranscription({
       turnId: input.turnId,
       provider: input.provider,
-      selectedLanguage: languageSent,
+      selectedLanguage: input.recognition,
       languageSent,
       retryCount: decision.retryCount,
       reason: decision.reason,
     });
-    return decision.action === "accept" ? decision.text : null;
+    return decision;
   }
-  let retry = "";
+  let retryTranscript = "";
   try {
-    retry = await transcribeAskPranaAudio({ ...input, language: languageSent });
+    const retry = await transcribeAskPranaAudioOnce({ ...input, language: "te" });
+    retryTranscript = retry.transcript;
   } catch (error) {
     console.log("[askPrana] voice transcription retry failed:", error);
   }
-  const decision = decideVoiceTranscript({ language: languageSent, first, retry });
+  const decision = decideVoiceTranscript({ language: "te", first: first.transcript, retry: retryTranscript });
+  const resolved = decision.action === "accept"
+    ? {
+        action: "accept" as const,
+        text: decision.text,
+        language: "te" as const,
+        retryCount: decision.retryCount,
+        reason: decision.reason,
+      }
+    : { action: "repeat" as const, retryCount: decision.retryCount, reason: decision.reason };
   logVoiceTranscription({
     turnId: input.turnId,
     provider: input.provider,
-    selectedLanguage: languageSent,
-    languageSent,
-    retryCount: decision.retryCount,
-    reason: decision.reason,
+    selectedLanguage: input.recognition,
+    languageSent: "te",
+    retryCount: resolved.retryCount,
+    reason: resolved.reason,
   });
-  return decision.action === "accept" ? decision.text : null;
+  return resolved;
+}
+
+function finishVoiceTranscription(input: {
+  recognition: AskPranaRecognitionMode;
+  transcript: string;
+  detected: AskPranaSpeechLanguageCode | null;
+  retryCount: 0 | 1;
+}): VoiceTranscriptionDecision {
+  const text = input.transcript.trim();
+  if (!text) return { action: "repeat", retryCount: input.retryCount, reason: "empty" };
+  const language = resolveSpokenReplyLanguage({
+    mode: input.recognition,
+    detected: input.detected,
+  });
+  if (!language) {
+    return { action: "choose-language", retryCount: input.retryCount, reason: "uncertain-language" };
+  }
+  return { action: "accept", text, language, retryCount: input.retryCount, reason: "initial" };
 }

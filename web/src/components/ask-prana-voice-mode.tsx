@@ -36,7 +36,16 @@ import {
   isAssistantEchoTranscript,
   isUnclearVoiceTranscript,
 } from "../lib/ask-prana-voice-transcript";
-import { logVoiceTranscription, transcribeVoiceRecording } from "../services/ask-prana";
+import {
+  logVoiceTranscription,
+  transcribeVoiceRecording,
+  type VoiceListenResult,
+  type VoiceTranscriptionDecision,
+} from "../services/ask-prana";
+import {
+  cloudLanguageForRecognition,
+  type AskPranaRecognitionMode,
+} from "../lib/ask-prana-transcription-language";
 import {
   setVoiceAutoStopListener,
   setVoiceRecognitionErrorListener,
@@ -107,17 +116,17 @@ type Props = {
   draft: string;
   onChangeDraft: (value: string) => void;
   onClose: () => void;
-  onStartListening: (language: AskPranaSpeechLanguageCode) => Promise<void>;
+  onStartListening: (recognition: AskPranaRecognitionMode) => Promise<void>;
   /** Drops a display-only partial so a rejected turn cannot remain on screen. */
   onClearLiveTranscript?: () => void;
   onCancelListening: () => Promise<void>;
-  onStopListeningToTranscript: () => Promise<string | null>;
+  onStopListeningToTranscript: () => Promise<VoiceListenResult>;
   onAsk: (
     question: string,
     context: AskPranaRequestContext,
     handlers?: AskPranaVoiceHandlers,
   ) => Promise<{ answer: string; language: AskPranaSpeechLanguageCode } | null>;
-  onLanguageChange: (code: AskPranaSpeechLanguageCode) => Promise<void>;
+  onLanguageChange: (recognition: AskPranaRecognitionMode) => Promise<void>;
   onOpenMenu?: () => void;
   onAddImage?: () => void;
   onAddFile?: () => void;
@@ -434,8 +443,8 @@ const BARGE_IN_CAPTURE_MIN_RMS = 0.015;
 const WAV_SAMPLE_RATE = 16000;
 
 type InterruptCapture = {
-  /** Language selected when this interruption began. */
-  language: AskPranaSpeechLanguageCode;
+  /** Recognition mode when this interruption began. */
+  recognition: AskPranaRecognitionMode;
   turnId: string;
   hadSpeech: () => boolean;
   /** Stops capture and returns 16 kHz mono WAV of the interruption. */
@@ -488,36 +497,36 @@ function wordCount(text: string) {
 
 async function transcribeInterruption(
   wav: Blob,
-  language: AskPranaSpeechLanguageCode,
+  recognition: AskPranaRecognitionMode,
   turnId: string,
-): Promise<string> {
+): Promise<VoiceTranscriptionDecision> {
   try {
-    const transcript = await Promise.race([
+    const decision = await Promise.race([
       transcribeVoiceRecording({
         uri: "voice-interruption.wav",
         blob: wav,
         mimeType: "audio/wav",
         fileName: "voice-interruption.wav",
-        language,
+        recognition,
         turnId,
         provider: "cloud-recorder",
       }),
-      new Promise<string | null>((resolve) =>
-        setTimeout(() => resolve(""), BARGE_IN_TRANSCRIBE_TIMEOUT_MS),
+      new Promise<VoiceTranscriptionDecision>((resolve) =>
+        setTimeout(() => resolve({ action: "repeat", retryCount: 0, reason: "empty" }), BARGE_IN_TRANSCRIBE_TIMEOUT_MS),
       ),
     ]);
-    return transcript?.trim() ?? "";
+    return decision;
   } catch (error) {
     console.log("[AskPranaVoice] interruption transcription failed:", error);
     logVoiceTranscription({
       turnId,
       provider: "cloud-recorder",
-      selectedLanguage: language,
-      languageSent: language,
+      selectedLanguage: recognition,
+      languageSent: cloudLanguageForRecognition(recognition),
       retryCount: 0,
       reason: "interruption-failed",
     });
-    return "";
+    return { action: "repeat", retryCount: 0, reason: "interruption-failed" };
   }
 }
 
@@ -572,10 +581,9 @@ export function AskPranaVoiceModeModal({
   const [slowAnswer, setSlowAnswer] = useState(false);
   const [submittedQuestion, setSubmittedQuestion] = useState<string | null>(null);
   const [retryQuestion, setRetryQuestion] = useState<string | null>(null);
-  const [activeLanguage, setActiveLanguage] =
-    useState<AskPranaSpeechLanguageCode>(language);
+  const [recognitionMode, setRecognitionMode] = useState<AskPranaRecognitionMode>("auto");
   const [captionTurn, setCaptionTurn] = useState(0);
-  const activeLanguageRef = useRef<AskPranaSpeechLanguageCode>(language);
+  const recognitionModeRef = useRef<AskPranaRecognitionMode>("auto");
   /** Assistant text already handed to speech, used to ignore its own echo. */
   const recentSpokenRef = useRef("");
   const loopArmedRef = useRef(false);
@@ -592,6 +600,7 @@ export function AskPranaVoiceModeModal({
    * noise (empty transcript) does not throw the answer away. */
   type HeldAsk = {
     question: string;
+    language: AskPranaSpeechLanguageCode;
     promise: Promise<{ answer: string; language: AskPranaSpeechLanguageCode } | null>;
   };
   const pendingAskRef = useRef<HeldAsk | null>(null);
@@ -864,7 +873,7 @@ export function AskPranaVoiceModeModal({
             capturing = true;
             voicedMs = voicedRun;
             interruptCaptureRef.current = {
-              language: activeLanguageRef.current,
+              recognition: recognitionModeRef.current,
               turnId: `${voiceSessionIdRef.current}-${speechTurnRef.current + 1}`,
               hadSpeech: () => voicedMs >= BARGE_IN_MIN_VOICED_MS,
               takeWav: () => {
@@ -956,11 +965,11 @@ export function AskPranaVoiceModeModal({
   const startListeningSafely = useCallback(
     async (
       reason: "open" | "resume" | "retry" | "interrupt" | "visibility",
-      languageOverride?: AskPranaSpeechLanguageCode,
+      languageOverride?: AskPranaRecognitionMode,
     ) => {
       const sessionId = voiceSessionIdRef.current;
       const attemptId = ++listeningAttemptRef.current;
-      const listenLanguage = languageOverride ?? activeLanguageRef.current;
+      const listenLanguage = languageOverride ?? recognitionModeRef.current;
       if (!sessionActiveRef.current || mutedRef.current) return false;
       if (
         Platform.OS === "web" &&
@@ -1048,23 +1057,6 @@ export function AskPranaVoiceModeModal({
   );
 
   useEffect(() => {
-    if (!visible) return;
-    const previous = activeLanguageRef.current;
-    activeLanguageRef.current = language;
-    setActiveLanguage(language);
-    // The session opens on the website language. A later change cancels the
-    // recording that started in the previous language and listens again.
-    if (!sessionActiveRef.current || previous === language) return;
-    listeningAttemptRef.current += 1;
-    onClearLiveTranscript?.();
-    setSubmittedQuestion(null);
-    void onCancelListening().then(() => {
-      if (!sessionActiveRef.current || activeLanguageRef.current !== language) return;
-      void startListeningSafely("resume", language);
-    });
-  }, [language, onCancelListening, onClearLiveTranscript, startListeningSafely, visible]);
-
-  useEffect(() => {
     interruptListeningRef.current = () => startListeningSafely("interrupt");
   }, [startListeningSafely]);
 
@@ -1145,7 +1137,7 @@ export function AskPranaVoiceModeModal({
   }, [onCancelListening, startListeningSafely, visible]);
 
   const runTurnFromTranscript = useCallback(
-    async (transcript: string, resume?: HeldAsk) => {
+    async (transcript: string, resume?: HeldAsk, spokenLanguage?: AskPranaSpeechLanguageCode) => {
       if (!sessionActiveRef.current) return;
       const cleaned = (resume?.question ?? transcript).trim();
       if (!cleaned) return;
@@ -1188,7 +1180,8 @@ export function AskPranaVoiceModeModal({
         speechQueueRef.current?.cancel();
         await stopAskPranaSpeech();
         if (turnToken !== speechTurnRef.current || !sessionActiveRef.current) return;
-        const replyLanguage = activeLanguage;
+        const replyLanguage = resume?.language ?? spokenLanguage;
+        if (!replyLanguage) return;
         let receivedSentence = false;
         let playbackStarted = false;
         const queue = createAskPranaSpeechQueue(replyLanguage, {
@@ -1228,9 +1221,10 @@ export function AskPranaVoiceModeModal({
         };
         const askPromise = resume?.promise ?? onAsk(cleaned, {
           ...requestContext,
-          // Voice header language (e.g. తెలుగు) must drive replies even if STT is messy.
-          sessionLanguageCode: activeLanguage,
-          language: getAskPranaLanguageOption(activeLanguage).llmLabel,
+          // This question's spoken language. The website language stays on the labels.
+          sessionLanguageCode: replyLanguage,
+          voiceModeLanguageLock: replyLanguage,
+          language: getAskPranaLanguageOption(replyLanguage).llmLabel,
         }, {
           turnId,
           onFirstText: () => logTurn("first-text-received"),
@@ -1248,7 +1242,7 @@ export function AskPranaVoiceModeModal({
             queue.replaceUnplayed(text);
           },
         });
-        pendingAskRef.current = { question: cleaned, promise: askPromise };
+        pendingAskRef.current = { question: cleaned, language: replyLanguage, promise: askPromise };
         if (!mutedRef.current) void startBargeInMonitor();
         const result = await askPromise;
         if (pendingAskRef.current?.promise === askPromise) pendingAskRef.current = null;
@@ -1367,7 +1361,7 @@ export function AskPranaVoiceModeModal({
       }
     },
     [
-      activeLanguage,
+      recognitionMode,
       appendLine,
       onAsk,
       onStartListening,
@@ -1398,42 +1392,40 @@ export function AskPranaVoiceModeModal({
     logVoiceLifecycle("transcript-finalizing", { sessionId, turnId });
     try {
       // Always attempt stop; capture path no-ops if mic is not live.
-      const recognized = (await onStopListeningToTranscript())?.trim() ?? "";
+      const heard = await onStopListeningToTranscript();
       const isStale = () =>
         !sessionActiveRef.current ||
         mutedRef.current ||
         voiceSessionIdRef.current !== sessionId ||
         listeningAttemptRef.current !== listeningAttempt;
-      // An interruption's first words were spoken before the recognizer was
-      // running; its recognizer text may be only the last word. Transcribe
-      // the captured audio (with pre-roll) and keep the fuller result.
       const capture = interruptCaptureRef.current;
       interruptCaptureRef.current = null;
       const heldAsk = heldAskRef.current;
       heldAskRef.current = null;
-      let transcript = recognized;
-      if (capture) {
+      let outcome = heard;
+      const recognizedText = heard.status === "ok" ? heard.text : "";
+      if (capture && capture.recognition === recognitionModeRef.current) {
         const hadSpeech = capture.hadSpeech();
         const wav = capture.takeWav();
-        if (wav && (hadSpeech || recognized)) {
-          const captured = await transcribeInterruption(
-            wav,
-            capture.language,
-            capture.turnId,
-          );
-          if (captured && wordCount(captured) >= wordCount(recognized)) {
-            transcript = captured;
+        if (wav && (hadSpeech || recognizedText)) {
+          const captured = await transcribeInterruption(wav, capture.recognition, capture.turnId);
+          if (
+            captured.action === "accept" &&
+            wordCount(captured.text) >= wordCount(recognizedText)
+          ) {
+            outcome = { status: "ok", text: captured.text, language: captured.language };
           }
           logVoiceLifecycle("interruption-transcribed", {
             sessionId,
             turnId,
-            recognizedWords: wordCount(recognized),
-            capturedWords: wordCount(captured),
+            recognizedWords: wordCount(recognizedText),
+            capturedWords: captured.action === "accept" ? wordCount(captured.text) : 0,
           });
         }
       }
-      if (isStale() || (capture && capture.language !== activeLanguageRef.current)) return;
-      const askToRepeat = async () => {
+      if (isStale() || (capture && capture.recognition !== recognitionModeRef.current)) return;
+      if (outcome.status === "cancelled") return;
+      const askToRepeat = async (message: string) => {
         logVoiceLifecycle("transcript-unclear", { sessionId, turnId });
         onClearLiveTranscript?.();
         const listening = await startListeningSafely("retry");
@@ -1443,18 +1435,37 @@ export function AskPranaVoiceModeModal({
           voiceSessionIdRef.current === sessionId &&
           !mutedRef.current
         ) {
-          setErrorText("I couldn't understand that. Please say it again.");
+          setErrorText(message);
         }
       };
-      if (isUnclearVoiceTranscript(transcript)) {
+      if (outcome.status === "error") {
+        turnInFlightRef.current = false;
+        setState("error");
+        stateRef.current = "error";
+        setErrorText(outcome.message);
+        return;
+      }
+      if (outcome.status === "choose-language") {
+        await askToRepeat("I couldn't tell whether that was Telugu, Hindi, or English. Choose one, or say it again.");
+        return;
+      }
+      if (outcome.status !== "ok") {
         if (heldAsk) {
-          // Noise during Thinking is not a new question.
           logVoiceLifecycle("thinking-interruption-empty-resuming", { sessionId, turnId });
           await runTurnFromTranscript("", heldAsk);
           return;
         }
-        console.log("[AskPranaVoice] unclear transcript — keep listening");
-        await askToRepeat();
+        await askToRepeat("I couldn't understand that. Please say it again.");
+        return;
+      }
+      const transcript = outcome.text;
+      if (isUnclearVoiceTranscript(transcript)) {
+        if (heldAsk) {
+          logVoiceLifecycle("thinking-interruption-empty-resuming", { sessionId, turnId });
+          await runTurnFromTranscript("", heldAsk);
+          return;
+        }
+        await askToRepeat("I couldn't understand that. Please say it again.");
         return;
       }
       if (
@@ -1471,7 +1482,6 @@ export function AskPranaVoiceModeModal({
         return;
       }
       if (transcript && heldAsk) {
-        // A real new question replaces the one still loading.
         onCancelAsk?.();
       }
       logVoiceLifecycle("transcript-finalized", {
@@ -1485,7 +1495,7 @@ export function AskPranaVoiceModeModal({
           at: Math.round(performance.now()),
         });
       }
-      await runTurnFromTranscript(transcript.trim());
+      await runTurnFromTranscript(transcript.trim(), undefined, outcome.language);
     } catch (error) {
       console.log("[AskPranaVoice] finish listen failed:", error);
       turnInFlightRef.current = false;
@@ -1606,8 +1616,8 @@ export function AskPranaVoiceModeModal({
   }, [cleanupSession, onClose]);
 
   const handleLanguageChange = useCallback(
-    async (code: AskPranaSpeechLanguageCode) => {
-      if (code === activeLanguage) {
+    async (mode: AskPranaRecognitionMode) => {
+      if (mode === recognitionMode) {
         setLanguageMenuOpen(false);
         return;
       }
@@ -1623,13 +1633,12 @@ export function AskPranaVoiceModeModal({
       stopBargeInMonitor();
       onCancelAsk?.();
       await stopAskPranaSpeech();
-      activeLanguageRef.current = code;
-      setActiveLanguage(code);
-      await onLanguageChange(code);
+      recognitionModeRef.current = mode;
+      setRecognitionMode(mode);
       if (!sessionActiveRef.current) return;
-      await startListeningSafely("resume", code);
+      await startListeningSafely("resume", mode);
     },
-    [activeLanguage, onCancelAsk, onClearLiveTranscript, onLanguageChange, startListeningSafely, stopBargeInMonitor],
+    [onCancelAsk, onClearLiveTranscript, recognitionMode, startListeningSafely, stopBargeInMonitor],
   );
 
   const handleSendTyped = useCallback(async () => {
@@ -1804,16 +1813,19 @@ export function AskPranaVoiceModeModal({
 
         {languageMenuOpen ? (
           <View style={styles.languageMenu}>
-            {ASK_PRANA_LANGUAGE_OPTIONS.map((option) => (
+            {([{ mode: "auto", label: "Auto" }, ...ASK_PRANA_LANGUAGE_OPTIONS.map((option) => ({
+              mode: option.code,
+              label: option.nativeLabel,
+            }))] as { mode: AskPranaRecognitionMode; label: string }[]).map((option) => (
               <Pressable
-                key={option.code}
-                onPress={() => void handleLanguageChange(option.code)}
+                key={option.mode}
+                onPress={() => void handleLanguageChange(option.mode)}
                 style={[
                   styles.languageOption,
-                  option.code === activeLanguage && styles.languageOptionActive,
+                  option.mode === recognitionMode && styles.languageOptionActive,
                 ]}
               >
-                <Text style={styles.languageOptionText}>{option.nativeLabel}</Text>
+                <Text style={styles.languageOptionText}>{option.label}</Text>
               </Pressable>
             ))}
           </View>
