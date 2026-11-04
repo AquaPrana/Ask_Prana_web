@@ -203,6 +203,7 @@ try {
     isStaleVoiceCapture,
     mapRequestedSttLanguage,
     planCloudTranscriptionAttempts,
+    acceptSpokenQuestion,
     recognitionModeFrom,
     recognizedTranscriptionContainer,
     resolveSpokenReplyLanguage,
@@ -265,7 +266,7 @@ try {
   assert(cloudTranscriptionLanguage("te") === "te", "Telugu cloud transcription uses te");
   assert(cloudTranscriptionLanguage("hi") === "hi", "Hindi cloud transcription uses hi");
   assert(cloudTranscriptionLanguage("en") === "en", "English cloud transcription uses en");
-  assert(MAX_PROVIDER_CALLS_PER_RECORDING === 6, "one recording may use at most six provider calls");
+  assert(MAX_PROVIDER_CALLS_PER_RECORDING === 3, "one recording may use at most three provider calls");
 
   const teluguQuestion = "నా చెరువులో ఆక్సిజన్ తగ్గింది. ఏం చేయాలి?";
   const teluguFeed = "రొయ్యలు మేత తినడం లేదు. కారణం ఏమిటి?";
@@ -286,8 +287,17 @@ try {
     retry: devanagariMisread,
   });
   assert(
-    retryStillWrong.action === "repeat" && retryStillWrong.retryCount === 1 && !("text" in retryStillWrong),
-    "a second Devanagari result is not submitted",
+    retryStillWrong.action === "accept" && retryStillWrong.text === devanagariMisread,
+    "a Devanagari question is submitted instead of being discarded",
+  );
+  const keptFirst = decideVoiceTranscript({
+    language: "te",
+    first: teluguQuestion,
+    retry: "",
+  });
+  assert(
+    keptFirst.action === "accept" && keptFirst.text === teluguQuestion,
+    "an empty retry keeps the original Telugu question",
   );
   const retryRecovered = decideVoiceTranscript({
     language: "te",
@@ -305,8 +315,21 @@ try {
   assert(resolveSpokenReplyLanguage({ mode: "auto", detected: "telugu" }) === "te", "Auto uses Whisper's Telugu audio language");
   assert(resolveSpokenReplyLanguage({ mode: "auto", detected: "hindi" }) === "hi", "Auto uses Whisper's Hindi audio language");
   assert(resolveSpokenReplyLanguage({ mode: "auto", detected: "english" }) === "en", "Auto uses Whisper's English audio language");
-  assert(resolveSpokenReplyLanguage({ mode: "auto", detected: "tamil" }) === null, "Auto does not accept a language outside Telugu, Hindi, and English");
-  assert(resolveSpokenReplyLanguage({ mode: "auto", detected: null }) === null, "Auto does not guess from the website language when audio evidence is missing");
+  assert(resolveSpokenReplyLanguage({ mode: "auto", detected: "tamil" }) === null, "Auto does not accept an unsupported language when the transcript is missing");
+  assert(resolveSpokenReplyLanguage({ mode: "auto", detected: null }) === null, "Auto does not guess from the website language when no transcript is present");
+  assert(resolveSpokenReplyLanguage({ mode: "auto", detected: null, transcript: teluguQuestion }) === "te", "a Telugu transcript is accepted when Whisper omits the language");
+  assert(resolveSpokenReplyLanguage({ mode: "auto", detected: null, transcript: "मेरे तालाब में ऑक्सीजन कम है। मुझे क्या करना चाहिए?" }) === "hi", "a Hindi transcript is accepted when Whisper omits the language");
+  assert(resolveSpokenReplyLanguage({ mode: "auto", detected: null, transcript: "The oxygen in my pond is low. What should I do?" }) === "en", "an English transcript is accepted when Whisper omits the language");
+  const acceptedTelugu = acceptSpokenQuestion({ mode: "auto", transcript: teluguQuestion, detected: null });
+  const acceptedHindi = acceptSpokenQuestion({ mode: "auto", transcript: "मेरे तालाब में ऑक्सीजन कम है।", detected: null });
+  const acceptedEnglish = acceptSpokenQuestion({ mode: "auto", transcript: "The oxygen in my pond is low. What should I do?", detected: null });
+  const emptyQuestion = acceptSpokenQuestion({ mode: "auto", transcript: "   ", detected: "telugu" });
+  const explicitTelugu = acceptSpokenQuestion({ mode: "te", transcript: devanagariMisread, detected: "hi" });
+  assert(acceptedTelugu.action === "accept" && acceptedTelugu.language === "te" && acceptedTelugu.text === teluguQuestion, "a Telugu question is sent to Ask Prana");
+  assert(acceptedHindi.action === "accept" && acceptedHindi.language === "hi", "a Hindi question is sent to Ask Prana");
+  assert(acceptedEnglish.action === "accept" && acceptedEnglish.language === "en", "an English question is sent to Ask Prana");
+  assert(emptyQuestion.action === "repeat", "an empty recording still asks the user to repeat");
+  assert(explicitTelugu.action === "accept" && explicitTelugu.language === "te" && explicitTelugu.text === devanagariMisread, "explicit Telugu is not changed to Auto and the original words are kept");
 
   const capture = { epoch: 3, turnId: "voice-3", language: "te", provider: "cloud-recorder" };
   assert(isStaleVoiceCapture(capture, 3) === false, "the recording that just started is current");

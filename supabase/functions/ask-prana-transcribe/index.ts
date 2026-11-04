@@ -129,8 +129,8 @@ function mapSttLanguage(raw: string): "en" | "te" | "hi" | null {
 /**
  * One HTTP request calls whisper-1 at most twice, both times with `language`.
  * gpt-4o-mini-transcribe is used at most once, and only after a whisper API
- * failure. An empty whisper transcript does not switch models. A recording
- * may add one client retry, so the provider ceiling is 6.
+ * failure. An empty whisper transcript does not switch models. One recording
+ * uses one request, so the provider ceiling is 3.
  * Explicit te/hi/en is copied onto every call and is never replaced with null.
  */
 function containerWasAccepted(container: string, extension: string) {

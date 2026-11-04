@@ -11,11 +11,10 @@ import {
   type AskPranaSpeechLanguageCode,
 } from "../lib/ask-prana-language";
 import {
+  acceptSpokenQuestion,
   cloudLanguageForRecognition,
-  decideVoiceTranscript,
   isRejectedAudioContainerError,
   resolveSpokenReplyLanguage,
-  suggestsTeluguMisread,
   type AskPranaRecognitionMode,
 } from "../lib/ask-prana-transcription-language";
 import { getCurrentUserProfile, resolveFarmerDisplayName } from "./profile";
@@ -990,11 +989,11 @@ export function logVoiceTranscription(detail: {
 }
 
 /**
- * Transcribe one Voice Chat recording in its captured language.
- * At most one extra request is made, and only when Telugu comes back as
- * Devanagari. Each request calls whisper-1 at most twice and the fallback
- * model at most once, so one recording stays within six provider calls.
- * Returns null when the user should repeat; the questionable text is not returned.
+ * Transcribe one Voice Chat recording.
+ * whisper-1 runs at most twice. The fallback model runs only after a Whisper
+ * API failure, not because the transcript was empty. One recording stays
+ * within three provider calls. A non-empty Telugu, Hindi, or English question
+ * is returned unchanged.
  */
 export type VoiceListenResult =
   | { status: "ok"; text: string; language: AskPranaSpeechLanguageCode }
@@ -1021,70 +1020,40 @@ export async function transcribeVoiceRecording(input: TranscribeInput & {
 }): Promise<VoiceTranscriptionDecision> {
   const languageSent = cloudLanguageForRecognition(input.recognition);
   const first = await transcribeAskPranaAudioOnce({ ...input, language: languageSent });
-  const spoken = resolveSpokenReplyLanguage({
-    mode: input.recognition,
+  const decision = finishVoiceTranscription({
+    recognition: input.recognition,
+    transcript: first.transcript,
     detected: first.detectedLanguage,
   });
-  const misread = spoken === "te" && suggestsTeluguMisread("te", first.transcript);
-  if (!misread) {
-    const decision = finishVoiceTranscription({
-      recognition: input.recognition,
-      transcript: first.transcript,
-      detected: first.detectedLanguage,
-      retryCount: 0,
-    });
-    logVoiceTranscription({
-      turnId: input.turnId,
-      provider: input.provider,
-      selectedLanguage: input.recognition,
-      languageSent,
-      retryCount: decision.retryCount,
-      reason: decision.reason,
-    });
-    return decision;
-  }
-  let retryTranscript = "";
-  try {
-    const retry = await transcribeAskPranaAudioOnce({ ...input, language: "te" });
-    retryTranscript = retry.transcript;
-  } catch (error) {
-    console.log("[askPrana] voice transcription retry failed:", error);
-  }
-  const decision = decideVoiceTranscript({ language: "te", first: first.transcript, retry: retryTranscript });
-  const resolved = decision.action === "accept"
-    ? {
-        action: "accept" as const,
-        text: decision.text,
-        language: "te" as const,
-        retryCount: decision.retryCount,
-        reason: decision.reason,
-      }
-    : { action: "repeat" as const, retryCount: decision.retryCount, reason: decision.reason };
   logVoiceTranscription({
     turnId: input.turnId,
     provider: input.provider,
     selectedLanguage: input.recognition,
-    languageSent: "te",
-    retryCount: resolved.retryCount,
-    reason: resolved.reason,
+    languageSent,
+    retryCount: decision.retryCount,
+    reason: decision.reason,
   });
-  return resolved;
+  return decision;
 }
 
 function finishVoiceTranscription(input: {
   recognition: AskPranaRecognitionMode;
   transcript: string;
   detected: AskPranaSpeechLanguageCode | null;
-  retryCount: 0 | 1;
 }): VoiceTranscriptionDecision {
-  const text = input.transcript.trim();
-  if (!text) return { action: "repeat", retryCount: input.retryCount, reason: "empty" };
-  const language = resolveSpokenReplyLanguage({
+  const accepted = acceptSpokenQuestion({
     mode: input.recognition,
+    transcript: input.transcript,
     detected: input.detected,
   });
-  if (!language) {
-    return { action: "choose-language", retryCount: input.retryCount, reason: "uncertain-language" };
+  if (accepted.action === "repeat") {
+    return { action: "repeat", retryCount: 0, reason: "empty" };
   }
-  return { action: "accept", text, language, retryCount: input.retryCount, reason: "initial" };
+  return {
+    action: "accept",
+    text: accepted.text,
+    language: accepted.language,
+    retryCount: 0,
+    reason: "initial",
+  };
 }

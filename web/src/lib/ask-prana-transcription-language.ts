@@ -1,5 +1,7 @@
 import {
+  detectMessageLanguageHint,
   getAskPranaLanguageOption,
+  isPredominantlyLatinMessage,
   type AskPranaSpeechLanguageCode,
 } from "./ask-prana-language";
 
@@ -11,14 +13,15 @@ import {
  * detection. gpt-4o-mini-transcribe is called at most once, and only after a
  * whisper-1 API failure. An empty whisper transcript does not use it.
  *
- * The client may send one extra HTTP request when a Telugu recording comes
- * back as Devanagari. Maximum provider calls for one recording: 6.
+ * The client sends one request per recording. A non-empty Telugu, Hindi, or
+ * English transcript is kept; it is not discarded for a second request.
+ * Maximum provider calls for one recording: 3.
  */
 export const WHISPER_CALLS_PER_REQUEST = 2;
 export const FALLBACK_CALLS_PER_REQUEST = 1;
 export const CLOUD_TRANSCRIPTION_ATTEMPTS_PER_REQUEST =
   WHISPER_CALLS_PER_REQUEST + FALLBACK_CALLS_PER_REQUEST;
-export const VOICE_TRANSCRIPTION_REQUESTS_PER_RECORDING = 2;
+export const VOICE_TRANSCRIPTION_REQUESTS_PER_RECORDING = 1;
 export const MAX_PROVIDER_CALLS_PER_RECORDING =
   CLOUD_TRANSCRIPTION_ATTEMPTS_PER_REQUEST * VOICE_TRANSCRIPTION_REQUESTS_PER_RECORDING;
 
@@ -129,19 +132,52 @@ export function cloudLanguageForRecognition(mode: AskPranaRecognitionMode): "aut
 }
 
 /**
- * Explicit recognition wins. Auto uses only the provider's audio-language
- * field, limited to Telugu, Hindi, and English. Website language and
- * transcript script are not evidence.
- * Returns null when Auto cannot place the audio in one of those three.
+ * Explicit recognition wins and is never replaced by Auto.
+ * Auto prefers Whisper's telugu/hindi/english detection. When that field is
+ * missing, a clear Telugu, Devanagari, or English transcript still chooses
+ * the reply language. Website language is not used.
  */
 export function resolveSpokenReplyLanguage(input: {
   mode: AskPranaRecognitionMode;
   detected?: string | null;
+  transcript?: string | null;
 }): AskPranaSpeechLanguageCode | null {
   if (input.mode === "te" || input.mode === "hi" || input.mode === "en") return input.mode;
   const detected = mapRequestedSttLanguage(input.detected);
   if (detected === "te" || detected === "hi" || detected === "en") return detected;
+  return languageFromTranscript(input.transcript ?? "");
+}
+
+function languageFromTranscript(transcript: string): AskPranaSpeechLanguageCode | null {
+  const hint = detectMessageLanguageHint(transcript);
+  if (hint === "te" || hint === "hi") return hint;
+  if (isPredominantlyLatinMessage(transcript)) return "en";
+  const latin = transcript.match(/[A-Za-z]/g)?.length ?? 0;
+  const indic = transcript.match(/[\u0900-\u097F\u0C00-\u0C7F]/g)?.length ?? 0;
+  if (latin >= 3 && indic === 0) return "en";
   return null;
+}
+
+/**
+ * Submit a real Telugu, Hindi, or English question. Repeat only when there
+ * is no transcript. The original words are returned unchanged.
+ */
+export function acceptSpokenQuestion(input: {
+  mode: AskPranaRecognitionMode;
+  transcript: string;
+  detected?: string | null;
+}):
+  | { action: "accept"; text: string; language: AskPranaSpeechLanguageCode }
+  | { action: "repeat" } {
+  const text = input.transcript.trim();
+  if (!text) return { action: "repeat" };
+  const language = resolveSpokenReplyLanguage({
+    mode: input.mode,
+    detected: input.detected,
+    transcript: text,
+  });
+  if (!language) return { action: "repeat" };
+  return { action: "accept", text, language };
 }
 
 export type VoiceCaptureSnapshot = {
@@ -186,9 +222,8 @@ export type VoiceTranscriptOutcome =
   | { action: "repeat"; retryCount: 0 | 1; reason: "empty" | "script-retry-still-mismatched" };
 
 /**
- * Accept a transcript that is not a Telugu-to-Devanagari mismatch. After the
- * one allowed retry, accept that result when it is usable. An empty retry or
- * another mismatch asks the user to repeat and does not submit the first text.
+ * A non-empty transcript is the question. An empty retry does not throw away
+ * the first text, including a Devanagari reading of Telugu speech.
  */
 export function decideVoiceTranscript(input: {
   language: AskPranaSpeechLanguageCode;
@@ -198,10 +233,10 @@ export function decideVoiceTranscript(input: {
 }): VoiceTranscriptOutcome {
   if (input.retry !== undefined) {
     const retry = input.retry?.trim() ?? "";
-    if (!retry || suggestsTeluguMisread(input.language, retry)) {
-      return { action: "repeat", retryCount: 1, reason: "script-retry-still-mismatched" };
-    }
-    return { action: "accept", text: retry, retryCount: 1, reason: "script-retry" };
+    if (retry) return { action: "accept", text: retry, retryCount: 1, reason: "script-retry" };
+    const first = input.first.trim();
+    if (first) return { action: "accept", text: first, retryCount: 1, reason: "initial" };
+    return { action: "repeat", retryCount: 1, reason: "empty" };
   }
   const first = input.first.trim();
   if (!first) return { action: "repeat", retryCount: 0, reason: "empty" };
