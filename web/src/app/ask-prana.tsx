@@ -456,10 +456,17 @@ export default function AskPranaScreen() {
   const composerBusy =
     isSending || isRecording || isTranscribing || isLoadingMessages;
   const conversationMessages = messages.filter((message) => message.id !== "welcome");
-  // Chat text stays in the language it was written. The website language does not rewrite it.
-  const translationSources: string[] = [];
+  const isTranslatableMessage = (message: ChatMessage) =>
+    Boolean(message.text?.trim()) &&
+    !(message.messageType !== "text" && message.fileName && message.text === message.fileName);
+  // Display copies only. Stored message.text stays in the language it was written.
+  // Saved voice turns are included so a later website-language switch can show them.
+  const translationSources = conversationMessages.flatMap((message) => [
+    ...(isTranslatableMessage(message) ? [message.text] : []),
+    ...(message.transcript?.trim() ? [message.transcript] : []),
+  ]).reverse();
   // Originals in `messages` are never modified; only the rendered copy changes.
-  const { contentPhase } =
+  const { displayText: displayMessageText, contentPhase } =
     useAskPranaDisplayTranslation(translationSources, "visible", {
       // The source list is newest-first. Translate the active end of a chat
       // immediately; older turns continue through the shared background queue
@@ -488,8 +495,10 @@ export default function AskPranaScreen() {
   const displayConversationMessages = useMemo(
     () =>
       conversationMessages.map((message) => {
-        const text = message.text;
-        const transcript = message.transcript;
+        const text = isTranslatableMessage(message) ? displayMessageText(message.text) : message.text;
+        const transcript = message.transcript?.trim()
+          ? displayMessageText(message.transcript)
+          : message.transcript;
         const cached = displayMessageCache.get(message);
         if (cached && cached.text === text && cached.transcript === transcript) return cached.value;
         const value = { ...message, text, transcript };
@@ -497,7 +506,7 @@ export default function AskPranaScreen() {
         return value;
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [messages, displayMessageCache],
+    [messages, displayMessageText, displayMessageCache],
   );
   // Voice recognition results are intentionally not added to `messages`.
   // This gives Voice Mode one right-aligned, existing-style user bubble that
