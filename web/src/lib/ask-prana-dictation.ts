@@ -3,6 +3,7 @@ import {
   getAskPranaLanguageOption,
   type AskPranaSpeechLanguageCode,
 } from "./ask-prana-language";
+import { currentVoiceTurnId, logVoiceTurnStage } from "./ask-prana-voice-turn-timing";
 
 type SpeechRecognitionLike = {
   lang: string;
@@ -46,7 +47,11 @@ export type WebDictationHandlers = {
 function logRecognitionTiming(stage: string, startedAt: number, detail?: Record<string, unknown>) {
   if (process.env.NODE_ENV === "production") return;
   const elapsedMs = Math.round(performance.now() - startedAt);
-  console.debug("[AskPranaVoiceTiming]", stage, { elapsedMs, ...detail });
+  console.debug("[AskPranaVoiceTiming]", stage, {
+    turnId: currentVoiceTurnId(),
+    elapsedMs,
+    ...detail,
+  });
 }
 
 /**
@@ -202,6 +207,7 @@ export function startWebDictation(
   let sentTranscript = "";
   let speechActive = false;
   let speechEnded = false;
+  let userStopLogged = false;
   let rapidUnexpectedEnds = 0;
   let recognitionStartedAt = performance.now();
   // Chromium may deliver `onend` before the Voice Mode callback gets a chance
@@ -366,19 +372,28 @@ export function startWebDictation(
     // natural pause from an old end-of-turn timer.
     speechActive = true;
     speechEnded = false;
+    userStopLogged = false;
     clearPause();
     clearAmbiguousPause();
+  };
+
+  const noteUserStopped = () => {
+    if (userStopLogged || utteranceSent || stopRequested) return;
+    userStopLogged = true;
+    logVoiceTurnStage("user-stopped-speaking");
   };
 
   recognition.onspeechend = () => {
     speechActive = false;
     speechEnded = true;
+    noteUserStopped();
     armUtterancePause();
   };
 
   recognition.onsoundstart = () => {
     speechActive = true;
     speechEnded = false;
+    userStopLogged = false;
     clearPause();
     clearAmbiguousPause();
   };
@@ -386,6 +401,7 @@ export function startWebDictation(
   recognition.onsoundend = () => {
     speechActive = false;
     speechEnded = true;
+    noteUserStopped();
     armUtterancePause();
   };
 

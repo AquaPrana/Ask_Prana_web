@@ -31,6 +31,7 @@ import {
   type AskPranaSpeechQueue,
 } from "../lib/ask-prana-speech";
 import { splitCompleteSentences } from "../lib/ask-prana-sentences";
+import { currentVoiceTurnId } from "../lib/ask-prana-voice-turn-timing";
 import {
   BARGE_IN_ECHO_LEARN_MS,
   BARGE_IN_ECHO_RATIO,
@@ -76,9 +77,12 @@ const colors = {
 
 function logVoiceTiming(stage: string, turnStartedAt: number, detail?: Record<string, unknown>) {
   if (process.env.NODE_ENV === "production") return;
+  const { turnId: voiceTurn, ...rest } = detail ?? {};
   console.debug("[AskPranaVoiceTiming]", stage, {
+    turnId: currentVoiceTurnId(),
+    voiceTurn: voiceTurn ?? null,
     elapsedMs: Math.round(performance.now() - turnStartedAt),
-    ...detail,
+    ...rest,
   });
 }
 
@@ -1222,8 +1226,13 @@ export function AskPranaVoiceModeModal({
         logVoiceTiming("ai-request-start", turnStartedAt, { turnId });
         console.log("[AskPranaVoice] ask started");
         speechQueueRef.current?.cancel();
-        await stopAskPranaSpeech();
-        if (turnToken !== speechTurnRef.current || !sessionActiveRef.current) return;
+        // The generation bump is synchronous. Playback waits for the rest of
+        // the stop; the answer request does not.
+        const stoppingSpeech = stopAskPranaSpeech();
+        if (turnToken !== speechTurnRef.current || !sessionActiveRef.current) {
+          await stoppingSpeech;
+          return;
+        }
         const replyLanguage = resume?.language
           ?? languageForQuestionText(cleaned)
           ?? spokenLanguage;
@@ -1234,6 +1243,7 @@ export function AskPranaVoiceModeModal({
         const queue = createAskPranaSpeechQueue(replyLanguage, {
           voiceSession: true,
           keepMicrophoneActive: true,
+          ready: stoppingSpeech,
           shouldPlay: () =>
             sessionActiveRef.current &&
             !mutedRef.current &&
@@ -1251,7 +1261,7 @@ export function AskPranaVoiceModeModal({
               speechEndToFirstAudioMs:
                 speechEndedAt == null ? null : Math.round(performance.now() - speechEndedAt),
             });
-            logVoiceTiming("audio-playback-requested", turnStartedAt, { turnId });
+            logVoiceTiming("playback-started", turnStartedAt, { turnId });
           },
         });
         speechQueueRef.current = queue;
@@ -1278,6 +1288,7 @@ export function AskPranaVoiceModeModal({
             if (!receivedSentence) {
               receivedSentence = true;
               logTurn("first-sentence-ready", { chars: sentence.length });
+              logVoiceTiming("speech-preparation-started", turnStartedAt, { turnId });
             }
             rememberSentence(sentence);
             queue.enqueue(sentence);

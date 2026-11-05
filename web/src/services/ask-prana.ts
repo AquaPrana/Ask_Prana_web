@@ -549,7 +549,18 @@ export async function askPrana(
       : context;
 
   const auth = await requireAskPranaAuth(requestContext.userId);
-  const enriched = await buildClientContext(requestContext, auth.userId);
+  const suppliedName =
+    typeof requestContext.farmerDisplayName === "string"
+      ? requestContext.farmerDisplayName.trim()
+      : "";
+  // One profile read, overlapped with the (usually instant) context build.
+  // A second read used to run whenever the first result was missing or "Farmer".
+  const [enriched, resolvedName] = await Promise.all([
+    buildClientContext(requestContext, auth.userId),
+    suppliedName && suppliedName !== "Farmer"
+      ? Promise.resolve(suppliedName)
+      : resolveFarmerDisplayName(),
+  ]);
   const isGeneric = enriched.mode === "generic" || !enriched.pondId;
 
   const sessionId = asValidUuid(enriched.sessionId);
@@ -637,24 +648,8 @@ export async function askPrana(
       ? voiceLanguage.languageNotes
       : textLanguage?.languageNotes ?? null,
     farmerDisplayName:
-      (typeof enriched.farmerDisplayName === "string" &&
-      enriched.farmerDisplayName.trim()
-        ? enriched.farmerDisplayName.trim()
-        : null) ??
-      (await resolveFarmerDisplayName()) ??
-      null,
+      resolvedName && resolvedName !== "Farmer" ? resolvedName : null,
   };
-
-  if (
-    typeof requestBody.farmerDisplayName === "string" &&
-    (requestBody.farmerDisplayName === "Farmer" ||
-      !requestBody.farmerDisplayName)
-  ) {
-    // Prefer an empty omission over a generic placeholder for the model.
-    const fresh = await resolveFarmerDisplayName();
-    requestBody.farmerDisplayName =
-      fresh && fresh !== "Farmer" ? fresh : null;
-  }
 
   if (enriched.screen) {
     requestBody.screen = enriched.screen;
@@ -689,6 +684,12 @@ export async function askPrana(
   });
 
   if (requestBody.inputMode === "voice") {
+    if (process.env.NODE_ENV !== "production") {
+      console.debug("[AskPranaVoiceTiming]", "ai-request-sent", {
+        at: Math.round(performance.now()),
+        turnId: typeof handlers?.turnId === "string" ? handlers.turnId : null,
+      });
+    }
     try {
       return await askPranaVoice(requestBody, auth.accessToken, handlers);
     } catch (invokeError) {

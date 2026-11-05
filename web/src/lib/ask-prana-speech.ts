@@ -24,6 +24,8 @@ type AskPranaSpeakOptions = {
   keepMicrophoneActive?: boolean;
   /** When set, a device voice that fails is skipped for the rest of this Voice Chat session. */
   voiceSession?: boolean;
+  /** Resolves before the first sentence is allowed to play. Does not delay the answer request. */
+  ready?: Promise<void>;
 };
 
 let activePlayer: ReturnType<typeof createAudioPlayer> | null = null;
@@ -321,15 +323,15 @@ async function fetchCloudSpeechAudio(
   text: string,
   language: AskPranaSpeechLanguageCode,
   generation: number,
+  controller = new AbortController(),
 ): Promise<string | "interrupted" | null> {
-  if (generation !== speakGeneration) return "interrupted";
+  if (generation !== speakGeneration || controller.signal.aborted) return "interrupted";
   const auth = await ensureValidSession();
   const accessToken = auth?.access_token;
-  if (!accessToken) return null;
+  if (!accessToken || controller.signal.aborted) return controller.signal.aborted ? "interrupted" : null;
   const config = getSupabasePublicConfig();
   const anonKey = (process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? "").trim();
   if (!config.url || !anonKey) return null;
-  const controller = new AbortController();
   ttsAbortControllers.add(controller);
   try {
     if (generation !== speakGeneration) return "interrupted";
@@ -532,7 +534,19 @@ export function createAskPranaSpeechQueue(
     if (!uri) return { kind: "failed", reason: "Cloud speech is unavailable right now." };
     return { kind: "cloud", text, uri };
   };
+  let playbackReady = options?.ready ?? null;
+  const waitUntilReady = async () => {
+    if (!playbackReady) return;
+    const pending = playbackReady;
+    playbackReady = null;
+    try {
+      await pending;
+    } catch {
+      // Stopping the previous reply must not block this one.
+    }
+  };
   const playPrepared = async (item: PreparedSpeech): Promise<AskPranaSpeakResult> => {
+    await waitUntilReady();
     if (item.kind === "interrupted") {
       return { spoke: false, provider: "none", reason: "interrupted" };
     }
@@ -550,8 +564,30 @@ export function createAskPranaSpeechQueue(
       });
       if (!alive()) return { spoke: false, provider: "expo-speech", reason: "interrupted" };
       resumeWebSpeech();
+      // If the device voice has not started quickly, fetch the cloud file
+      // during the rest of the device attempt. Play it only if that attempt fails.
+      const cloudFallback: {
+        controller: AbortController | null;
+        audio: Promise<string | "interrupted" | null> | null;
+      } = { controller: null, audio: null };
+      const earlyCloud = setTimeout(() => {
+        if (!alive()) return;
+        cloudFallback.controller = new AbortController();
+        cloudFallback.audio = fetchCloudSpeechAudio(
+          item.text,
+          language,
+          generation,
+          cloudFallback.controller,
+        );
+      }, 400);
       const spoken = await speakChunkWithExpoSpeech(item.text, option, generation, reportStart);
-      if (spoken.spoke || spoken.reason === "interrupted") return spoken;
+      clearTimeout(earlyCloud);
+      if (spoken.spoke || spoken.reason === "interrupted") {
+        cloudFallback.controller?.abort();
+        const unused = cloudFallback.audio ? await cloudFallback.audio : null;
+        if (typeof unused === "string") forgetAudioUrl(unused);
+        return spoken;
+      }
       try {
         await Speech.stop();
       } catch {
@@ -559,6 +595,19 @@ export function createAskPranaSpeechQueue(
       }
       if (options?.voiceSession) failedDeviceVoices.add(language);
       mode = "cloud";
+      if (!cloudFallback.audio) {
+        cloudFallback.controller = new AbortController();
+        cloudFallback.audio = fetchCloudSpeechAudio(
+          item.text,
+          language,
+          generation,
+          cloudFallback.controller,
+        );
+      }
+      const uri = await cloudFallback.audio;
+      if (typeof uri === "string") {
+        return playCloudUri(uri, generation, reportStart, options?.shouldPlay);
+      }
       const cloud = await prepareNext(item.text);
       return playPrepared(cloud);
     }
@@ -647,6 +696,8 @@ export function createAskPranaSpeechQueue(
       });
     }
   };
+  // Learn whether this language has a device voice while the answer is still generating.
+  void ensureMode();
   void run();
   return {
     enqueue: (sentence) => {

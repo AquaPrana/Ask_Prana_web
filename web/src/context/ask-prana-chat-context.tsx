@@ -30,6 +30,10 @@ import {
   startWebDictation,
   type WebDictationSession,
 } from "../lib/ask-prana-dictation";
+import {
+  beginVoiceTurnTiming,
+  logVoiceTurnStage,
+} from "../lib/ask-prana-voice-turn-timing";
 import { pickMultipleImages, pickSingleImage, promptImageSource } from "../lib/record-images";
 import {
   askPrana,
@@ -249,6 +253,7 @@ export function setVoiceRecognitionErrorListener(
 }
 
 function notifyVoiceAutoStop() {
+  logVoiceTurnStage("end-of-turn");
   voiceAutoStopListener?.(performance.now());
 }
 
@@ -984,6 +989,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
     let speechStartedAt = 0;
     let silenceStartedAt = 0;
     let armed = false;
+    let userStopLogged = false;
     voiceSilenceWatchRef.current = setInterval(() => {
       if (!isRecordingRef.current) {
         return;
@@ -1003,6 +1009,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       if (level >= VOICE_SPEECH_DB) {
         if (!speechStartedAt) speechStartedAt = now;
         silenceStartedAt = 0;
+        userStopLogged = false;
         if (now - speechStartedAt >= VOICE_SPEECH_HOLD_MS) armed = true;
         return;
       }
@@ -1011,7 +1018,13 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         silenceStartedAt = 0;
         return;
       }
-      if (!silenceStartedAt) silenceStartedAt = now;
+      if (!silenceStartedAt) {
+        silenceStartedAt = now;
+        if (!userStopLogged) {
+          userStopLogged = true;
+          logVoiceTurnStage("user-stopped-speaking");
+        }
+      }
       if (
         now - silenceStartedAt >= VOICE_SILENCE_MS &&
         now >= recordingStopAllowedAtRef.current
@@ -2912,6 +2925,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         provider: useBrowser ? "browser" : "cloud-recorder",
       };
       voiceCaptureRef.current = capture;
+      beginVoiceTurnTiming(capture.turnId);
       voiceTranscriptionLanguageRef.current = recognition;
       voiceListenResultRef.current = { status: "cancelled" };
     }
@@ -3155,6 +3169,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         voiceListenResultRef.current = language
           ? { status: "ok", text: transcript, language }
           : { status: "choose-language" };
+        logVoiceTurnStage("transcription-complete", { transcriptLength: transcript.length });
       }
 
       return transcript;
@@ -3221,6 +3236,11 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
     try {
       try {
         await audioRecorder.stop();
+        if (audioRecordingSourceRef.current === "voice") {
+          logVoiceTurnStage("recording-finalized", {
+            durationSec: Math.round(durationSec * 10) / 10,
+          });
+        }
       } catch (error) {
         console.log("[AskPranaChat] stop recording failed:", error);
         Alert.alert(
@@ -3288,6 +3308,13 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         decodeFailure: decoded.reason,
       });
 
+      if (audioRecordingSourceRef.current === "voice") {
+        logVoiceTurnStage("audio-validated", {
+          byteSize: blob.size,
+          accepted: decoded.reason ? 0 : 1,
+        });
+      }
+
       if (decoded.reason) {
         if (audioRecordingSourceRef.current === "voice") {
           voiceListenResultRef.current = { status: "error", message: voiceErrorMessage("VOICE_FORMAT") };
@@ -3345,6 +3372,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
               language: decision.language,
             };
             transcript = decision.text;
+            logVoiceTurnStage("transcription-complete", { transcriptLength: decision.text.length });
           } else if (decision.action === "choose-language") {
             voiceListenResultRef.current = { status: "choose-language" };
             transcript = "";
