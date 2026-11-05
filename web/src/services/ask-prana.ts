@@ -5,9 +5,11 @@ import {
   supabase,
 } from "../lib/supabase";
 import { splitCompleteSentences } from "../lib/ask-prana-sentences";
-import { explicitReplyLanguageLabel } from "../lib/ask-prana-translation-policy";
 import {
+  buildQuestionLanguageRequest,
   buildVoiceLanguageRequest,
+  languageForQuestionText,
+  unresolvedQuestionLanguageRequest,
   unresolvedVoiceLanguageRequest,
   voiceTurnLanguage,
 } from "../lib/ask-prana-voice-language";
@@ -608,10 +610,12 @@ export async function askPrana(
       ? buildVoiceLanguageRequest(spokenTurn)
       : unresolvedVoiceLanguageRequest()
     : null;
-  const explicitLanguage = voiceTurn
+  const questionLanguage = voiceTurn ? null : languageForQuestionText(question);
+  const textLanguage = voiceTurn
     ? null
-    : explicitReplyLanguageLabel(enriched.sessionLanguageCode) ??
-      explicitReplyLanguageLabel(enriched.voiceModeLanguageLock);
+    : questionLanguage
+      ? buildQuestionLanguageRequest(questionLanguage)
+      : unresolvedQuestionLanguageRequest();
   const requestBody: Record<string, unknown> = {
     mode: isGeneric ? "generic" : "pond",
     question,
@@ -621,21 +625,17 @@ export async function askPrana(
     attachments,
     language: voiceLanguage
       ? voiceLanguage.language
-      : explicitLanguage ?? (await resolveAskPranaLanguage(enriched.language)),
+      : textLanguage?.language ?? null,
     sessionLanguageCode: voiceLanguage
       ? voiceLanguage.sessionLanguageCode
-      : enriched.sessionLanguageCode ?? enriched.voiceModeLanguageLock ?? null,
-    voiceModeLanguageLock: voiceLanguage ? null : enriched.voiceModeLanguageLock ?? null,
+      : textLanguage?.sessionLanguageCode ?? null,
+    voiceModeLanguageLock: null,
     spokenTurnLanguage: voiceLanguage?.spokenTurnLanguage ?? null,
-    languageLock: voiceLanguage ? voiceLanguage.languageLock : Boolean(explicitLanguage),
+    languageLock: voiceLanguage ? voiceLanguage.languageLock : false,
     inputMode: voiceTurn ? "voice" : "text",
     languageNotes: voiceLanguage
       ? voiceLanguage.languageNotes
-      : explicitLanguage
-        ? `Reply only in ${explicitLanguage}. Do not switch language to match the question.`
-        : typeof enriched.languageNotes === "string" && enriched.languageNotes.trim()
-          ? enriched.languageNotes.trim()
-          : null,
+      : textLanguage?.languageNotes ?? null,
     farmerDisplayName:
       (typeof enriched.farmerDisplayName === "string" &&
       enriched.farmerDisplayName.trim()

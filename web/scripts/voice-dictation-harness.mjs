@@ -402,8 +402,11 @@ try {
   );
   assert(jsonBody.ok && jsonBody.transcript === "The oxygen is low", "a non-streaming JSON body uses the JSON completion path");
   const {
+    buildQuestionLanguageRequest,
     buildVoiceLanguageRequest,
+    languageForQuestionText,
     languageForTypedVoiceQuestion,
+    unresolvedQuestionLanguageRequest,
     unresolvedVoiceLanguageRequest,
     voiceRequestContradictsSpokenLanguage,
     voiceTurnLanguage,
@@ -439,7 +442,21 @@ try {
     "a typed Hindi voice question stays Hindi",
   );
   assert(languageForTypedVoiceQuestion("123", "auto") === null, "an unclear typed voice question does not use the website language");
-  assert(languageForTypedVoiceQuestion("ok", "en") === "en", "an explicit English recognition choice applies to typed text");
+  assert(languageForTypedVoiceQuestion("123", "en") === "en", "an explicit English recognition choice applies to typed text");
+  assert(languageForQuestionText("How should I manage my pond after heavy rain?") === "en", "an English question is English");
+  assert(languageForQuestionText("భారీ వర్షం తర్వాత చెరువును ఎలా చూసుకోవాలి?") === "te", "a Telugu question is Telugu");
+  assert(languageForQuestionText("भारी बारिश के बाद तालाब की देखभाल कैसे करूँ?") === "hi", "a Hindi question is Hindi");
+  assert(languageForQuestionText("123") === null, "an unclear question does not become the website language");
+  assert(languageForQuestionText("please answer in hindi about my pond") === "hi", "an explicit Hindi request wins");
+  const englishQuestion = buildQuestionLanguageRequest("en");
+  const hindiQuestion = buildQuestionLanguageRequest("hi");
+  const teluguQuestionRequest = buildQuestionLanguageRequest("te");
+  assert(englishQuestion.language === "English" && englishQuestion.languageLock === false, "an English question is not locked to the website language");
+  assert(hindiQuestion.sessionLanguageCode === "hi" && teluguQuestionRequest.sessionLanguageCode === "te", "typed questions keep their own language");
+  assert(voiceRequestContradictsSpokenLanguage(englishQuestion.languageNotes) === false, "a typed English request must not forbid English");
+  assert(voiceRequestContradictsSpokenLanguage(hindiQuestion.languageNotes) === false, "a typed Hindi request must not forbid Hindi");
+  const unresolvedQuestion = unresolvedQuestionLanguageRequest();
+  assert(unresolvedQuestion.sessionLanguageCode === null && unresolvedQuestion.languageLock === false, "an unclear typed question must not inherit Telugu");
 
   const answerEdge = readFileSync(new URL("../../supabase/functions/ask-prana/index.ts", import.meta.url), "utf8");
   const voiceRule = answerEdge.slice(
@@ -447,12 +464,15 @@ try {
     answerEdge.indexOf("const FARMER_NAME_RULE"),
   );
   assert(voiceRule.includes("function voiceLanguageRule"), "voice answers use a spoken-turn language rule");
+  assert(!answerEdge.includes("overrides the question"), "no answer prompt may let a language override the question");
   assert(!voiceRule.includes("overrides the question"), "the voice rule must not let a language override the question");
   assert(!voiceRule.toLowerCase().includes("app language"), "the voice rule must not mention an app language lock");
   assert(!voiceRule.toLowerCase().includes("cannot answer"), "the voice rule must not refuse a supported language");
   assert(answerEdge.includes('const voiceTurn = inputMode === "voice"'), "voice requests are separated from text-chat language");
   assert(answerEdge.includes('? "spoken-turn"'), "a resolved voice turn is logged as spoken language");
   const voiceClient = readFileSync(new URL("../src/services/ask-prana.ts", import.meta.url), "utf8");
+  assert(!voiceClient.includes("Do not switch language to match the question."), "text requests must follow the question language");
+  assert(voiceClient.includes("buildQuestionLanguageRequest"), "a typed question sends its own language");
   assert(voiceClient.includes("buildVoiceLanguageRequest"), "the voice request is built from the spoken turn");
   assert(voiceClient.includes("voiceTurnLanguage"), "website language cannot be read as the spoken language");
   const voiceMode = readFileSync(new URL("../src/components/ask-prana-voice-mode.tsx", import.meta.url), "utf8");

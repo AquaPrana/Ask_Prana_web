@@ -47,6 +47,7 @@ import {
 } from "../lib/ask-prana-transcription-language";
 import {
   buildVoiceLanguageRequest,
+  languageForQuestionText,
   languageForTypedVoiceQuestion,
 } from "../lib/ask-prana-voice-language";
 import {
@@ -1188,7 +1189,9 @@ export function AskPranaVoiceModeModal({
         speechQueueRef.current?.cancel();
         await stopAskPranaSpeech();
         if (turnToken !== speechTurnRef.current || !sessionActiveRef.current) return;
-        const replyLanguage = resume?.language ?? spokenLanguage;
+        const replyLanguage = resume?.language
+          ?? languageForQuestionText(cleaned)
+          ?? spokenLanguage;
         if (!replyLanguage) return;
         retryLanguageRef.current = replyLanguage;
         let receivedSentence = false;

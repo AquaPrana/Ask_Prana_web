@@ -1098,43 +1098,30 @@ function detectQuestionLanguage(question: string): string | null {
   return null;
 }
 
-const LANGUAGE_RULE = (
-  language: string,
-  languageNotes?: string | null,
-  locked = false,
-) => locked ? `
-Language rule (MANDATORY — highest priority for wording):
-The farmer selected ${language} as the Ask Prana app language. Write the ENTIRE farmer-facing answer in ${language}, even if the question, attachments, or earlier chat turns are in another language.
-- Headings, paragraphs, bullet points, checklists, tables, document text and follow-up questions must all be in ${language}. Never leave an English paragraph or bullet in a ${language} answer.
-- Technical terms and units (pH, DO, FCR, ABW, MQTT, RS485, Modbus, mg/L, ppm) and product/chemical names may stay in Latin script.
-- Do not switch languages because of English aquaculture terms or because templates in these instructions are written in English — translate the meaning into ${language}.
-Never answer in Portuguese or unrelated languages.
-${language === "Telugu" ? "Write Telugu answers in Telugu script (తెలుగు అక్షరాలు), not English paragraphs." : ""}
-${language === "Hindi" ? "Write Hindi answers in Devanagari script, not English paragraphs." : ""}
-${languageNotes?.trim() ? `Additional language notes: ${languageNotes.trim()}` : ""}
-` : `
-Language rule (MANDATORY — highest priority for wording):
-Match the farmer's CURRENT question language exactly.
-- Telugu question → entire answer in Telugu (తెలుగు script).
-- English question → entire answer in English.
-- Hindi question → entire answer in Hindi (Devanagari).
-You MUST write the ENTIRE farmer-facing answer in ${language}.
-- Do NOT reply in English when ${language} is Telugu or Hindi.
-- Do NOT mix English paragraphs with a short local-language greeting.
-- Product names, chemical names, units, and short status codes may stay in Latin script, but ALL explanations, advice, decisions, and questions must be in ${language}.
-- If recent chat history is in another language, IGNORE that for wording — only the current question language matters.
-- If the farmer's transcript looks garbled or mixed-script but the resolved language is ${language}, still answer in ${language}.
-- Phrases like "give me in telugu", "can you give me in telugu", "reply in telugu", "answer in hindi" are EXPLICIT language switches — obey them even if the rest of the message is English.
-Priority for THIS turn:
-1) explicit language request in the current farmer question (e.g. "give me in telugu", "speak in english")
-2) script of the current farmer message (Telugu script → Telugu; Devanagari → Hindi; Latin English → English)
-3) resolved/configured language ${language}
-Do not switch away from ${language} because of English aquaculture terms (pond, ABW, oxygen, DOC, FCR) or because harvest/status templates are shown in English in these instructions — translate the meaning into ${language}.
-Never answer in Portuguese or unrelated languages.
-${language === "Telugu" ? "Write Telugu answers in Telugu script (తెలుగు అక్షరాలు), not English paragraphs." : ""}
-${language === "Hindi" ? "Write Hindi answers in Devanagari script, not English paragraphs." : ""}
-${languageNotes?.trim() ? `Additional language notes: ${languageNotes.trim()}` : ""}
+function answerLanguageRule(language: string, identified: boolean): string {
+  if (!identified) {
+    return `
+Language rule (MANDATORY — this question):
+The language of this question was not identified. Ask the farmer to choose English, Telugu, or Hindi and ask again.
+Do not answer from the website interface language or the saved profile language. Do not mention a website language setting. Never refuse English, Telugu, or Hindi.
 `;
+  }
+  return `
+Language rule (MANDATORY — this question):
+The farmer's CURRENT question is in ${language}. Write the ENTIRE farmer-facing answer in ${language}.
+- English question → entire answer in English.
+- Telugu question → entire answer in Telugu script.
+- Hindi question → entire answer in Hindi (Devanagari).
+- The website interface language, saved profile language, and earlier chat turns must not change this answer.
+- Never say the answer is in another language because the website or app is set to Telugu.
+- Never refuse English, Telugu, or Hindi, and do not mention a website language setting.
+- Keep aquaculture terms, numbers, and units such as pH, DO, oxygen, FCR, ABW, mg/L, and ppm as written.
+- Ignore the language of earlier conversation turns.
+${language === "Telugu" ? "Write Telugu answers in Telugu script (తెలుగు అక్షరాలు)." : ""}
+${language === "Hindi" ? "Write Hindi answers in Devanagari script." : ""}
+${language === "English" ? "Write the full answer in English." : ""}
+`;
+}
 
 /** Voice Chat: the spoken turn wins. The website language must not be mentioned or enforced. */
 function voiceLanguageRule(language: string, identified: boolean): string {
@@ -2695,29 +2682,22 @@ serve(async (req) => {
     const detectedQuestionLanguage = detectQuestionLanguage(questionText);
     // The app sends languageLock when the farmer selected a language in Ask
     // Prana; that selection is final and must not be re-detected from text.
-    const explicitSessionLanguage = translationTargetLanguage(sessionLanguageCode);
     const voiceTurn = inputMode === "voice";
-    // Profile and website language are not evidence of what was just spoken.
+    // The current question decides the answer. Profile and website language do not.
     const spokenTurnLanguage = voiceTurn
       ? translationTargetLanguage(sessionLanguageCode) || translationTargetLanguage(language)
       : null;
-    const languageLocked = voiceTurn
-      ? false
-      : (languageLock === true && Boolean(language)) || Boolean(explicitSessionLanguage);
-    const configuredLanguage = voiceTurn
-      ? spokenTurnLanguage || "English"
-      : languageLocked
-        ? explicitSessionLanguage || clientLanguage
-        : detectedQuestionLanguage || clientLanguage;
-    const languageNotesText = voiceTurn
-      ? ""
-      : typeof languageNotes === "string" ? languageNotes.trim() : "";
+    const identifiedLanguage = detectedQuestionLanguage || spokenTurnLanguage;
+    const configuredLanguage = identifiedLanguage || "English";
+    const languageNotesText = "";
     const replyLanguageRule = voiceTurn
-      ? voiceLanguageRule(configuredLanguage, Boolean(spokenTurnLanguage))
-      : LANGUAGE_RULE(configuredLanguage, languageNotesText, languageLocked);
+      ? voiceLanguageRule(configuredLanguage, Boolean(identifiedLanguage))
+      : answerLanguageRule(configuredLanguage, Boolean(identifiedLanguage));
     const outputLanguageRequirement = voiceTurn
-      ? voiceOutputLanguageRequirement(configuredLanguage, Boolean(spokenTurnLanguage))
-      : `${languageLocked ? `The farmer selected ${configuredLanguage} as the app language; it overrides the question's language.` : "The farmer's CURRENT question must drive the reply language."} Answer only that question, and write the FULL answer in ${configuredLanguage}. If ${configuredLanguage} is Telugu, use Telugu script for the whole reply (not English). If it is English, reply in English. Do not copy an earlier English/Telugu chat turn's language when it differs from this question.`;
+      ? voiceOutputLanguageRequirement(configuredLanguage, Boolean(identifiedLanguage))
+      : identifiedLanguage
+        ? `The farmer's current question is in ${configuredLanguage}. Write the full answer in ${configuredLanguage}. The website interface language, profile language, and earlier turns do not apply and must not be mentioned. Never refuse English, Telugu, or Hindi. Keep terms such as pH, DO, oxygen, FCR, and mg/L as written.`
+        : "The language of this question was not identified. Ask the farmer to choose English, Telugu, or Hindi and ask again. Do not use the website interface language, and do not mention a website language setting.";
     const clientFarmerName =
       typeof farmerDisplayName === "string" ? farmerDisplayName.trim() : "";
     const dbFarmerName =
@@ -2735,19 +2715,13 @@ serve(async (req) => {
       configuredLanguage,
       detectedQuestionLanguage,
       clientLanguage,
-      languageSource: voiceTurn
-        ? spokenTurnLanguage
-          ? "spoken-turn"
-          : "spoken-turn-unresolved"
-        : languageLocked
-        ? "client-locked"
-        : detectedQuestionLanguage
+      languageSource: detectedQuestionLanguage
         ? "question-detect"
-        : language
-          ? "client-conversation"
-          : dbLanguageRaw
-            ? "users.language"
-            : "english-default",
+        : voiceTurn
+          ? spokenTurnLanguage
+            ? "spoken-turn"
+            : "spoken-turn-unresolved"
+          : "question-unresolved",
       languageNotes: languageNotesText || null,
       farmerDisplayName: farmerNameForPrompt || null,
       farmerNameSource: dbFarmerName

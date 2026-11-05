@@ -56,6 +56,7 @@ import {
   type AskPranaSpeechLanguageCode,
 } from "../lib/ask-prana-language";
 import { speakAskPranaText, stopAskPranaSpeech } from "../lib/ask-prana-speech";
+import { languageForQuestionText } from "../lib/ask-prana-voice-language";
 import { type AskPranaRequestContext } from "../services/ask-prana";
 import {
   retryAskPranaVisibleTranslations,
@@ -417,11 +418,10 @@ export default function AskPranaScreen() {
       cycleId: null,
       screen: pathname || "/ask-prana",
       mode: "generic",
-      language: getAskPranaLanguageOption(preferredLanguage).llmLabel,
-      sessionLanguageCode: preferredLanguage,
-      // Text chat answers in the website language. Voice Chat drops this lock
-      // and uses the language resolved for the spoken turn.
-      voiceModeLanguageLock: preferredLanguage,
+      // The website language is for labels only. Each question chooses its own reply language.
+      language: null,
+      sessionLanguageCode: null,
+      voiceModeLanguageLock: null,
     }),
     [
       pathname,
@@ -456,19 +456,10 @@ export default function AskPranaScreen() {
   const composerBusy =
     isSending || isRecording || isTranscribing || isLoadingMessages;
   const conversationMessages = messages.filter((message) => message.id !== "welcome");
-  const isTranslatableMessage = (message: ChatMessage) =>
-    Boolean(message.text?.trim()) &&
-    !(message.messageType !== "text" && message.fileName && message.text === message.fileName);
-  const translationSources = conversationMessages.flatMap((message) => [
-    ...(message.preserveSpokenLanguage
-      ? []
-      : [
-          ...(isTranslatableMessage(message) ? [message.text] : []),
-          ...(message.transcript?.trim() ? [message.transcript] : []),
-        ]),
-  ]).reverse();
+  // Chat text stays in the language it was written. The website language does not rewrite it.
+  const translationSources: string[] = [];
   // Originals in `messages` are never modified; only the rendered copy changes.
-  const { displayText: displayMessageText, contentPhase } =
+  const { contentPhase } =
     useAskPranaDisplayTranslation(translationSources, "visible", {
       // The source list is newest-first. Translate the active end of a chat
       // immediately; older turns continue through the shared background queue
@@ -497,14 +488,8 @@ export default function AskPranaScreen() {
   const displayConversationMessages = useMemo(
     () =>
       conversationMessages.map((message) => {
-        const text = message.preserveSpokenLanguage || !isTranslatableMessage(message)
-          ? message.text
-          : displayMessageText(message.text);
-        const transcript = message.preserveSpokenLanguage
-          ? message.transcript
-          : message.transcript?.trim()
-            ? displayMessageText(message.transcript)
-            : message.transcript;
+        const text = message.text;
+        const transcript = message.transcript;
         const cached = displayMessageCache.get(message);
         if (cached && cached.text === text && cached.transcript === transcript) return cached.value;
         const value = { ...message, text, transcript };
@@ -512,7 +497,7 @@ export default function AskPranaScreen() {
         return value;
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [messages, displayMessageText, displayMessageCache],
+    [messages, displayMessageCache],
   );
   // Voice recognition results are intentionally not added to `messages`.
   // This gives Voice Mode one right-aligned, existing-style user bubble that
@@ -790,13 +775,13 @@ export default function AskPranaScreen() {
   const handleReadAloud = useCallback(
     (text: string) => {
       void (async () => {
-        const result = await speakAskPranaText(text, preferredLanguage);
+        const result = await speakAskPranaText(text, languageForQuestionText(text) ?? "en");
         if (!result.spoke && result.reason) {
           Alert.alert(t("askPrana.speechUnavailable"), result.reason);
         }
       })();
     },
-    [preferredLanguage, t],
+    [t],
   );
 
   const handleSelectLanguage = useCallback(

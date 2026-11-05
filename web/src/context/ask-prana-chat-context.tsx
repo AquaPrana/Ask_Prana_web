@@ -22,10 +22,7 @@ import { uploadAskPranaFile } from "../lib/ask-prana-files";
 import {
   buildLanguageInstructionForLlm,
   getAskPranaLanguageOption,
-  loadAskPranaPreferredLanguage,
   loadTeluguScriptPreference,
-  mapToAskPranaLanguageCode,
-  resolveAndPersistAskPranaReplyLanguage,
   type AskPranaSpeechLanguageCode,
 } from "../lib/ask-prana-language";
 import {
@@ -53,7 +50,7 @@ import {
   type VoiceCaptureSnapshot,
 } from "../lib/ask-prana-transcription-language";
 import { stopAskPranaSpeech } from "../lib/ask-prana-speech";
-import { voiceTurnLanguage } from "../lib/ask-prana-voice-language";
+import { languageForQuestionText, voiceTurnLanguage } from "../lib/ask-prana-voice-language";
 import { clearAskPranaDisplayTranslations } from "../lib/ask-prana-display-translation";
 import {
   createAskPranaSession,
@@ -1863,47 +1860,34 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
 
       const nameForRequest = farmerName !== "Farmer" ? farmerName : null;
 
-      // Voice uses only the language resolved for this spoken turn. Text chat
-      // still follows the website language lock below.
+      // Voice uses this turn's spoken language. Typed chat uses this question's
+      // script or explicit language request. Neither one reads the website language.
       const spokenTurn = requestContext?.inputMode === "voice"
         ? voiceTurnLanguage({
             spoken: requestContext.spokenTurnLanguage,
-            uiLanguage: requestContext.sessionLanguageCode,
+            uiLanguage: null,
           })
         : null;
-      const sessionCode = requestContext?.sessionLanguageCode
-        ? mapToAskPranaLanguageCode(requestContext.sessionLanguageCode)
-        : requestContext?.language
-          ? mapToAskPranaLanguageCode(requestContext.language)
-          : null;
-      const forcedTextLanguage = requestContext?.inputMode === "voice"
+      const questionLanguage = requestContext?.inputMode === "voice"
         ? null
-        : requestContext?.voiceModeLanguageLock
-          ? mapToAskPranaLanguageCode(requestContext.voiceModeLanguageLock)
-          : null;
+        : languageForQuestionText(question);
       const resolvedLanguage = spokenTurn
         ? {
             code: spokenTurn,
             source: "context" as const,
             llmLabel: getAskPranaLanguageOption(spokenTurn).llmLabel,
           }
-        : requestContext?.inputMode === "voice"
+        : questionLanguage
           ? {
-              code: "en" as const,
-              source: "context" as const,
-              llmLabel: "English",
+              code: questionLanguage,
+              source: "script" as const,
+              llmLabel: getAskPranaLanguageOption(questionLanguage).llmLabel,
             }
-          : forcedTextLanguage
-            ? {
-                code: forcedTextLanguage,
-                source: "context" as const,
-                llmLabel: getAskPranaLanguageOption(forcedTextLanguage).llmLabel,
-              }
-            : await resolveAndPersistAskPranaReplyLanguage(
-                question,
-                requestContext?.language,
-                sessionCode,
-              );
+          : {
+              code: "en" as const,
+              source: "default" as const,
+              llmLabel: "English",
+            };
       const teluguScript = await loadTeluguScriptPreference();
       const languageMeta = buildLanguageInstructionForLlm({
         language: resolvedLanguage.code,
@@ -1933,9 +1917,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
                 ? "Write the full answer in English."
                 : `Do not switch to English unless the farmer asked in English.`,
           "Ignore earlier assistant replies in a different language; match only the current farmer question.",
-          resolvedLanguage.source === "script"
-            ? `Detected from the current message script/text: ${resolvedLanguage.llmLabel}.`
-            : `Fallback preferred language: ${resolvedLanguage.llmLabel} (source: ${resolvedLanguage.source}).`,
+          `Detected from the current question only: ${resolvedLanguage.llmLabel}.`,
         ]
           .filter(Boolean)
           .join(" "),
@@ -2439,6 +2421,31 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         if (!pondStillSelected) {
           console.log("[AskPranaChat] ask cancelled: pond changed");
           return null;
+        }
+
+        if (!fromVoiceMode && !isSimpleGreeting(apiQuestion) && !languageForQuestionText(apiQuestion)) {
+          const clarify: ChatMessage = {
+            id: `assistant-${Date.now()}`,
+            role: "assistant",
+            text: "I couldn't tell whether that was English, Telugu, or Hindi. Please ask again in one of those languages.",
+            messageType: "text",
+            createdAt: assistantCreatedAt,
+            preserveSpokenLanguage: true,
+          };
+          setMessages((current) => {
+            const next = [...current, clarify];
+            messagesRef.current = next;
+            return next;
+          });
+          enqueuePersist(async () => {
+            try {
+              const activeSessionId = await sessionPromise;
+              await persistMessage(clarify, scopedContext.pondId, activeSessionId);
+            } catch (persistError) {
+              console.log("[AskPranaChat] language clarification persistence failed:", persistError);
+            }
+          });
+          return clarify.text;
         }
 
         if (isSimpleGreeting(apiQuestion)) {
@@ -3313,7 +3320,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         : null;
       const preferredLanguage = voiceCapture
         ? cloudLanguageForRecognition(voiceCapture.language)
-        : await loadAskPranaPreferredLanguage();
+        : "auto";
       const transcribeInput = {
         uri,
         blob,

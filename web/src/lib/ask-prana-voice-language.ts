@@ -85,6 +85,50 @@ export function unresolvedVoiceLanguageRequest() {
 }
 
 /**
+ * Language of this question only. Explicit wording wins, then Telugu script,
+ * Devanagari, then Latin English. The website language is not a fallback.
+ */
+export function languageForQuestionText(text: string): AskPranaSpeechLanguageCode | null {
+  return detectExplicitLanguageRequest(text)
+    ?? detectMessageLanguageHint(text)
+    ?? (isPredominantlyLatinMessage(text) ? "en" : null);
+}
+
+export function questionLanguageNotes(label: VoiceLanguageLabel): string {
+  return [
+    `The farmer's current question is in ${label}.`,
+    `Write the entire answer in ${label}.`,
+    "The website interface language, profile language, and earlier turns must not change this answer.",
+    "Never refuse English, Telugu, or Hindi, and do not mention a website language setting.",
+    "Keep aquaculture terms, numbers, and units such as pH, DO, oxygen, FCR, and mg/L as written.",
+    "Ignore the language of earlier conversation turns.",
+  ].join(" ");
+}
+
+export function buildQuestionLanguageRequest(code: AskPranaSpeechLanguageCode) {
+  const label = getAskPranaLanguageOption(code).llmLabel as VoiceLanguageLabel;
+  return {
+    language: label,
+    sessionLanguageCode: code,
+    voiceModeLanguageLock: null as null,
+    languageLock: false,
+    languageNotes: questionLanguageNotes(label),
+    inputMode: "text" as const,
+  };
+}
+
+export function unresolvedQuestionLanguageRequest() {
+  return {
+    language: null as null,
+    sessionLanguageCode: null as null,
+    voiceModeLanguageLock: null as null,
+    languageLock: false,
+    languageNotes: unresolvedVoiceLanguageNotes(),
+    inputMode: "text" as const,
+  };
+}
+
+/**
  * A typed Voice Chat question has no audio detection. An explicit recognition
  * choice wins. Otherwise the typed characters decide. The website language
  * is not a fallback.
