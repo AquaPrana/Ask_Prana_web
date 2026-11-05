@@ -32,6 +32,11 @@ import {
 } from "../lib/ask-prana-speech";
 import { splitCompleteSentences } from "../lib/ask-prana-sentences";
 import {
+  BARGE_IN_ECHO_LEARN_MS,
+  BARGE_IN_ECHO_RATIO,
+  stepBargeInEcho,
+} from "../lib/ask-prana-barge-in";
+import {
   isAssistantEchoTranscript,
   isUnclearVoiceTranscript,
 } from "../lib/ask-prana-voice-transcript";
@@ -431,15 +436,10 @@ const BARGE_IN_MIN_RMS = 0.012;
 const BARGE_IN_AMBIENT_RATIO = 2;
 /** ...but a noisy room never raises the bar above this. */
 const BARGE_IN_AMBIENT_CAP = 0.04;
-/** ...and this much louder than the reply's own echo picked up by the mic. */
-const BARGE_IN_ECHO_RATIO = 1.4;
-/** Time after playback starts that is used to measure the reply's echo. */
-const BARGE_IN_ECHO_LEARN_MS = 450;
-/** Echo level follower: rises quickly, falls slowly. */
-const BARGE_IN_ECHO_ATTACK_MS = 80;
-const BARGE_IN_ECHO_RELEASE_MS = 3000;
 /** The echo level is not updated this soon after the user was heard. */
 const BARGE_IN_ECHO_HOLD_MS = 400;
+const BARGE_IN_DEAF_MESSAGE =
+  "I can't hear you while the answer is playing. Tap the circle to interrupt.";
 /** How long speech must continue (short dips allowed) to count as an interruption. */
 const BARGE_IN_SUSTAIN_MS = 250;
 /** After an interruption starts, below this level counts as a pause. */
@@ -688,12 +688,18 @@ export function AskPranaVoiceModeModal({
     // user started talking and keeps a short rolling PCM buffer, so the first
     // words of an interruption (spoken before the browser recognizer is up)
     // are not lost. The recognizer still runs for live text and end-of-turn.
-    if (
-      Platform.OS !== "web" ||
-      typeof window === "undefined" ||
-      !navigator.mediaDevices?.getUserMedia ||
-      bargeInReleaseRef.current
-    ) {
+    const reportBargeInDeaf = () => {
+      if (!sessionActiveRef.current) return;
+      const current = stateRef.current;
+      if (current !== "speaking" && current !== "processing") return;
+      console.log("[AskPranaVoice] barge-in monitor cannot hear the microphone");
+      setErrorText(BARGE_IN_DEAF_MESSAGE);
+    };
+    if (Platform.OS !== "web" || typeof window === "undefined" || bargeInReleaseRef.current) {
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      reportBargeInDeaf();
       return;
     }
 
@@ -717,6 +723,7 @@ export function AskPranaVoiceModeModal({
         (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
       if (!AudioContextCtor) {
         stream.getTracks().forEach((track) => track.stop());
+        reportBargeInDeaf();
         return;
       }
       const audioContext = new AudioContextCtor();
@@ -732,6 +739,10 @@ export function AskPranaVoiceModeModal({
       }
       if (audioContext.state !== "running") {
         console.log("[AskPranaVoice] barge-in audio context not running:", audioContext.state);
+        stream.getTracks().forEach((track) => track.stop());
+        void audioContext.close();
+        reportBargeInDeaf();
+        return;
       }
       const source = audioContext.createMediaStreamSource(stream);
       const analyser = audioContext.createAnalyser();
@@ -790,6 +801,7 @@ export function AskPranaVoiceModeModal({
       const ignoreUntil = monitorStartedAt + 120;
       let ambient = 0;
       let echoRef = 0;
+      let echoCeiling = 0;
       let smoothed = 0;
       let voicedRun = 0;
       let voicedMs = 0;
@@ -802,6 +814,11 @@ export function AskPranaVoiceModeModal({
 
       const monitor = () => {
         if (released) return;
+        if (stream.getAudioTracks().every((track) => track.readyState === "ended")) {
+          reportBargeInDeaf();
+          release();
+          return;
+        }
         analyser.getByteTimeDomainData(samples);
         let energy = 0;
         for (const sample of samples) {
@@ -837,12 +854,36 @@ export function AskPranaVoiceModeModal({
               ? smoothed
               : ambient + (smoothed - ambient) * Math.min(1, elapsed / 4000);
           }
+          // Measure the reply briefly, then stop later peaks from raising the
+          // volume a person has to beat. A quieter stretch lowers it. The
+          // user's own voice is not learned: once it counts, the hold skips
+          // this update.
+          let rejoin = false;
+          if (playbackAt != null && (learningEcho || now - lastVoicedAt > BARGE_IN_ECHO_HOLD_MS)) {
+            const before = { echoRef, echoCeiling };
+            const stepped = stepBargeInEcho(
+              before,
+              smoothed,
+              elapsed,
+              learningEcho ? "learn" : "follow",
+            );
+            rejoin = !learningEcho && isAskPranaSpeechOutputActive() && stepped.rejoin;
+            if (learningEcho || rejoin || !stepped.rejoin) {
+              echoRef = stepped.echoRef;
+              echoCeiling = stepped.echoCeiling;
+            }
+            if (stepped.rejoin && !rejoin) {
+              echoRef = before.echoRef;
+              echoCeiling = before.echoCeiling;
+            }
+          }
+          const echoForThreshold = echoCeiling > 0 ? Math.min(echoRef, echoCeiling) : echoRef;
           const threshold = Math.max(
             BARGE_IN_MIN_RMS,
             Math.min(ambient * BARGE_IN_AMBIENT_RATIO, BARGE_IN_AMBIENT_CAP),
-            echoRef * BARGE_IN_ECHO_RATIO,
+            echoForThreshold * BARGE_IN_ECHO_RATIO,
           );
-          const voiced = !learningEcho && now >= ignoreUntil && smoothed > threshold;
+          const voiced = !learningEcho && !rejoin && now >= ignoreUntil && smoothed > threshold;
           if (voiced) {
             voicedRun += elapsed;
             lastVoicedAt = now;
@@ -851,20 +892,12 @@ export function AskPranaVoiceModeModal({
             voicedRun = Math.max(0, voicedRun - elapsed * 2);
           }
           if (learningEcho) voicedRun = 0;
-          if (
-            playbackAt != null &&
-            !voiced &&
-            now - lastVoicedAt > BARGE_IN_ECHO_HOLD_MS
-          ) {
-            // Follow the reply's own echo level, never the user's voice.
-            const tau = smoothed > echoRef ? BARGE_IN_ECHO_ATTACK_MS : BARGE_IN_ECHO_RELEASE_MS;
-            echoRef += (smoothed - echoRef) * Math.min(1, elapsed / tau);
-          }
           if (playbackAt != null && !learningEcho && !loggedThreshold) {
             loggedThreshold = true;
             logVoiceLifecycle("barge-in-calibrated", {
               ambient: Number(ambient.toFixed(4)),
               echo: Number(echoRef.toFixed(4)),
+              ceiling: Number(echoCeiling.toFixed(4)),
               threshold: Number(threshold.toFixed(4)),
             });
           }
@@ -927,10 +960,12 @@ export function AskPranaVoiceModeModal({
         frameId = window.requestAnimationFrame(monitor);
       };
       frameId = window.requestAnimationFrame(monitor);
+      setErrorText((current) => (current === BARGE_IN_DEAF_MESSAGE ? null : current));
     } catch (error) {
-      // Barge-in is progressive enhancement; manual orb interruption remains
-      // available when a browser declines a second mic stream.
+      // Orb tap, mute, and close still interrupt. Say so, instead of looking
+      // as if the microphone were open while the recognizer never starts.
       console.log("[AskPranaVoice] barge-in monitor unavailable:", error);
+      reportBargeInDeaf();
     }
   }, []);
 

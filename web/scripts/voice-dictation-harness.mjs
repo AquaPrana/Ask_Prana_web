@@ -475,10 +475,46 @@ try {
   assert(voiceClient.includes("buildQuestionLanguageRequest"), "a typed question sends its own language");
   assert(voiceClient.includes("buildVoiceLanguageRequest"), "the voice request is built from the spoken turn");
   assert(voiceClient.includes("voiceTurnLanguage"), "website language cannot be read as the spoken language");
+  const { stepBargeInEcho, BARGE_IN_ECHO_RELEASE_MS, BARGE_IN_ECHO_RATIO } = await server.ssrLoadModule(
+    "/src/lib/ask-prana-barge-in.ts",
+  );
+  let echo = { echoRef: 0, echoCeiling: 0 };
+  echo = stepBargeInEcho(echo, 0.02, 16, "learn");
+  echo = stepBargeInEcho(echo, 0.05, 400, "learn");
+  const learned = echo.echoCeiling;
+  assert(learned > 0.04 && learned <= 0.05, "the opening window settles on the reply");
+  const louder = stepBargeInEcho(echo, 0.2, 16, "follow");
+  assert(louder.echoCeiling === learned, "a later peak must not raise the echo ceiling");
+  assert(louder.echoRef === learned, "a later peak must not raise the interruption level");
+  assert(louder.rejoin === false, "a peak well above the reply can still interrupt");
+  const stillReply = stepBargeInEcho(echo, learned * 1.2, 16, "follow");
+  assert(stillReply.rejoin === true && stillReply.echoCeiling === learned, "the reply a bit louder than the opening is still the reply");
+  assert(stillReply.echoRef <= learned, "that louder reply does not raise the required volume");
+  let quieter = echo;
+  for (let elapsed = 0; elapsed < BARGE_IN_ECHO_RELEASE_MS * 4; elapsed += 50) {
+    quieter = stepBargeInEcho(quieter, 0.01, 50, "follow");
+  }
+  assert(quieter.echoRef < learned * 0.45, "a quieter reply lowers the interruption level");
+  assert(quieter.echoCeiling === learned, "a quieter reply keeps the learned ceiling");
+  const returned = stepBargeInEcho(quieter, learned * 0.95, 16, "follow");
+  assert(returned.rejoin === true && returned.echoCeiling === learned, "the reply coming back is not a new voice");
+  const userDuringPause = stepBargeInEcho(quieter, learned * 0.45, 16, "follow");
+  assert(userDuringPause.rejoin === false, "a voice below the learned reply is not absorbed as echo");
+  assert(userDuringPause.echoCeiling === learned, "that voice must not raise the ceiling");
+  assert(userDuringPause.echoRef === quieter.echoRef, "that voice must not become the new echo");
+  assert(learned * 0.45 > quieter.echoRef * BARGE_IN_ECHO_RATIO, "that voice clears the lowered threshold");
+
   const voiceMode = readFileSync(new URL("../src/components/ask-prana-voice-mode.tsx", import.meta.url), "utf8");
   assert(voiceMode.includes('recognitionModeRef.current = "auto"'), "opening Voice Chat starts recognition in Auto");
   assert(voiceMode.includes("buildVoiceLanguageRequest(replyLanguage)"), "speech sends the resolved turn language");
   assert(!voiceMode.includes("voiceModeLanguageLock: replyLanguage"), "voice mode no longer forwards a website lock");
+  assert(voiceMode.includes("stepBargeInEcho"), "a long reply uses the frozen echo ceiling");
+  assert(!voiceMode.includes("BARGE_IN_ECHO_RELEASE_MS = 3000"), "the reply echo must not stay raised for the whole answer");
+  assert(!voiceMode.includes("BARGE_IN_ECHO_ATTACK_MS"), "later peaks must not attack the interruption level");
+  assert(
+    voiceMode.includes("I can't hear you while the answer is playing. Tap the circle to interrupt."),
+    "a microphone the monitor cannot hear is shown",
+  );
 
   const edge = readFileSync(new URL("../../supabase/functions/ask-prana-transcribe/index.ts", import.meta.url), "utf8");
   assert(edge.includes('const OPENAI_TRANSCRIBE_MODEL = "gpt-transcribe"'), "recorded audio uses the current transcription model");
@@ -496,7 +532,7 @@ try {
   assert(edge.includes('value.startsWith("hi-")'), "hi-IN stays Hindi in the edge function");
   assert(edge.includes('value.startsWith("en-")'), "en-IN stays English in the edge function");
 
-  console.log("Voice dictation harness passed: final transcript, missing-speechend fallback, late-final preservation, pause cancellation, five consecutive sessions, transcript checks, playback events, transcription language, and spoken-turn language.");
+  console.log("Voice dictation harness passed: final transcript, missing-speechend fallback, late-final preservation, pause cancellation, five consecutive sessions, transcript checks, playback events, transcription language, spoken-turn language, and barge-in echo ceiling.");
 } finally {
   await server.close();
 }
