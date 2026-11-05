@@ -46,6 +46,7 @@ import { AskPranaChatSidebar } from "../components/ask-prana-chat-sidebar";
 import { AskPranaLogo } from "../components/ask-prana-logo";
 import { AskPranaRecordingWaveform } from "../components/ask-prana-recording-waveform";
 import { AskPranaVoiceModeModal } from "../components/ask-prana-voice-mode";
+import { AskPranaVoiceWaveformIcon } from "../components/ask-prana-voice-waveform-icon";
 import { useAskPranaChat, type ChatMessage } from "../context/ask-prana-chat-context";
 import {
   ASK_PRANA_LANGUAGE_OPTIONS,
@@ -1496,7 +1497,7 @@ export default function AskPranaScreen() {
                     accessibilityRole="button"
                     accessibilityLabel={t("askPrana.startVoiceConversation")}
                   >
-                    <Feather name="radio" size={16} color={colors.white} />
+                    <AskPranaVoiceWaveformIcon size={16} color={colors.primaryBright} />
                   </Pressable>
                 )}
                 </>
