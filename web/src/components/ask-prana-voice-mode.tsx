@@ -20,7 +20,6 @@ import {
 } from "../services/ask-prana";
 import {
   ASK_PRANA_LANGUAGE_OPTIONS,
-  getAskPranaLanguageOption,
   type AskPranaSpeechLanguageCode,
 } from "../lib/ask-prana-language";
 import {
@@ -46,6 +45,10 @@ import {
   cloudLanguageForRecognition,
   type AskPranaRecognitionMode,
 } from "../lib/ask-prana-transcription-language";
+import {
+  buildVoiceLanguageRequest,
+  languageForTypedVoiceQuestion,
+} from "../lib/ask-prana-voice-language";
 import {
   setVoiceAutoStopListener,
   setVoiceRecognitionErrorListener,
@@ -581,6 +584,7 @@ export function AskPranaVoiceModeModal({
   const [slowAnswer, setSlowAnswer] = useState(false);
   const [submittedQuestion, setSubmittedQuestion] = useState<string | null>(null);
   const [retryQuestion, setRetryQuestion] = useState<string | null>(null);
+  const retryLanguageRef = useRef<AskPranaSpeechLanguageCode | null>(null);
   const [recognitionMode, setRecognitionMode] = useState<AskPranaRecognitionMode>("auto");
   const [captionTurn, setCaptionTurn] = useState(0);
   const recognitionModeRef = useRef<AskPranaRecognitionMode>("auto");
@@ -1072,6 +1076,10 @@ export function AskPranaVoiceModeModal({
 
     sessionActiveRef.current = true;
     voiceSessionIdRef.current += 1;
+    // Each Voice Chat session starts in Auto. The website language and the
+    // previous session's recognition choice do not carry into this recording.
+    recognitionModeRef.current = "auto";
+    setRecognitionMode("auto");
     resetAskPranaVoiceSpeechSession();
     turnInFlightRef.current = false;
     loopArmedRef.current = true;
@@ -1182,6 +1190,7 @@ export function AskPranaVoiceModeModal({
         if (turnToken !== speechTurnRef.current || !sessionActiveRef.current) return;
         const replyLanguage = resume?.language ?? spokenLanguage;
         if (!replyLanguage) return;
+        retryLanguageRef.current = replyLanguage;
         let receivedSentence = false;
         let playbackStarted = false;
         const queue = createAskPranaSpeechQueue(replyLanguage, {
@@ -1221,10 +1230,8 @@ export function AskPranaVoiceModeModal({
         };
         const askPromise = resume?.promise ?? onAsk(cleaned, {
           ...requestContext,
-          // This question's spoken language. The website language stays on the labels.
-          sessionLanguageCode: replyLanguage,
-          voiceModeLanguageLock: replyLanguage,
-          language: getAskPranaLanguageOption(replyLanguage).llmLabel,
+          // Spoken language for this turn only. Website labels stay outside this request.
+          ...buildVoiceLanguageRequest(replyLanguage),
         }, {
           turnId,
           onFirstText: () => logTurn("first-text-received"),
@@ -1658,7 +1665,15 @@ export function AskPranaVoiceModeModal({
     stopBargeInMonitor();
     await stopAskPranaSpeech();
     await onCancelListening();
-    await runTurnFromTranscript(text);
+    const typedLanguage = languageForTypedVoiceQuestion(text, recognitionModeRef.current);
+    if (!typedLanguage) {
+      setErrorText("I couldn't tell whether that was Telugu, Hindi, or English. Choose one, or say it again.");
+      setState("listening");
+      stateRef.current = "listening";
+      await startListeningSafely("retry");
+      return;
+    }
+    await runTurnFromTranscript(text, undefined, typedLanguage);
   }, [
     draft,
     isSending,
@@ -1667,6 +1682,7 @@ export function AskPranaVoiceModeModal({
     onCancelListening,
     onChangeDraft,
     runTurnFromTranscript,
+    startListeningSafely,
     stopBargeInMonitor,
   ]);
 
@@ -1711,7 +1727,13 @@ export function AskPranaVoiceModeModal({
     }
     const question = retryQuestion?.trim();
     if (!question) return;
-    void runTurnFromTranscript(question);
+    const retryLanguage = retryLanguageRef.current
+      ?? languageForTypedVoiceQuestion(question, recognitionModeRef.current);
+    if (!retryLanguage) {
+      setErrorText("I couldn't tell whether that was Telugu, Hindi, or English. Choose one, or say it again.");
+      return;
+    }
+    void runTurnFromTranscript(question, undefined, retryLanguage);
   }, [retryQuestion, runTurnFromTranscript]);
 
   const statusLabel = (() => {

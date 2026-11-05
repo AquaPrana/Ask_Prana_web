@@ -53,6 +53,7 @@ import {
   type VoiceCaptureSnapshot,
 } from "../lib/ask-prana-transcription-language";
 import { stopAskPranaSpeech } from "../lib/ask-prana-speech";
+import { voiceTurnLanguage } from "../lib/ask-prana-voice-language";
 import { clearAskPranaDisplayTranslations } from "../lib/ask-prana-display-translation";
 import {
   createAskPranaSession,
@@ -103,6 +104,8 @@ export type ChatMessage = {
   transcript?: string | null;
   pondName?: string;
   createdAt?: string;
+  /** Voice turn text stays in the spoken language instead of the website language. */
+  preserveSpokenLanguage?: boolean;
 };
 
 export type AskPranaChatPondOption = {
@@ -1860,26 +1863,47 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
 
       const nameForRequest = farmerName !== "Farmer" ? farmerName : null;
 
-      // Match THIS question: Telugu→Telugu, English→English (UI preference is fallback only).
+      // Voice uses only the language resolved for this spoken turn. Text chat
+      // still follows the website language lock below.
+      const spokenTurn = requestContext?.inputMode === "voice"
+        ? voiceTurnLanguage({
+            spoken: requestContext.spokenTurnLanguage,
+            uiLanguage: requestContext.sessionLanguageCode,
+          })
+        : null;
       const sessionCode = requestContext?.sessionLanguageCode
         ? mapToAskPranaLanguageCode(requestContext.sessionLanguageCode)
         : requestContext?.language
           ? mapToAskPranaLanguageCode(requestContext.language)
           : null;
-      const forcedVoiceLanguage = requestContext?.voiceModeLanguageLock
-        ? mapToAskPranaLanguageCode(requestContext.voiceModeLanguageLock)
-        : null;
-      const resolvedLanguage = forcedVoiceLanguage
+      const forcedTextLanguage = requestContext?.inputMode === "voice"
+        ? null
+        : requestContext?.voiceModeLanguageLock
+          ? mapToAskPranaLanguageCode(requestContext.voiceModeLanguageLock)
+          : null;
+      const resolvedLanguage = spokenTurn
         ? {
-            code: forcedVoiceLanguage,
+            code: spokenTurn,
             source: "context" as const,
-            llmLabel: getAskPranaLanguageOption(forcedVoiceLanguage).llmLabel,
+            llmLabel: getAskPranaLanguageOption(spokenTurn).llmLabel,
           }
-        : await resolveAndPersistAskPranaReplyLanguage(
-            question,
-            requestContext?.language,
-            sessionCode,
-          );
+        : requestContext?.inputMode === "voice"
+          ? {
+              code: "en" as const,
+              source: "context" as const,
+              llmLabel: "English",
+            }
+          : forcedTextLanguage
+            ? {
+                code: forcedTextLanguage,
+                source: "context" as const,
+                llmLabel: getAskPranaLanguageOption(forcedTextLanguage).llmLabel,
+              }
+            : await resolveAndPersistAskPranaReplyLanguage(
+                question,
+                requestContext?.language,
+                sessionCode,
+              );
       const teluguScript = await loadTeluguScriptPreference();
       const languageMeta = buildLanguageInstructionForLlm({
         language: resolvedLanguage.code,
@@ -2023,6 +2047,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
             text,
             messageType: "text",
             createdAt,
+            preserveSpokenLanguage: requestContext?.inputMode === "voice",
           };
           const next = exists
             ? current.map((item) => item.id === messageId ? { ...item, text } : item)
@@ -2071,6 +2096,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
           id: messageId,
           text: answerText,
           createdAt,
+          preserveSpokenLanguage: requestContext?.inputMode === "voice",
         };
         const sessionId = requestSessionId ?? sessionCapture.id;
         if (stillCurrent()) {
@@ -2112,6 +2138,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
                 text: streamed.trim(),
                 messageType: "text",
                 createdAt,
+                preserveSpokenLanguage: requestContext?.inputMode === "voice",
               },
               sessionCapture.id,
               capturedPondId,
@@ -2145,6 +2172,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
           text: toFarmerFacingAssistantError(detail),
           messageType: "text",
           createdAt,
+          preserveSpokenLanguage: requestContext?.inputMode === "voice",
         };
         isSendingRef.current = false;
         setIsSending(false);
@@ -2314,6 +2342,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
                 messageType: "text",
                 pondName,
                 createdAt: userCreatedAt,
+                preserveSpokenLanguage: fromVoiceMode,
               },
             ]
           : pendingSnapshot.map((item, index) => ({
@@ -2419,6 +2448,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
             text: GREETING_REPLY,
             messageType: "text",
             createdAt: assistantCreatedAt,
+            preserveSpokenLanguage: fromVoiceMode,
           };
           setMessages((current) => {
             const next = [...current, greeting];
@@ -2522,21 +2552,23 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       voiceAbortRef.current = controller;
       if (voiceHandlers?.signal?.aborted) controller.abort();
       else voiceHandlers?.signal?.addEventListener("abort", () => controller.abort(), { once: true });
-      const sessionLanguageCode =
-        requestContext?.sessionLanguageCode?.trim() ||
-        (requestContext?.language
-          ? mapToAskPranaLanguageCode(requestContext.language)
-          : null);
+      const spokenTurn = voiceTurnLanguage({
+        spoken: requestContext?.spokenTurnLanguage,
+        uiLanguage: requestContext?.sessionLanguageCode ?? requestContext?.language,
+      });
+      const {
+        sessionLanguageCode: _websiteSessionLanguage,
+        voiceModeLanguageLock: _websiteVoiceLock,
+        language: _websiteLanguage,
+        languageNotes: _websiteLanguageNotes,
+        ...voiceContext
+      } = requestContext ?? {};
       const answer = await sendQuestion(
         question,
         {
-          ...requestContext,
-          // The explicit Voice Mode header selection is the language for this
-          // turn; do not let imperfect STT change it.
-          sessionLanguageCode: sessionLanguageCode || undefined,
-          language: requestContext?.language,
-          voiceModeLanguageLock: sessionLanguageCode || undefined,
-          // Lets Ask Prana ask "please say it again" for unclear speech.
+          ...voiceContext,
+          // Spoken-turn language only. The removed fields are the website language.
+          spokenTurnLanguage: spokenTurn,
           inputMode: "voice",
         },
         {

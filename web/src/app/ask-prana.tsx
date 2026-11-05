@@ -419,8 +419,8 @@ export default function AskPranaScreen() {
       mode: "generic",
       language: getAskPranaLanguageOption(preferredLanguage).llmLabel,
       sessionLanguageCode: preferredLanguage,
-      // Replies are generated directly in the selected language, whatever
-      // language the farmer typed in.
+      // Text chat answers in the website language. Voice Chat drops this lock
+      // and uses the language resolved for the spoken turn.
       voiceModeLanguageLock: preferredLanguage,
     }),
     [
@@ -460,8 +460,12 @@ export default function AskPranaScreen() {
     Boolean(message.text?.trim()) &&
     !(message.messageType !== "text" && message.fileName && message.text === message.fileName);
   const translationSources = conversationMessages.flatMap((message) => [
-    ...(isTranslatableMessage(message) ? [message.text] : []),
-    ...(message.transcript?.trim() ? [message.transcript] : []),
+    ...(message.preserveSpokenLanguage
+      ? []
+      : [
+          ...(isTranslatableMessage(message) ? [message.text] : []),
+          ...(message.transcript?.trim() ? [message.transcript] : []),
+        ]),
   ]).reverse();
   // Originals in `messages` are never modified; only the rendered copy changes.
   const { displayText: displayMessageText, contentPhase } =
@@ -493,10 +497,14 @@ export default function AskPranaScreen() {
   const displayConversationMessages = useMemo(
     () =>
       conversationMessages.map((message) => {
-        const text = isTranslatableMessage(message) ? displayMessageText(message.text) : message.text;
-        const transcript = message.transcript?.trim()
-          ? displayMessageText(message.transcript)
-          : message.transcript;
+        const text = message.preserveSpokenLanguage || !isTranslatableMessage(message)
+          ? message.text
+          : displayMessageText(message.text);
+        const transcript = message.preserveSpokenLanguage
+          ? message.transcript
+          : message.transcript?.trim()
+            ? displayMessageText(message.transcript)
+            : message.transcript;
         const cached = displayMessageCache.get(message);
         if (cached && cached.text === text && cached.transcript === transcript) return cached.value;
         const value = { ...message, text, transcript };

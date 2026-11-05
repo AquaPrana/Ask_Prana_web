@@ -1504,13 +1504,14 @@ const styles = StyleSheet.create({
     letterSpacing: 0,
   },
   tableCardValue: {
-    color: colors.textDark,
+    color: "#1A2332",
     fontFamily: ASK_PRANA_FONT_FAMILY,
     fontSize: 13,
     lineHeight: 19,
     fontWeight: "400",
   },
   tableCardTitle: {
+    color: "#EDF2F8",
     fontFamily: ASK_PRANA_FONT_FAMILY,
     fontWeight: "600",
     fontSize: 14,
@@ -1548,7 +1549,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.tableHeader,
   },
   tableCellText: {
-    color: colors.textDark,
+    color: "#1A2332",
     fontFamily: ASK_PRANA_FONT_FAMILY,
     fontSize: 12,
     lineHeight: 18,

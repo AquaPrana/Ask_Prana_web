@@ -6,6 +6,11 @@ import {
 } from "../lib/supabase";
 import { splitCompleteSentences } from "../lib/ask-prana-sentences";
 import { explicitReplyLanguageLabel } from "../lib/ask-prana-translation-policy";
+import {
+  buildVoiceLanguageRequest,
+  unresolvedVoiceLanguageRequest,
+  voiceTurnLanguage,
+} from "../lib/ask-prana-voice-language";
 import { type AskPranaSpeechLanguageCode } from "../lib/ask-prana-language";
 import {
   acceptSpokenQuestion,
@@ -135,10 +140,12 @@ export type AskPranaRequestContext = {
   conversationHistory?: AskPranaConversationTurn[];
   attachments?: AskPranaAttachment[];
   language?: string | null;
-  /** Active UI/voice language code (te/hi/en) — stronger than stale English context. */
+  /** Text chat: website language. Voice Chat replaces this with the spoken turn. */
   sessionLanguageCode?: string | null;
-  /** Voice Mode only: explicit header language that must not be overridden by STT text. */
+  /** Text chat website lock. Voice Chat must send null so it cannot override speech. */
   voiceModeLanguageLock?: string | null;
+  /** Voice Chat only: language resolved for this spoken turn. Website language is not valid here. */
+  spokenTurnLanguage?: AskPranaSpeechLanguageCode | null;
   /** "voice" when the question is a Voice Mode speech-to-text transcript. */
   inputMode?: "voice" | "text" | null;
   languageNotes?: string | null;
@@ -589,9 +596,22 @@ export async function askPrana(
     )
     .slice(0, 5);
 
-  const explicitLanguage =
-    explicitReplyLanguageLabel(enriched.sessionLanguageCode) ??
-    explicitReplyLanguageLabel(enriched.voiceModeLanguageLock);
+  const voiceTurn = enriched.inputMode === "voice";
+  const spokenTurn = voiceTurn
+    ? voiceTurnLanguage({
+        spoken: enriched.spokenTurnLanguage,
+        uiLanguage: enriched.sessionLanguageCode,
+      })
+    : null;
+  const voiceLanguage = voiceTurn
+    ? spokenTurn
+      ? buildVoiceLanguageRequest(spokenTurn)
+      : unresolvedVoiceLanguageRequest()
+    : null;
+  const explicitLanguage = voiceTurn
+    ? null
+    : explicitReplyLanguageLabel(enriched.sessionLanguageCode) ??
+      explicitReplyLanguageLabel(enriched.voiceModeLanguageLock);
   const requestBody: Record<string, unknown> = {
     mode: isGeneric ? "generic" : "pond",
     question,
@@ -599,15 +619,23 @@ export async function askPrana(
     userId,
     conversationHistory: enriched.conversationHistory ?? [],
     attachments,
-    language: explicitLanguage ?? (await resolveAskPranaLanguage(enriched.language)),
-    sessionLanguageCode: enriched.sessionLanguageCode ?? enriched.voiceModeLanguageLock ?? null,
-    languageLock: Boolean(explicitLanguage),
-    inputMode: enriched.inputMode === "voice" ? "voice" : "text",
-    languageNotes: explicitLanguage
-      ? `Reply only in ${explicitLanguage}. Do not switch language to match the question.`
-      : typeof enriched.languageNotes === "string" && enriched.languageNotes.trim()
-        ? enriched.languageNotes.trim()
-        : null,
+    language: voiceLanguage
+      ? voiceLanguage.language
+      : explicitLanguage ?? (await resolveAskPranaLanguage(enriched.language)),
+    sessionLanguageCode: voiceLanguage
+      ? voiceLanguage.sessionLanguageCode
+      : enriched.sessionLanguageCode ?? enriched.voiceModeLanguageLock ?? null,
+    voiceModeLanguageLock: voiceLanguage ? null : enriched.voiceModeLanguageLock ?? null,
+    spokenTurnLanguage: voiceLanguage?.spokenTurnLanguage ?? null,
+    languageLock: voiceLanguage ? voiceLanguage.languageLock : Boolean(explicitLanguage),
+    inputMode: voiceTurn ? "voice" : "text",
+    languageNotes: voiceLanguage
+      ? voiceLanguage.languageNotes
+      : explicitLanguage
+        ? `Reply only in ${explicitLanguage}. Do not switch language to match the question.`
+        : typeof enriched.languageNotes === "string" && enriched.languageNotes.trim()
+          ? enriched.languageNotes.trim()
+          : null,
     farmerDisplayName:
       (typeof enriched.farmerDisplayName === "string" &&
       enriched.farmerDisplayName.trim()

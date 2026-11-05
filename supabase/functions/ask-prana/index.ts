@@ -1136,6 +1136,37 @@ ${language === "Hindi" ? "Write Hindi answers in Devanagari script, not English 
 ${languageNotes?.trim() ? `Additional language notes: ${languageNotes.trim()}` : ""}
 `;
 
+/** Voice Chat: the spoken turn wins. The website language must not be mentioned or enforced. */
+function voiceLanguageRule(language: string, identified: boolean): string {
+  if (!identified) {
+    return `
+Language rule (MANDATORY — this Voice Chat turn):
+The spoken language was not identified. Ask the farmer to choose English, Telugu, or Hindi and say the question again.
+Do not answer from the website interface language. Do not mention a website language setting. Never refuse English, Telugu, or Hindi.
+`;
+  }
+  return `
+Language rule (MANDATORY — this spoken Voice Chat turn):
+The farmer just spoke in ${language}. Write the ENTIRE farmer-facing answer in ${language}.
+- This is the spoken language of the current turn, not the website interface language.
+- The website interface language must not change this answer.
+- Never refuse English, Telugu, or Hindi, and do not mention a website language setting.
+- Headings, paragraphs, lists, and follow-up questions must all be in ${language}.
+- Technical terms and units (pH, DO, oxygen, FCR, ABW, mg/L, ppm) may stay in Latin script.
+- Ignore the language of earlier chat turns.
+${language === "Telugu" ? "Write Telugu answers in Telugu script (తెలుగు అక్షరాలు)." : ""}
+${language === "Hindi" ? "Write Hindi answers in Devanagari script." : ""}
+${language === "English" ? "Write the full answer in English." : ""}
+`;
+}
+
+function voiceOutputLanguageRequirement(language: string, identified: boolean): string {
+  if (!identified) {
+    return "The spoken language of this Voice Chat turn was not identified. Ask the farmer to choose English, Telugu, or Hindi and repeat the question. Do not use the website interface language, and do not mention a website language setting.";
+  }
+  return `The current Voice Chat turn was spoken in ${language}. Write the full answer in ${language}. The website interface language does not apply and must not be mentioned. Never refuse English, Telugu, or Hindi. Keep terms such as pH, DO, oxygen, FCR, and mg/L as written. Do not copy an earlier turn's language.`;
+}
+
 const FARMER_NAME_RULE = (farmerDisplayName: string) => {
   if (farmerDisplayName.trim()) {
     return `
@@ -2665,12 +2696,28 @@ serve(async (req) => {
     // The app sends languageLock when the farmer selected a language in Ask
     // Prana; that selection is final and must not be re-detected from text.
     const explicitSessionLanguage = translationTargetLanguage(sessionLanguageCode);
-    const languageLocked = (languageLock === true && Boolean(language)) || Boolean(explicitSessionLanguage);
-    const configuredLanguage = languageLocked
-      ? explicitSessionLanguage || clientLanguage
-      : detectedQuestionLanguage || clientLanguage;
-    const languageNotesText =
-      typeof languageNotes === "string" ? languageNotes.trim() : "";
+    const voiceTurn = inputMode === "voice";
+    // Profile and website language are not evidence of what was just spoken.
+    const spokenTurnLanguage = voiceTurn
+      ? translationTargetLanguage(sessionLanguageCode) || translationTargetLanguage(language)
+      : null;
+    const languageLocked = voiceTurn
+      ? false
+      : (languageLock === true && Boolean(language)) || Boolean(explicitSessionLanguage);
+    const configuredLanguage = voiceTurn
+      ? spokenTurnLanguage || "English"
+      : languageLocked
+        ? explicitSessionLanguage || clientLanguage
+        : detectedQuestionLanguage || clientLanguage;
+    const languageNotesText = voiceTurn
+      ? ""
+      : typeof languageNotes === "string" ? languageNotes.trim() : "";
+    const replyLanguageRule = voiceTurn
+      ? voiceLanguageRule(configuredLanguage, Boolean(spokenTurnLanguage))
+      : LANGUAGE_RULE(configuredLanguage, languageNotesText, languageLocked);
+    const outputLanguageRequirement = voiceTurn
+      ? voiceOutputLanguageRequirement(configuredLanguage, Boolean(spokenTurnLanguage))
+      : `${languageLocked ? `The farmer selected ${configuredLanguage} as the app language; it overrides the question's language.` : "The farmer's CURRENT question must drive the reply language."} Answer only that question, and write the FULL answer in ${configuredLanguage}. If ${configuredLanguage} is Telugu, use Telugu script for the whole reply (not English). If it is English, reply in English. Do not copy an earlier English/Telugu chat turn's language when it differs from this question.`;
     const clientFarmerName =
       typeof farmerDisplayName === "string" ? farmerDisplayName.trim() : "";
     const dbFarmerName =
@@ -2688,7 +2735,11 @@ serve(async (req) => {
       configuredLanguage,
       detectedQuestionLanguage,
       clientLanguage,
-      languageSource: languageLocked
+      languageSource: voiceTurn
+        ? spokenTurnLanguage
+          ? "spoken-turn"
+          : "spoken-turn-unresolved"
+        : languageLocked
         ? "client-locked"
         : detectedQuestionLanguage
         ? "question-detect"
@@ -3014,7 +3065,7 @@ ${ROLE_PROMPT}
 
 Mode: Generic Assistant. Pond records: none.
 
-${LANGUAGE_RULE(configuredLanguage, languageNotesText, languageLocked)}
+${replyLanguageRule}
 ${FARMER_NAME_RULE(farmerNameForPrompt)}
 ${OUTPUT_STYLE_RULE}
 ${RESPONSE_FORMAT_RULES}
@@ -3054,7 +3105,7 @@ ${farmerQuestion}
 ${documentExportInstruction}
 ${formatRequestInstruction}
 ${chartTableImageInstruction}
-OUTPUT LANGUAGE REQUIREMENT: ${languageLocked ? `The farmer selected ${configuredLanguage} as the app language; it overrides the question's language.` : "The farmer's CURRENT question must drive the reply language."} Answer only that question, and write the FULL answer in ${configuredLanguage}. If ${configuredLanguage} is Telugu, use Telugu script for the whole reply (not English). If it is English, reply in English. Do not copy an earlier English/Telugu chat turn's language when it differs from this question.
+OUTPUT LANGUAGE REQUIREMENT: ${outputLanguageRequirement}
 If this request has a chart/table image, follow CHART_TABLE_IMAGE_RULES (Steps 1–6). Do not invent unreadable numbers.
 If this request has a shrimp-health image (not a chart), describe visible signs first, then interpret. Do not invent pond conditions. Do not force headings. State that no pond-specific records were used.
 If this is a follow-up after a shrimp-photo conversation, continue that visual assessment without inventing a new photo.
@@ -3276,7 +3327,7 @@ ${ROLE_PROMPT}
 
 Mode: Pond advisor. Use this pond's supplied data. Do not ask the farmer to select a pond.
 
-${LANGUAGE_RULE(configuredLanguage, languageNotesText, languageLocked)}
+${replyLanguageRule}
 ${FARMER_NAME_RULE(farmerNameForPrompt)}
 ${OUTPUT_STYLE_RULE}
 ${RESPONSE_FORMAT_RULES}
@@ -3299,7 +3350,7 @@ ${farmerQuestion}
 ${documentExportInstruction}
 ${formatRequestInstruction}
 ${chartTableImageInstruction}
-OUTPUT LANGUAGE REQUIREMENT: ${languageLocked ? `The farmer selected ${configuredLanguage} as the app language; it overrides the question's language.` : "The farmer's CURRENT question must drive the reply language."} Answer only that question, and write the FULL answer in ${configuredLanguage}. If ${configuredLanguage} is Telugu, use Telugu script for the whole reply (not English). If it is English, reply in English. Do not copy an earlier English/Telugu chat turn's language when it differs from this question.
+OUTPUT LANGUAGE REQUIREMENT: ${outputLanguageRequirement}
 Use only pond values relevant to this question.
 For current pond-condition / water-quality questions, prioritize latest DO, pH, temperature, salinity, ammonia, nitrite if available, feed, mortality, and data age. Do not mention DOC or lecture about culture-age consistency.
 If this request has a chart/table image, follow CHART_TABLE_IMAGE_RULES (Steps 1–6). Read visible numbers only; mark unreadable cells as "Not readable".
