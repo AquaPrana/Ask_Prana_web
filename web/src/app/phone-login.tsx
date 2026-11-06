@@ -12,6 +12,7 @@ import {
   AUTH_DARK_BACKGROUND,
 } from "../components/phone-login-background";
 import { AskPranaLogo } from "../components/ask-prana-logo";
+import { AskPranaVoiceWaveformIcon } from "../components/ask-prana-voice-waveform-icon";
 import { PRIMARY_CTA_START } from "../constants/primary-cta";
 import Feather from "@expo/vector-icons/Feather";
 
@@ -324,7 +325,7 @@ export default function PhoneLoginScreen() {
             <Text style={styles.previewComposerText}>Message Ask Prana</Text>
             <Feather name="mic" size={18} color="#F4F7FA" />
             <View style={styles.previewSend}>
-              <Feather name="radio" size={16} color="#FFFFFF" />
+              <AskPranaVoiceWaveformIcon size={16} color="#4ADE80" />
             </View>
           </Pressable>
         </View>
