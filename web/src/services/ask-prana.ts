@@ -22,6 +22,7 @@ import {
   type AskPranaRecognitionMode,
 } from "../lib/ask-prana-transcription-language";
 import { getCurrentUserProfile, resolveFarmerDisplayName } from "./profile";
+import { takeAskPranaSseEvents } from "../lib/ask-prana-text-stream";
 
 export type AskPranaGeneratedFile = {
   type?: "file";
@@ -42,11 +43,24 @@ export type AskPranaReply = {
 
 export type AskPranaVoiceHandlers = {
   onSentence?: (sentence: string) => void;
+  /** Typed chat only. Raw model text, appended in order. Voice playback does not use this. */
+  onDelta?: (text: string) => void;
   onFirstText?: () => void;
   onReplace?: (text: string) => void;
   signal?: AbortSignal;
   turnId?: string;
 };
+
+export function logAskPranaChatTiming(
+  stage: string,
+  detail?: Record<string, string | number | boolean | null>,
+) {
+  if (process.env.NODE_ENV === "production") return;
+  console.debug("[AskPranaChatTiming]", stage, {
+    at: Math.round(performance.now()),
+    ...detail,
+  });
+}
 
 export function isAskPranaAbortError(error: unknown) {
   return error instanceof Error && error.name === "AbortError";
@@ -424,12 +438,14 @@ async function readVoiceEventStream(
   const decoder = new TextDecoder();
   let pending = "";
   let answer = "";
+  let deltaText = "";
   let sawText = false;
   const emitted = new Set<string>();
   const markText = () => {
     if (sawText) return;
     sawText = true;
     handlers?.onFirstText?.();
+    logAskPranaChatTiming("first-text-received");
   };
   const emit = (sentence: string) => {
     const cleaned = sentence.replace(/\s+/g, " ").trim();
@@ -443,26 +459,19 @@ async function readVoiceEventStream(
     const { done, value } = await reader.read();
     if (done) break;
     pending += decoder.decode(value, { stream: true });
-    const blocks = pending.split("\n\n");
-    pending = blocks.pop() ?? "";
-    for (const block of blocks) {
-      const data = block
-        .split("\n")
-        .filter((line) => line.startsWith("data:"))
-        .map((line) => line.slice(5).trim())
-        .join("\n");
-      if (!data) continue;
-      let event: { type?: string; text?: string; answer?: string; error?: string };
-      try {
-        event = JSON.parse(data) as typeof event;
-      } catch {
-        continue;
-      }
+    const parsed = takeAskPranaSseEvents(pending);
+    pending = parsed.rest;
+    for (const event of parsed.events) {
       if (event.type === "text") markText();
       else if (event.type === "sentence" && event.text) emit(event.text);
-      else if (event.type === "replace" && event.text) {
+      else if (event.type === "delta" && event.text) {
+        deltaText += event.text;
+        if (event.text.trim()) markText();
+        handlers?.onDelta?.(event.text);
+      } else if (event.type === "replace" && event.text) {
         markText();
         answer = event.text;
+        deltaText = event.text;
         handlers?.onReplace?.(event.text);
       } else if (event.type === "done") {
         answer = event.answer?.trim() || answer;
@@ -471,7 +480,7 @@ async function readVoiceEventStream(
       }
     }
   }
-  const finalAnswer = answer.trim();
+  const finalAnswer = (answer || deltaText).trim();
   if (!finalAnswer || /^no response received\.?$/i.test(finalAnswer)) {
     throw new Error("Ask Prana could not finish that answer. Please try asking again.");
   }
@@ -490,6 +499,9 @@ async function askPranaVoice(
       "Missing Environment Variable: EXPO_PUBLIC_SUPABASE_URL or EXPO_PUBLIC_SUPABASE_ANON_KEY",
     );
   }
+  logAskPranaChatTiming("model-request", {
+    inputMode: requestBody.inputMode === "voice" ? "voice" : "text",
+  });
   const response = await fetch(`${config.url}/functions/v1/ask-prana`, {
     method: "POST",
     signal: handlers?.signal,
@@ -518,11 +530,17 @@ async function askPranaVoice(
     if (!answer || /^no response received\.?$/i.test(answer)) {
       throw new Error("Ask Prana could not finish that answer. Please try asking again.");
     }
-    handlers?.onFirstText?.();
-    for (const sentence of splitCompleteSentences(answer)) handlers?.onSentence?.(sentence);
+    const generatedFile = normalizeGeneratedFile(data?.generatedFile);
+    if (!generatedFile) {
+      handlers?.onFirstText?.();
+      if (handlers?.onDelta) handlers.onDelta(answer);
+      else {
+        for (const sentence of splitCompleteSentences(answer)) handlers?.onSentence?.(sentence);
+      }
+    }
     return {
       answer,
-      generatedFile: normalizeGeneratedFile(data?.generatedFile),
+      generatedFile,
       sessionId: typeof requestBody.sessionId === "string" ? requestBody.sessionId : null,
     };
   }
@@ -703,18 +721,21 @@ export async function askPrana(
     })),
   });
 
-  if (requestBody.inputMode === "voice") {
-    if (process.env.NODE_ENV !== "production") {
+  if (requestBody.inputMode === "voice" || requestBody.inputMode === "text") {
+    if (requestBody.inputMode === "voice" && process.env.NODE_ENV !== "production") {
       console.debug("[AskPranaVoiceTiming]", "ai-request-sent", {
         at: Math.round(performance.now()),
         turnId: typeof handlers?.turnId === "string" ? handlers.turnId : null,
       });
     }
+    logAskPranaChatTiming("auth-ready", {
+      inputMode: requestBody.inputMode === "voice" ? "voice" : "text",
+    });
     try {
       return await askPranaVoice(requestBody, auth.accessToken, handlers);
     } catch (invokeError) {
       if (isAskPranaAbortError(invokeError)) throw invokeError;
-      console.log("[askPrana] voice stream failed:", invokeError);
+      console.log("[askPrana] answer stream failed:", invokeError);
       throw new Error(await formatAskPranaInvokeError(invokeError));
     }
   }

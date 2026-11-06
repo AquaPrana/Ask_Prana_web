@@ -38,6 +38,7 @@ import { pickMultipleImages, pickSingleImage, promptImageSource } from "../lib/r
 import {
   askPrana,
   isAskPranaAbortError,
+  logAskPranaChatTiming,
   logVoiceTranscription,
   transcribeAskPranaAudio,
   transcribeVoiceRecording,
@@ -107,6 +108,8 @@ export type ChatMessage = {
   createdAt?: string;
   /** Voice turn text stays in the spoken language instead of the website language. */
   preserveSpokenLanguage?: boolean;
+  /** True while typed-chat text is still arriving. Translation waits until this clears. */
+  streaming?: boolean;
 };
 
 export type AskPranaChatPondOption = {
@@ -1558,6 +1561,8 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       const epoch = ++pondLoadEpochRef.current;
       sendEpochRef.current += 1;
       generationIdRef.current += 1;
+      voiceAbortRef.current?.abort();
+      voiceAbortRef.current = null;
       sessionCreateEpochRef.current += 1;
       isSendingRef.current = false;
       setIsSending(false);
@@ -1860,6 +1865,9 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         ensureSession(),
         loadTeluguScriptPreference(),
       ]);
+      logAskPranaChatTiming("session-ready", {
+        inputMode: requestContext?.inputMode === "voice" ? "voice" : "text",
+      });
       const sessionId = isValidAskPranaUuid(storedSessionId) ? storedSessionId : null;
       if (sessionCapture) sessionCapture.id = sessionId;
 
@@ -2034,10 +2042,21 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
             selectedPondIdRef.current == null
           : selectedPondIdRef.current === pondAtStart;
       const stillCurrent = () => requestId === generationIdRef.current && pondStillSelected();
-      const writeMessage = (text: string, insert: boolean) => {
+      const startedSessionId = sessionIdRef.current;
+      const sameConversation = () => {
+        if (!pondStillSelected()) return false;
+        const owned = sessionCapture.id ?? startedSessionId;
+        return !owned || sessionIdRef.current === owned;
+      };
+      const textTurn = requestContext?.inputMode !== "voice";
+      const writeMessage = (text: string, insert: boolean, streaming = false, finish = false) => {
         setMessages((current) => {
           const exists = current.some((item) => item.id === messageId);
-          if (!exists && !insert) return current;
+          // A new bubble belongs only to the request that is still current.
+          // Stop can finish that bubble in place. Another conversation cannot.
+          const canInsert = insert && (finish ? sameConversation() : stillCurrent());
+          if (!exists && !canInsert) return current;
+          if (exists && !sameConversation()) return current;
           const nextMessage: ChatMessage = {
             id: messageId,
             role: "assistant",
@@ -2045,31 +2064,86 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
             messageType: "text",
             createdAt,
             preserveSpokenLanguage: requestContext?.inputMode === "voice",
+            streaming,
           };
           const next = exists
-            ? current.map((item) => item.id === messageId ? { ...item, text } : item)
+            ? current.map((item) => item.id === messageId ? { ...item, text, streaming } : item)
             : [...current, nextMessage];
           messagesRef.current = next;
           return next;
         });
       };
-      const handlers: AskPranaVoiceHandlers | undefined = voice?.handlers
-        ? {
-            ...voice.handlers,
-            onSentence: (sentence) => {
-              if (!stillCurrent()) return;
-              streamed = streamed ? `${streamed} ${sentence}` : sentence;
-              voice.handlers?.onSentence?.(sentence);
-              writeMessage(streamed, true);
-            },
-            onReplace: (text) => {
-              streamed = text;
-              if (!stillCurrent()) return;
-              voice.handlers?.onReplace?.(text);
-              writeMessage(text, true);
-            },
-          }
-        : undefined;
+      let pendingDelta = "";
+      let paintQueued = false;
+      let renderedText = false;
+      let sealed = false;
+      const paint = (streaming: boolean) => {
+        if (sealed) return;
+        if (pendingDelta) {
+          streamed += pendingDelta;
+          pendingDelta = "";
+        }
+        if (!streamed.trim() && streaming) return;
+        if (!streaming) sealed = true;
+        writeMessage(streamed, true, streaming, !streaming);
+      };
+      const schedulePaint = () => {
+        if (paintQueued || sealed) return;
+        paintQueued = true;
+        const run = () => {
+          paintQueued = false;
+          if (!stillCurrent()) return;
+          paint(true);
+        };
+        if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
+        else setTimeout(run, 32);
+      };
+      const noteVisibleText = () => {
+        if (renderedText || !`${streamed}${pendingDelta}`.trim()) return;
+        renderedText = true;
+        if (textTurn) setThinkingKind(null);
+        logAskPranaChatTiming("first-text-rendered", {
+          inputMode: textTurn ? "text" : "voice",
+        });
+      };
+      const controller = new AbortController();
+      const parentSignal = voice?.handlers?.signal;
+      if (parentSignal?.aborted) controller.abort();
+      else parentSignal?.addEventListener("abort", () => controller.abort(), { once: true });
+      if (!parentSignal || voiceAbortRef.current?.signal !== parentSignal) {
+        voiceAbortRef.current?.abort();
+      }
+      voiceAbortRef.current = controller;
+      const handlers: AskPranaVoiceHandlers = {
+        ...voice?.handlers,
+        signal: controller.signal,
+        onDelta: textTurn
+          ? (delta) => {
+              if (!stillCurrent() || !delta) return;
+              pendingDelta += delta;
+              noteVisibleText();
+              schedulePaint();
+            }
+          : undefined,
+        onSentence: (sentence) => {
+          if (!stillCurrent()) return;
+          streamed = streamed ? `${streamed} ${sentence}` : sentence;
+          voice?.handlers?.onSentence?.(sentence);
+          noteVisibleText();
+          writeMessage(streamed, true, textTurn);
+        },
+        onReplace: (text) => {
+          streamed = text;
+          pendingDelta = "";
+          if (!stillCurrent()) return;
+          voice?.handlers?.onReplace?.(text);
+          noteVisibleText();
+          writeMessage(text, true, textTurn);
+        },
+        onFirstText: () => {
+          voice?.handlers?.onFirstText?.();
+        },
+      };
       setGenerationStopped(false);
       setThinkingKind(resolveThinkingKind(requestContext));
       try {
@@ -2084,10 +2158,19 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
           sessionCapture,
         );
         const { requestSessionId, ...replyMessage } = assistantMessage;
+        sealed = true;
+        if (pendingDelta) {
+          streamed += pendingDelta;
+          pendingDelta = "";
+        }
         const answerText =
           replyMessage.text?.trim() ||
           streamed.trim() ||
           "Sorry — I could not finish that answer just now. Please ask again.";
+        logAskPranaChatTiming("completed", {
+          inputMode: textTurn ? "text" : "voice",
+          answerLength: answerText.length,
+        });
         const normalizedMessage: ChatMessage = {
           ...replyMessage,
           id: messageId,
@@ -2097,7 +2180,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         };
         const sessionId = requestSessionId ?? sessionCapture.id;
         if (stillCurrent()) {
-          writeMessage(answerText, true);
+          writeMessage(answerText, true, false, true);
           if (normalizedMessage.messageType === "document") {
             setMessages((current) => {
               const next = current.map((item) =>
@@ -2111,7 +2194,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         } else {
           // Keep a bubble that was already shown, but do not add this answer
           // to a conversation the user has since left.
-          writeMessage(answerText, false);
+          writeMessage(answerText, false, false, true);
           console.warn("[AskPranaChat] assistant reply kept for its original conversation", {
             requestId,
             activeRequestId: generationIdRef.current,
@@ -2127,7 +2210,13 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         return stillCurrent() ? normalizedMessage.text : null;
       } catch (error) {
         if (isAskPranaAbortError(error)) {
-          if (streamed.trim()) {
+          sealed = true;
+          if (pendingDelta) {
+            streamed += pendingDelta;
+            pendingDelta = "";
+          }
+          if (streamed.trim() && sameConversation()) {
+            writeMessage(streamed.trim(), true, false, true);
             saveAssistantInBackground(
               {
                 id: messageId,
@@ -2151,6 +2240,8 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
           });
           return null;
         }
+        sealed = true;
+        pendingDelta = "";
         const detail =
           error instanceof Error
             ? error.message
@@ -2243,6 +2334,10 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       options?: { fromVoiceMode?: boolean; voiceHandlers?: AskPranaVoiceHandlers },
     ) => {
       const fromVoiceMode = options?.fromVoiceMode === true;
+      logAskPranaChatTiming("send", {
+        inputMode: options?.fromVoiceMode ? "voice" : "text",
+        questionLength: question.trim().length,
+      });
       const trimmed = question.trim();
       const pendingSnapshot = fromVoiceMode
         ? []

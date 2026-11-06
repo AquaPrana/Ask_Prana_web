@@ -1936,6 +1936,8 @@ function streamVoiceOpenAIAnswer(options: {
   signal: AbortSignal;
   configuredLanguage: string;
   maxOutputTokens: number;
+  /** Typed chat forwards model deltas. Voice Chat keeps sentence events. */
+  forwardDeltas?: boolean;
 }) {
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
@@ -2018,15 +2020,23 @@ function streamVoiceOpenAIAnswer(options: {
               continue;
             }
             if (event.type === "response.output_text.delta" && typeof event.delta === "string") {
-              if (!announcedText && event.delta.trim()) {
-                announcedText = true;
-                send({ type: "text" });
-              }
-              carry += event.delta;
               spoken += event.delta;
-              const pulled = takeVoiceSentences(carry, false);
-              carry = pulled.rest;
-              for (const sentence of pulled.sentences) send({ type: "sentence", text: sentence });
+              if (options.forwardDeltas) {
+                if (!announcedText && event.delta.trim()) {
+                  announcedText = true;
+                  send({ type: "text" });
+                }
+                if (event.delta) send({ type: "delta", text: event.delta });
+              } else {
+                if (!announcedText && event.delta.trim()) {
+                  announcedText = true;
+                  send({ type: "text" });
+                }
+                carry += event.delta;
+                const pulled = takeVoiceSentences(carry, false);
+                carry = pulled.rest;
+                for (const sentence of pulled.sentences) send({ type: "sentence", text: sentence });
+              }
             } else if (event.type === "response.output_text.done" && typeof event.text === "string") {
               completedText = event.text;
             } else if (event.type === "response.completed" && event.response && typeof event.response === "object") {
@@ -2046,6 +2056,8 @@ function streamVoiceOpenAIAnswer(options: {
           // A short clarification can replace the model's wording. The client
           // speaks it only when playback has not started.
           send({ type: "replace", text: answer });
+        } else if (options.forwardDeltas) {
+          if (!spoken.trim() && answer) send({ type: "delta", text: answer });
         } else if (!spoken.trim()) {
           emitSentences([answer], true);
         } else if (carry.trim()) {
@@ -3487,8 +3499,8 @@ If this is a normal water/feed question with no prior health context, do not men
         ? OPENAI_ATTACHMENT_TIMEOUT_MS
         : OPENAI_TIMEOUT_MS;
 
-    // Voice Chat streams sentences. Text chat and document export stay JSON.
-    if (inputMode === "voice" && !documentExportQuestion) {
+    // Voice Chat streams sentences. Typed chat streams deltas. Document export stays JSON.
+    if ((inputMode === "voice" || inputMode === "text") && !documentExportQuestion) {
       return streamVoiceOpenAIAnswer({
         apiKey,
         systemPrompt,
@@ -3497,6 +3509,7 @@ If this is a normal water/feed question with no prior health context, do not men
         signal: req.signal,
         configuredLanguage,
         maxOutputTokens: successfulAttachments.length > 0 ? 1100 : 900,
+        forwardDeltas: inputMode === "text",
       });
     }
 

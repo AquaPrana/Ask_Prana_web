@@ -441,10 +441,11 @@ export default function AskPranaScreen() {
     [t],
   );
 
-  const thinkingVisible = thinkingKind != null || isSending;
+  const generationActive = thinkingKind != null || isSending;
+  const showThinkingBubble = thinkingKind != null;
   // While the latest question asks for a file, say so instead of "Thinking...".
   const lastUserText = [...messages].reverse().find((message) => message.role === "user")?.text ?? "";
-  const requestedFile = thinkingVisible ? detectRequestedFileFormat(lastUserText) : null;
+  const requestedFile = showThinkingBubble ? detectRequestedFileFormat(lastUserText) : null;
   const generatingFileLabel = requestedFile
     ? t(
         requestedFile === "xlsx"
@@ -463,7 +464,7 @@ export default function AskPranaScreen() {
   // Display copies only. Stored message.text stays in the language it was written.
   // Saved voice turns are included so a later website-language switch can show them.
   const translationSources = conversationMessages.flatMap((message) => [
-    ...(isTranslatableMessage(message) ? [message.text] : []),
+    ...(isTranslatableMessage(message) && !message.streaming ? [message.text] : []),
     ...(message.transcript?.trim() ? [message.transcript] : []),
   ]).reverse();
   // Originals in `messages` are never modified; only the rendered copy changes.
@@ -496,7 +497,9 @@ export default function AskPranaScreen() {
   const displayConversationMessages = useMemo(
     () =>
       conversationMessages.map((message) => {
-        const text = isTranslatableMessage(message) ? displayMessageText(message.text) : message.text;
+        const text = message.streaming || !isTranslatableMessage(message)
+          ? message.text
+          : displayMessageText(message.text);
         const transcript = message.transcript?.trim()
           ? displayMessageText(message.transcript)
           : message.transcript;
@@ -576,7 +579,7 @@ export default function AskPranaScreen() {
   );
   const [voiceMuted, setVoiceMuted] = useState(false);
   const canSend =
-    thinkingVisible ||
+    generationActive ||
     (!isRecording &&
       !isTranscribing &&
       !pendingAttachments.some((attachment) => attachment.status !== "ready") &&
@@ -601,7 +604,7 @@ export default function AskPranaScreen() {
   useEffect(() => {
     if (
       renderedConversationMessages.length === 0 &&
-      !thinkingVisible &&
+      !generationActive &&
       !generationStopped
     ) return;
     if (!listNearBottomRef.current) return;
@@ -609,7 +612,7 @@ export default function AskPranaScreen() {
       listRef.current?.scrollToEnd({ animated: true });
     }, 80);
     return () => clearTimeout(timer);
-  }, [renderedConversationMessages, thinkingVisible, generationStopped]);
+  }, [renderedConversationMessages, generationActive, generationStopped]);
 
   const handleSend = (question: string) => {
     void sendQuestion(question, requestContext);
@@ -703,7 +706,7 @@ export default function AskPranaScreen() {
   );
 
   const handleComposerAction = () => {
-    if (thinkingVisible) {
+    if (generationActive) {
       stopGeneration();
       return;
     }
@@ -1099,7 +1102,7 @@ export default function AskPranaScreen() {
                 </View>
               }
               ListFooterComponent={
-                thinkingVisible ? (
+                showThinkingBubble ? (
                   <AskPranaThinkingBubble kind={thinkingKind ?? "text"} label={generatingFileLabel} />
                 ) : generationStopped ? (
                   <View style={styles.stoppedStatusWrap}>
@@ -1118,10 +1121,10 @@ export default function AskPranaScreen() {
                   onCancelEditUserMessage={handleCancelEditUserMessage}
                   onSubmitEditUserMessage={handleSubmitEditUserMessage}
                   editDisabled={
-                    thinkingVisible || isRecording || isTranscribing || isSending
+                    generationActive || isRecording || isTranscribing || isSending
                   }
                   onRegenerateAssistantMessage={handleRegenerateAssistantMessage}
-                  regenerateDisabled={thinkingVisible || isRecording || isTranscribing}
+                  regenerateDisabled={generationActive || isRecording || isTranscribing}
                   onReadAloud={handleReadAloud}
                 />
               )}
@@ -1474,9 +1477,9 @@ export default function AskPranaScreen() {
                       pressed && styles.pressed,
                     ]}
                     accessibilityRole="button"
-                    accessibilityLabel={thinkingVisible ? t("askPrana.stopGenerating") : t("askPrana.send")}
+                    accessibilityLabel={generationActive ? t("askPrana.stopGenerating") : t("askPrana.send")}
                   >
-                    {thinkingVisible ? (
+                    {generationActive ? (
                       <View style={styles.stopIcon} />
                     ) : (
                       <Feather name="arrow-up" size={18} color={colors.white} />
