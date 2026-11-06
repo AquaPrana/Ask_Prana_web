@@ -729,7 +729,169 @@ try {
   assert(!voiceMode.includes("wordCount(captured.text)"), "interruptions are not chosen by word count");
   assert(voiceMode.includes("Listening stays hidden until capture is ready"), "Listening is shown only after capture is ready");
 
-  console.log("Voice dictation harness passed: final transcript, missing-speechend fallback, late-final preservation, pause cancellation, five consecutive sessions, five finalized questions, transcript checks, playback handoff, transcription language, spoken-turn language, and barge-in echo ceiling.");
+  const { createVoiceLanguageSwitch, shouldReleaseOwnedCapture } = await server.ssrLoadModule(
+    "/src/lib/ask-prana-voice-language-switch.ts",
+  );
+  assert(shouldReleaseOwnedCapture(2, 2) === true, "the current attempt may release its own capture");
+  assert(shouldReleaseOwnedCapture(1, 2) === false, "a stale attempt must not release the newest capture");
+  let protectedCapture = "en";
+  if (shouldReleaseOwnedCapture(1, 2)) protectedCapture = null;
+  assert(protectedCapture === "en", "stale cleanup cannot stop the new session");
+
+  const flush = async () => {
+    for (let tick = 0; tick < 12; tick += 1) await Promise.resolve();
+  };
+  const deferred = () => {
+    let resolve = () => {};
+    const promise = new Promise((done) => {
+      resolve = done;
+    });
+    return { promise, resolve };
+  };
+  const probeSwitch = () => {
+    const calls = [];
+    const cancelGates = [];
+    const startGates = [];
+    let attempt = 0;
+    let active = null;
+    let sessionOpen = true;
+    let muted = false;
+    const sw = createVoiceLanguageSwitch({
+      invalidate() {
+        attempt += 1;
+        calls.push("invalidate");
+      },
+      async cancelCapture() {
+        const owner = attempt;
+        calls.push("cancel");
+        const gate = deferred();
+        cancelGates.push(gate);
+        await gate.promise;
+        if (shouldReleaseOwnedCapture(owner, attempt)) active = null;
+        calls.push("cancel-done");
+      },
+      async startCapture(mode) {
+        const owner = attempt;
+        calls.push(`start:${mode}`);
+        const gate = deferred();
+        startGates.push(gate);
+        await gate.promise;
+        if (!shouldReleaseOwnedCapture(owner, attempt)) {
+          calls.push(`stale-start:${mode}`);
+          return;
+        }
+        active = mode;
+        calls.push(`live:${mode}`);
+      },
+      isSessionOpen: () => sessionOpen,
+      isMuted: () => muted,
+    });
+    return {
+      sw,
+      calls,
+      cancelGates,
+      startGates,
+      get active() { return active; },
+      set sessionOpen(value) { sessionOpen = value; },
+      set muted(value) { muted = value; },
+    };
+  };
+
+  {
+    const probe = probeSwitch();
+    const done = probe.sw.request("en");
+    await flush();
+    assert(probe.calls.includes("cancel"), "a language change cancels the current capture");
+    assert(!probe.calls.some((call) => call.startsWith("start:")), "the replacement capture waits for cancellation");
+    probe.cancelGates[0].resolve();
+    await flush();
+    assert(
+      probe.calls.indexOf("cancel-done") < probe.calls.indexOf("start:en"),
+      "cancellation completes before the replacement capture",
+    );
+    probe.startGates[0].resolve();
+    await done;
+    assert(probe.active === "en", "the selected language becomes the live capture");
+  }
+
+  {
+    const probe = probeSwitch();
+    const done = Promise.all([
+      probe.sw.request("te"),
+      probe.sw.request("hi"),
+      probe.sw.request("en"),
+    ]);
+    await flush();
+    assert(probe.cancelGates.length === 1, `rapid language selections do not overlap cancellations (saw ${probe.cancelGates.length}: ${probe.calls.join(",")})`);
+    probe.cancelGates[0].resolve();
+    await flush();
+    const starts = probe.calls.filter((call) => call.startsWith("start:"));
+    assert(starts.length === 1 && starts[0] === "start:en", "only the latest language starts listening");
+    probe.startGates[0].resolve();
+    await done;
+    assert(probe.active === "en", "rapid Telugu, Hindi, then English leaves English listening");
+  }
+
+  {
+    const probe = probeSwitch();
+    const first = probe.sw.request("te");
+    await flush();
+    probe.cancelGates[0].resolve();
+    await flush();
+    const second = probe.sw.request("en");
+    probe.startGates[0].resolve();
+    await flush();
+    assert(probe.calls.includes("stale-start:te"), "a replaced startup does not become the live capture");
+    assert(probe.active == null, "a stale startup leaves the microphone clear");
+    probe.cancelGates[1].resolve();
+    await flush();
+    probe.startGates[1].resolve();
+    await Promise.all([first, second]);
+    assert(probe.active === "en", "the newest language remains live after the stale startup finishes");
+  }
+
+  {
+    const probe = probeSwitch();
+    const done = probe.sw.request("hi");
+    await flush();
+    probe.sw.abandon();
+    probe.cancelGates[0].resolve();
+    await done;
+    assert(!probe.calls.some((call) => call.startsWith("start:")), "closing during a switch does not start the microphone");
+  }
+
+  {
+    const probe = probeSwitch();
+    probe.muted = true;
+    const done = probe.sw.request("hi");
+    await flush();
+    probe.cancelGates[0].resolve();
+    await done;
+    assert(probe.active == null, "changing language while muted does not open the microphone");
+    assert(!probe.calls.some((call) => call.startsWith("start:")), "a muted switch never starts capture");
+  }
+
+  {
+    const probe = probeSwitch();
+    probe.sessionOpen = false;
+    const done = probe.sw.request("te");
+    await flush();
+    probe.cancelGates[0].resolve();
+    await done;
+    assert(!probe.calls.some((call) => call.startsWith("start:")), "a closed session does not restart listening");
+  }
+
+  assert(voiceMode.includes("Switching language…"), "a language change shows that listening is switching");
+  assert(voiceMode.includes("The microphone is still switching. Please try again."), "VOICE_RECOGNITION_BUSY is not shown as a raw error");
+  assert(voiceMode.includes("shouldReleaseOwnedCapture"), "voice mode releases only the capture it still owns");
+  assert(voiceMode.includes("languageSwitchRef.current?.request(mode)"), "language changes go through the ordered switch");
+  assert(voiceMode.includes("Muted and closed sessions keep the selected language and do not open the microphone."), "changing language while muted does not open the microphone");
+  assert(chat.includes('throw new Error("VOICE_RECOGNITION_BUSY")'), "the busy guard still rejects an overlapping microphone start");
+  assert(chat.includes("voiceStartInFlightRef"), "cancellation waits for a microphone start that is still opening");
+  assert(chat.includes("A stale transcription must not release a capture the language switch already started."), "a late transcript cannot stop the replacement capture");
+  assert(recorder.includes("releaseMicrophone"), "a cancelled startup can release the prepared microphone");
+
+  console.log("Voice dictation harness passed: final transcript, missing-speechend fallback, late-final preservation, pause cancellation, five consecutive sessions, five finalized questions, transcript checks, playback handoff, transcription language, spoken-turn language, barge-in echo ceiling, and language-switch lifecycle.");
 } finally {
   await server.close();
 }

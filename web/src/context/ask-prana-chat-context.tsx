@@ -902,6 +902,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
   const voiceStopInFlightRef = useRef(false);
   /** Bumped on cancel / pond switch so late transcripts are ignored. */
   const dictationEpochRef = useRef(0);
+  const voiceStartInFlightRef = useRef<Promise<void> | null>(null);
   /** Ignore AppState blips (permission dialog → inactive) right after start. */
   const recordingGuardUntilRef = useRef(0);
   /** Earliest time Stop is allowed (avoids start+stop double-tap). */
@@ -1053,6 +1054,8 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
     try {
       if (recorder.isRecording) {
         await recorder.stop();
+      } else {
+        recorder.releaseMicrophone();
       }
     } catch (error) {
       console.log("[AskPranaChat] recorder stop during release failed:", error);
@@ -1069,13 +1072,12 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
 
   const cancelAudioRecording = useCallback(async () => {
     clearVoiceSilenceWatch();
-    dictationEpochRef.current += 1;
+    const cancelEpoch = dictationEpochRef.current + 1;
+    dictationEpochRef.current = cancelEpoch;
     voiceStopInFlightRef.current = false;
     recordingGuardUntilRef.current = 0;
     recordingStopAllowedAtRef.current = 0;
-    if (webDictationSourceRef.current === "voice") {
-      setVoiceLiveTranscript("");
-    }
+    const pendingStart = voiceStartInFlightRef.current;
 
     const webSession = webDictationRef.current;
     webDictationRef.current = null;
@@ -1086,28 +1088,38 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       } else {
         setVoiceLiveTranscript("");
       }
-      isRecordingRef.current = false;
-      isTranscribingRef.current = false;
-      setIsRecording(false);
-      setIsTranscribing(false);
-      voiceBusyRef.current = false;
-      console.log("[AskPranaChat] web dictation cancelled; draft preserved");
-      return;
+    } else {
+      const wasLive =
+        isRecordingRef.current || Boolean(audioRecorderRef.current?.isRecording);
+      if (wasLive) {
+        try {
+          await audioRecorderRef.current.stop();
+        } catch (error) {
+          console.log("[AskPranaChat] cancel stop failed:", error);
+        }
+      }
     }
 
-    const wasLive =
-      isRecordingRef.current || Boolean(audioRecorderRef.current?.isRecording);
+    // A start that is still inside getUserMedia or recognition startup owns
+    // the microphone until it observes this epoch and releases it.
+    if (pendingStart) {
+      try {
+        await pendingStart;
+      } catch (error) {
+        console.log("[AskPranaChat] cancelled start finished with:", error);
+      }
+    }
+
+    // A newer capture may already have started. Do not clear its ownership.
+    if (dictationEpochRef.current !== cancelEpoch) return;
+
     isRecordingRef.current = false;
     isTranscribingRef.current = false;
+    voiceBusyRef.current = false;
     setIsRecording(false);
     setIsTranscribing(false);
-    voiceBusyRef.current = false;
-    if (wasLive) {
-      try {
-        await audioRecorderRef.current.stop();
-      } catch (error) {
-        console.log("[AskPranaChat] cancel stop failed:", error);
-      }
+    if (webDictationSourceRef.current === "voice") {
+      setVoiceLiveTranscript("");
     }
     await releaseRecordingResources();
     console.log("[AskPranaChat] dictation cancelled; draft preserved");
@@ -3025,6 +3037,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       }
       return;
     }
+    const pendingStart = (async () => {
     voiceBusyRef.current = true;
     webDictationSourceRef.current = source;
     if (source === "composer") {
@@ -3118,6 +3131,13 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
                 }
               : undefined,
         });
+        if (operationEpoch !== dictationEpochRef.current) {
+          session.cancel();
+          voiceBusyRef.current = false;
+          isRecordingRef.current = false;
+          setIsRecording(false);
+          return;
+        }
         webDictationRef.current = session;
         isRecordingRef.current = true;
         setIsRecording(true);
@@ -3143,6 +3163,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         voiceBusyRef.current = false;
         isRecordingRef.current = false;
         setIsRecording(false);
+        if (operationEpoch !== dictationEpochRef.current) return;
         Alert.alert(
           "Dictation unavailable",
           "Browser speech recognition could not start. Allow microphone access and try Chrome/Edge.",
@@ -3174,13 +3195,37 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         }
       }
 
+      if (operationEpoch !== dictationEpochRef.current) {
+        voiceBusyRef.current = false;
+        return;
+      }
+
       await setAudioModeAsync({
         allowsRecording: true,
         playsInSilentMode: true,
       });
 
+      if (operationEpoch !== dictationEpochRef.current) {
+        voiceBusyRef.current = false;
+        return;
+      }
+
       await audioRecorder.prepareToRecordAsync(ASK_PRANA_VOICE_RECORDING_OPTIONS);
+      if (operationEpoch !== dictationEpochRef.current) {
+        audioRecorder.releaseMicrophone();
+        voiceBusyRef.current = false;
+        isRecordingRef.current = false;
+        setIsRecording(false);
+        return;
+      }
       audioRecorder.record();
+      if (operationEpoch !== dictationEpochRef.current) {
+        audioRecorder.releaseMicrophone();
+        voiceBusyRef.current = false;
+        isRecordingRef.current = false;
+        setIsRecording(false);
+        return;
+      }
       isRecordingRef.current = true;
       setIsRecording(true);
       recordingStopAllowedAtRef.current = Date.now() + 700;
@@ -3207,6 +3252,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       recordingGuardUntilRef.current = 0;
       recordingStopAllowedAtRef.current = 0;
       await releaseRecordingResources();
+      if (operationEpoch !== dictationEpochRef.current) return;
       const errorName =
         error && typeof error === "object" && "name" in error
           ? String((error as { name?: unknown }).name)
@@ -3226,6 +3272,13 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       if (options?.throwOnFailure) {
         throw error instanceof Error ? error : new Error("VOICE_PERMISSION");
       }
+    }
+    })();
+    voiceStartInFlightRef.current = pendingStart;
+    try {
+      await pendingStart;
+    } finally {
+      if (voiceStartInFlightRef.current === pendingStart) voiceStartInFlightRef.current = null;
     }
   }, [audioRecorder, clearStuckRecordingFlag, releaseRecordingResources, startVoiceSilenceWatch]);
 
@@ -3368,6 +3421,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         }
       } catch (error) {
         console.log("[AskPranaChat] stop recording failed:", error);
+        if (epochAtStart !== dictationEpochRef.current) return null;
         Alert.alert(
           "Recording failed",
           "Couldn't finish that recording. Please try again.",
@@ -3615,16 +3669,17 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       });
       return transcript.trim();
     } finally {
-      voiceBusyRef.current = false;
-      voiceStopInFlightRef.current = false;
-      isRecordingRef.current = false;
-      recordingStopAllowedAtRef.current = 0;
+      // A stale transcription must not release a capture the language switch already started.
       if (epochAtStart === dictationEpochRef.current) {
+        voiceBusyRef.current = false;
+        voiceStopInFlightRef.current = false;
+        isRecordingRef.current = false;
+        recordingStopAllowedAtRef.current = 0;
         isTranscribingRef.current = false;
         setIsTranscribing(false);
+        setIsRecording(false);
+        await releaseRecordingResources();
       }
-      setIsRecording(false);
-      await releaseRecordingResources();
     }
   }, [audioRecorder, clearStuckRecordingFlag, clearVoiceSilenceWatch, releaseRecordingResources]);
 

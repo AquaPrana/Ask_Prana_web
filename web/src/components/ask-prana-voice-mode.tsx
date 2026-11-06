@@ -53,6 +53,11 @@ import {
 } from "../lib/ask-prana-recording-capture";
 import { createVoiceScreenWakeLock } from "../lib/ask-prana-screen-wake-lock";
 import {
+  createVoiceLanguageSwitch,
+  shouldReleaseOwnedCapture,
+  type VoiceLanguageSwitch,
+} from "../lib/ask-prana-voice-language-switch";
+import {
   logVoiceTranscription,
   transcribeVoiceRecording,
   type VoiceListenResult,
@@ -113,6 +118,7 @@ export type VoiceModeState =
   | "interrupted"
   | "muted"
   | "reconnecting"
+  | "switching"
   | "error"
   | "idle";
 
@@ -564,12 +570,15 @@ async function transcribeInterruption(
 }
 
 function voiceTurnErrorMessage(error: unknown) {
-  if (error instanceof Error && error.message.trim()) {
-    return error.message;
+  const raw = error instanceof Error
+    ? error.message.trim()
+    : typeof error === "string"
+      ? error.trim()
+      : "";
+  if (raw === "VOICE_RECOGNITION_BUSY") {
+    return "The microphone is still switching. Please try again.";
   }
-  if (typeof error === "string" && error.trim()) {
-    return error;
-  }
+  if (raw) return raw;
   return "Could not process that voice turn. Check your connection and try again.";
 }
 
@@ -658,6 +667,12 @@ export function AskPranaVoiceModeModal({
   const turnInFlightRef = useRef(false);
   /** Invalidates a stale recognition start while a newer start is pending. */
   const listeningAttemptRef = useRef(0);
+  const onCancelListeningRef = useRef(onCancelListening);
+  onCancelListeningRef.current = onCancelListening;
+  const startListeningSafelyRef = useRef<
+    (reason: "open" | "resume" | "retry" | "interrupt" | "visibility", languageOverride?: AskPranaRecognitionMode) => Promise<boolean>
+  >(async () => false);
+  const languageSwitchRef = useRef<VoiceLanguageSwitch<AskPranaRecognitionMode> | null>(null);
   /** Browser tab suspension stops recognition without a reliable onend event. */
   const resumeAfterVisibilityRef = useRef(false);
 
@@ -1046,6 +1061,7 @@ export function AskPranaVoiceModeModal({
 
   const cleanupSession = useCallback(async () => {
     const closingSessionId = voiceSessionIdRef.current;
+    languageSwitchRef.current?.abandon();
     sessionActiveRef.current = false;
     loopArmedRef.current = false;
     listeningAttemptRef.current += 1;
@@ -1097,13 +1113,12 @@ export function AskPranaVoiceModeModal({
       for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
           await onStartListening(listenLanguage);
-          if (
-            !sessionActiveRef.current ||
-            voiceSessionIdRef.current !== sessionId ||
-            listeningAttemptRef.current !== attemptId
-          ) {
-            // A close/new session won while startup was awaiting permission.
-            await onCancelListening();
+          const ownsCapture = shouldReleaseOwnedCapture(attemptId, listeningAttemptRef.current);
+          const sessionCurrent = sessionActiveRef.current && voiceSessionIdRef.current === sessionId;
+          if (!ownsCapture || !sessionCurrent || mutedRef.current) {
+            // Release this attempt only while it still owns the microphone.
+            // A newer language selection must keep the capture it just started.
+            if (ownsCapture && sessionCurrent) await onCancelListening();
             return false;
           }
           setState("listening");
@@ -1151,6 +1166,18 @@ export function AskPranaVoiceModeModal({
     },
     [onCancelListening, onClearLiveTranscript, onStartListening, stopBargeInMonitor],
   );
+  startListeningSafelyRef.current = startListeningSafely;
+  if (!languageSwitchRef.current) {
+    languageSwitchRef.current = createVoiceLanguageSwitch({
+      invalidate: () => {
+        listeningAttemptRef.current += 1;
+      },
+      cancelCapture: () => onCancelListeningRef.current(),
+      startCapture: (mode) => startListeningSafelyRef.current("resume", mode),
+      isSessionOpen: () => sessionActiveRef.current,
+      isMuted: () => mutedRef.current,
+    });
+  }
 
   useEffect(() => {
     interruptListeningRef.current = () => startListeningSafely("interrupt");
@@ -1184,6 +1211,7 @@ export function AskPranaVoiceModeModal({
     }
 
     return () => {
+      languageSwitchRef.current?.abandon();
       sessionActiveRef.current = false;
       stopBargeInMonitor();
       void onCancelListening();
@@ -1685,6 +1713,7 @@ export function AskPranaVoiceModeModal({
     }
 
     const current = stateRef.current;
+    if (current === "switching") return;
     if (current === "processing") {
       // Cancel the answer that is still loading and listen again.
       orbPressLockRef.current = true;
@@ -1745,6 +1774,7 @@ export function AskPranaVoiceModeModal({
     setMuted(next);
     setErrorText(null);
     if (next) {
+      languageSwitchRef.current?.abandon();
       await onCancelListening();
       speechTurnRef.current += 1;
       speechQueueRef.current?.cancel();
@@ -1767,15 +1797,14 @@ export function AskPranaVoiceModeModal({
   }, [cleanupSession, onClose]);
 
   const handleLanguageChange = useCallback(
-    async (mode: AskPranaRecognitionMode) => {
-      if (mode === recognitionMode) {
+    (mode: AskPranaRecognitionMode) => {
+      if (mode === recognitionModeRef.current) {
         setLanguageMenuOpen(false);
         return;
       }
 
       setLanguageMenuOpen(false);
       setErrorText(null);
-      listeningAttemptRef.current += 1;
       onClearLiveTranscript?.();
       setSubmittedQuestion(null);
       speechTurnRef.current += 1;
@@ -1783,13 +1812,21 @@ export function AskPranaVoiceModeModal({
       speechQueueRef.current = null;
       stopBargeInMonitor();
       onCancelAsk?.();
-      await stopAskPranaSpeech();
+      void stopAskPranaSpeech();
       recognitionModeRef.current = mode;
       setRecognitionMode(mode);
-      if (!sessionActiveRef.current) return;
-      await startListeningSafely("resume", mode);
+      // Muted and closed sessions keep the selected language and do not open the microphone.
+      if (!sessionActiveRef.current || mutedRef.current) {
+        languageSwitchRef.current?.abandon();
+        return;
+      }
+      setState("switching");
+      stateRef.current = "switching";
+      void languageSwitchRef.current?.request(mode).catch((error) => {
+        console.log("[AskPranaVoice] language switch failed:", error);
+      });
     },
-    [onCancelAsk, onClearLiveTranscript, recognitionMode, startListeningSafely, stopBargeInMonitor],
+    [onCancelAsk, onClearLiveTranscript, stopBargeInMonitor],
   );
 
   const handleSendTyped = useCallback(async () => {
@@ -1882,6 +1919,7 @@ export function AskPranaVoiceModeModal({
   }, [retryQuestion, runTurnFromTranscript]);
 
   const statusLabel = (() => {
+    if (state === "switching") return "Switching language…";
     if (state === "listening") return "Listening…";
     if (state === "finalizing" || isTranscribing) return "Finishing your question…";
     if (state === "processing") {
@@ -1923,7 +1961,7 @@ export function AskPranaVoiceModeModal({
       <Animated.View style={{ transform: [{ scale: orbScale }] }}>
         <VoiceOrb
           size={variant === "overlay" ? 88 : 200}
-          state={state === "finalizing" ? "processing" : state}
+          state={state === "finalizing" || state === "switching" ? "processing" : state}
           audioLevel={reducedMotion ? 0 : Math.min(effectiveAudioLevel * 3, 1)}
           reducedMotion={reducedMotion}
         />

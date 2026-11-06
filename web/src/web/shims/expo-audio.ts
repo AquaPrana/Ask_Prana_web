@@ -211,6 +211,39 @@ export class AudioRecorder extends Emitter {
     this.mediaRecorder.pause();
   }
 
+  /** Drop a prepared or live microphone without waiting for a recording file. */
+  releaseMicrophone() {
+    this.capturingPcm = false;
+    this.tailFrozen = true;
+    this.clearTimeouts();
+    try {
+      this.pcmProcessor?.disconnect();
+      this.pcmGain?.disconnect();
+      this.analyser?.disconnect();
+      this.analyserSource?.disconnect();
+    } catch {
+      // The graph may already be disconnected.
+    }
+    this.pcmProcessor = null;
+    this.pcmGain = null;
+    this.analyser = null;
+    this.analyserSource = null;
+    this.analyserBuffer = null;
+    const recorder = this.mediaRecorder;
+    this.mediaRecorder = null;
+    this.stopping = null;
+    if (recorder && recorder.state !== "inactive") {
+      try {
+        recorder.stop();
+      } catch {
+        // The browser can already have stopped it.
+      }
+    }
+    this.stream?.getTracks().forEach((audioTrack) => audioTrack.stop());
+    this.stream = null;
+    this.mediaRecorderIsRecording = false;
+  }
+
   async stop() {
     if (this.mediaRecorder === null) {
       throw new Error(
