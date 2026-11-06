@@ -42,6 +42,7 @@ import {
   isAssistantEchoTranscript,
   isUnclearVoiceTranscript,
 } from "../lib/ask-prana-voice-transcript";
+import { createVoiceScreenWakeLock } from "../lib/ask-prana-screen-wake-lock";
 import {
   logVoiceTranscription,
   transcribeVoiceRecording,
@@ -581,6 +582,7 @@ export function AskPranaVoiceModeModal({
   const [muted, setMuted] = useState(false);
   const mutedRef = useRef(false);
   const [errorText, setErrorText] = useState<string | null>(null);
+  const [wakeLockNote, setWakeLockNote] = useState<string | null>(null);
   const [lines, setLines] = useState<TranscriptLine[]>([]);
   const [audioLevel, setAudioLevel] = useState(0);
   const [reducedMotion, setReducedMotion] = useState(false);
@@ -1141,6 +1143,32 @@ export function AskPranaVoiceModeModal({
     // Session lifetime is tied to visibility; changing callback identities or
     // mute state must not tear down an active microphone.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible]);
+
+  useEffect(() => {
+    if (!visible || Platform.OS !== "web" || typeof navigator === "undefined" || typeof document === "undefined") {
+      return;
+    }
+    const sessionId = voiceSessionIdRef.current;
+    const navigatorWithLock = navigator as Navigator & {
+      wakeLock?: { request: (type: "screen") => Promise<{ release: () => Promise<void>; addEventListener?: (type: "release", listener: () => void) => void; removeEventListener?: (type: "release", listener: () => void) => void }> };
+    };
+    const wakeLock = createVoiceScreenWakeLock({
+      supported: typeof navigatorWithLock.wakeLock?.request === "function",
+      request: () => navigatorWithLock.wakeLock!.request("screen"),
+      isDocumentVisible: () => document.visibilityState === "visible",
+      onUnavailable: (message) => setWakeLockNote(message),
+    });
+    wakeLock.open(sessionId, document.visibilityState === "visible");
+    const onVisibility = () => {
+      wakeLock.onDocumentVisibility(sessionId, document.visibilityState === "visible");
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      setWakeLockNote(null);
+      void wakeLock.close(sessionId);
+    };
   }, [visible]);
 
   useEffect(() => {
@@ -1855,6 +1883,7 @@ export function AskPranaVoiceModeModal({
           </Text>
         ) : null}
         {errorText ? <Text style={styles.errorHint}>{errorText}</Text> : null}
+        {wakeLockNote ? <Text style={styles.wakeLockNote}>{wakeLockNote}</Text> : null}
         {state === "error" && retryQuestion ? (
           <Pressable onPress={handleRetry} style={styles.retryBtn} accessibilityRole="button" accessibilityLabel="Retry">
             <Text style={styles.retryText}>Retry</Text>
@@ -1934,6 +1963,7 @@ export function AskPranaVoiceModeModal({
           {errorText && state !== "error" ? (
             <Text style={styles.errorHint}>{errorText}</Text>
           ) : null}
+          {wakeLockNote ? <Text style={styles.wakeLockNote}>{wakeLockNote}</Text> : null}
         </View>
 
         <View style={styles.bottomBar}>
@@ -2113,6 +2143,13 @@ const styles = StyleSheet.create({
     fontSize: 13,
     textAlign: "center",
     paddingHorizontal: 16,
+  },
+  wakeLockNote: {
+    color: colors.muted,
+    fontSize: 12,
+    lineHeight: 16,
+    textAlign: "center",
+    paddingHorizontal: 24,
   },
   retryBtn: {
     minHeight: 36,
