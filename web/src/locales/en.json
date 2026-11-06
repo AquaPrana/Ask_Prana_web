@@ -179,6 +179,7 @@
     "historyLoadError": "Unable to load your conversation history. Please try again.",
     "loadMoreHistory": "Load more",
     "loadEarlierMessages": "Load earlier messages",
+    "scrollToLatest": "Scroll to latest message",
     "renameError": "Unable to rename this conversation. Please try again.",
     "deleteError": "Unable to delete this conversation. Please try again.",
     "clearSearch": "Clear search",

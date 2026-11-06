@@ -1,6 +1,7 @@
 import { ASK_PRANA_FONT_FAMILY } from "../constants/ask-prana-typography";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AccessibilityInfo,
   ActivityIndicator,
   Alert,
   BackHandler,
@@ -23,6 +24,7 @@ import {
   type TextInputContentSizeChangeEventData,
   type TextInputSelectionChangeEventData,
   type TextStyle,
+  type ViewStyle,
 } from "react-native";
 import { Image } from "expo-image";
 import Feather from "@expo/vector-icons/Feather";
@@ -79,6 +81,7 @@ const colors = {
 };
 
 const COMPOSER_INPUT_MIN_HEIGHT = 48;
+const NEAR_BOTTOM_DISTANCE = 96;
 
 /** Label-only hint for the loading bubble; the Edge Function decides the real export. */
 function detectRequestedFileFormat(text: string): "docx" | "pdf" | "xlsx" | null {
@@ -243,6 +246,13 @@ export default function AskPranaScreen() {
   const isDesktop = Platform.OS === "web" && Math.max(width, browserWidth) >= 1024;
   const listRef = useRef<FlatList<ChatMessage>>(null);
   const listNearBottomRef = useRef(true);
+  const listMetricsRef = useRef({ offsetY: 0, contentHeight: 0, viewportHeight: 0 });
+  const pendingOlderLoadRef = useRef(false);
+  const messageCountRef = useRef(0);
+  const voiceInlineRef = useRef(false);
+  const [showScrollToLatest, setShowScrollToLatest] = useState(false);
+  const [scrollToLatestFocused, setScrollToLatestFocused] = useState(false);
+  const [reducedMotion, setReducedMotion] = useState(false);
   const composerInputRef = useRef<TextInput>(null);
   const measuredDraftRef = useRef<string | null>(null);
   const composerEnterSubmitLockRef = useRef(false);
@@ -567,6 +577,8 @@ export default function AskPranaScreen() {
 
   const sidebarVisible = sidebarOpen;
   const voiceInline = voiceModeOpen;
+  messageCountRef.current = renderedConversationMessages.length;
+  voiceInlineRef.current = voiceInline;
   const voiceActionsRef = useRef<{
     toggleMute: () => void;
     end: () => void;
@@ -588,6 +600,26 @@ export default function AskPranaScreen() {
 
   useEffect(() => {
     if (Platform.OS === "web") {
+      if (typeof window === "undefined" || !window.matchMedia) return;
+      const query = window.matchMedia("(prefers-reduced-motion: reduce)");
+      const apply = () => setReducedMotion(query.matches);
+      apply();
+      query.addEventListener?.("change", apply);
+      return () => query.removeEventListener?.("change", apply);
+    }
+    let mounted = true;
+    void AccessibilityInfo.isReduceMotionEnabled().then((enabled) => {
+      if (mounted) setReducedMotion(enabled);
+    });
+    const subscription = AccessibilityInfo.addEventListener("reduceMotionChanged", setReducedMotion);
+    return () => {
+      mounted = false;
+      subscription.remove();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (Platform.OS === "web") {
       return;
     }
     const shown = Keyboard.addListener("keyboardDidShow", (event) => {
@@ -602,18 +634,108 @@ export default function AskPranaScreen() {
     };
   }, []);
 
+  const refreshScrollToLatestVisibility = useCallback(() => {
+    const { contentHeight, viewportHeight } = listMetricsRef.current;
+    const overflow = viewportHeight > 0 && contentHeight > viewportHeight + 1;
+    const show =
+      overflow &&
+      !listNearBottomRef.current &&
+      messageCountRef.current > 0 &&
+      !voiceInlineRef.current;
+    setShowScrollToLatest((current) => (current === show ? current : show));
+  }, []);
+
+  const followLatestContent = useCallback((animated: boolean) => {
+    if (!listNearBottomRef.current || pendingOlderLoadRef.current) return;
+    listRef.current?.scrollToEnd({ animated });
+  }, []);
+
+  const readListScrollPosition = useCallback((
+    event: {
+      nativeEvent: {
+        contentOffset: { y: number };
+        contentSize: { height: number };
+        layoutMeasurement: { height: number };
+      };
+    },
+  ) => {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    const previousOffset = listMetricsRef.current.offsetY;
+    listMetricsRef.current.offsetY = contentOffset.y;
+    listMetricsRef.current.contentHeight = contentSize.height;
+    listMetricsRef.current.viewportHeight = layoutMeasurement.height;
+    const overflow = contentSize.height > layoutMeasurement.height + 1;
+    const distanceFromBottom = contentSize.height - (contentOffset.y + layoutMeasurement.height);
+    const nearBottom = !overflow || distanceFromBottom < NEAR_BOTTOM_DISTANCE;
+    // Content growth keeps the existing follow choice. A real scroll, drag, or
+    // fling is what moves the reader back to the latest message or away from it.
+    if (!overflow || Math.abs(contentOffset.y - previousOffset) > 1) {
+      listNearBottomRef.current = nearBottom;
+    }
+    refreshScrollToLatestVisibility();
+  }, [refreshScrollToLatestVisibility]);
+
+  const handleListContentSizeChange = useCallback((_width: number, height: number) => {
+    const metrics = listMetricsRef.current;
+    const previousHeight = metrics.contentHeight;
+    const delta = height - previousHeight;
+    metrics.contentHeight = height;
+    if (pendingOlderLoadRef.current && previousHeight > 0 && delta > 1) {
+      const nextOffset = Math.max(0, metrics.offsetY + delta);
+      metrics.offsetY = nextOffset;
+      listRef.current?.scrollToOffset({ offset: nextOffset, animated: false });
+      refreshScrollToLatestVisibility();
+      return;
+    }
+    followLatestContent(false);
+    refreshScrollToLatestVisibility();
+  }, [followLatestContent, refreshScrollToLatestVisibility]);
+
+  const handleListLayout = useCallback((event: LayoutChangeEvent) => {
+    listMetricsRef.current.viewportHeight = event.nativeEvent.layout.height;
+    followLatestContent(false);
+    refreshScrollToLatestVisibility();
+  }, [followLatestContent, refreshScrollToLatestVisibility]);
+
+  const scrollToLatestMessage = useCallback(() => {
+    listNearBottomRef.current = true;
+    pendingOlderLoadRef.current = false;
+    setShowScrollToLatest(false);
+    const animated = !reducedMotion;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (!listNearBottomRef.current) return;
+        listRef.current?.scrollToEnd({ animated });
+      });
+    });
+  }, [reducedMotion]);
+
+  const handleLoadOlderMessages = useCallback(() => {
+    pendingOlderLoadRef.current = true;
+    void loadOlderMessages().finally(() => {
+      setTimeout(() => {
+        pendingOlderLoadRef.current = false;
+      }, 400);
+    });
+  }, [loadOlderMessages]);
+
+  const previousScrollSessionRef = useRef<string | null | undefined>(undefined);
   useEffect(() => {
-    if (
-      renderedConversationMessages.length === 0 &&
-      !generationActive &&
-      !generationStopped
-    ) return;
-    if (!listNearBottomRef.current) return;
-    const timer = setTimeout(() => {
-      listRef.current?.scrollToEnd({ animated: true });
-    }, 80);
-    return () => clearTimeout(timer);
-  }, [renderedConversationMessages, generationActive, generationStopped]);
+    const previous = previousScrollSessionRef.current;
+    previousScrollSessionRef.current = activeSessionId;
+    if (previous === undefined || previous === activeSessionId) return;
+    const switchedConversation = Boolean(previous) && Boolean(activeSessionId) && previous !== activeSessionId;
+    const startedNewChat = Boolean(previous) && !activeSessionId;
+    if (!switchedConversation && !startedNewChat) return;
+    listNearBottomRef.current = true;
+    pendingOlderLoadRef.current = false;
+    listMetricsRef.current.offsetY = 0;
+    setShowScrollToLatest(false);
+  }, [activeSessionId]);
+
+  useEffect(() => {
+    refreshScrollToLatestVisibility();
+  }, [refreshScrollToLatestVisibility, renderedConversationMessages.length, voiceInline]);
 
   const handleSend = (question: string) => {
     void sendQuestion(question, requestContext);
@@ -1057,9 +1179,15 @@ export default function AskPranaScreen() {
               <ActivityIndicator size="large" color={colors.primary} />
             </View>
           ) : (
+            <>
             <FlatList
               ref={listRef}
-              style={styles.chatList}
+              style={[
+                styles.chatList,
+                Platform.OS === "web"
+                  ? ({ overflowAnchor: "none" } as unknown as ViewStyle)
+                  : null,
+              ]}
               data={renderedConversationMessages}
               keyExtractor={(item) => item.id}
               contentContainerStyle={[
@@ -1067,18 +1195,18 @@ export default function AskPranaScreen() {
                 voiceInline && styles.chatContentWithVoiceDock,
               ]}
               showsVerticalScrollIndicator={false}
-              onScroll={(event) => {
-                const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-                listNearBottomRef.current =
-                  contentSize.height - (contentOffset.y + layoutMeasurement.height) < 96;
-              }}
-              scrollEventThrottle={100}
+              onScroll={readListScrollPosition}
+              onMomentumScrollEnd={readListScrollPosition}
+              onScrollEndDrag={readListScrollPosition}
+              onContentSizeChange={handleListContentSizeChange}
+              onLayout={handleListLayout}
+              scrollEventThrottle={16}
               keyboardShouldPersistTaps="handled"
               keyboardDismissMode="interactive"
               ListHeaderComponent={
                 hasOlderMessages ? (
                   <Pressable
-                    onPress={() => void loadOlderMessages()}
+                    onPress={handleLoadOlderMessages}
                     disabled={isLoadingOlder}
                     accessibilityRole="button"
                     accessibilityLabel={t("askPrana.loadEarlierMessages")}
@@ -1130,6 +1258,25 @@ export default function AskPranaScreen() {
                 />
               )}
             />
+            {showScrollToLatest && !voiceInline ? (
+              <View pointerEvents="box-none" style={styles.scrollToLatestHost}>
+                <Pressable
+                  onPress={scrollToLatestMessage}
+                  onFocus={() => setScrollToLatestFocused(true)}
+                  onBlur={() => setScrollToLatestFocused(false)}
+                  accessibilityRole="button"
+                  accessibilityLabel={t("askPrana.scrollToLatest")}
+                  style={({ pressed }) => [
+                    styles.scrollToLatestButton,
+                    pressed && styles.pressed,
+                    scrollToLatestFocused && styles.scrollToLatestButtonFocused,
+                  ]}
+                >
+                  <Feather name="chevron-down" size={22} color={colors.textDark} />
+                </Pressable>
+              </View>
+            ) : null}
+            </>
           )}
           {voiceInline ? (
             <AskPranaVoiceModeModal
@@ -1812,6 +1959,27 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   chatList: { flex: 1, backgroundColor: colors.background },
+  scrollToLatestHost: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 16,
+    alignItems: "center",
+    zIndex: 4,
+  },
+  scrollToLatestButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#2A3038",
+    borderWidth: 1,
+    borderColor: "rgba(233, 238, 246, 0.22)",
+  },
+  scrollToLatestButtonFocused: {
+    borderColor: "#5EEAD4",
+  },
   header: {
     flexDirection: "row",
     alignItems: "center",
