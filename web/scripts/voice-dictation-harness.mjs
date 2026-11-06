@@ -28,8 +28,8 @@ class MockRecognition {
     MockRecognition.instances.push(this);
   }
   start() { this.startCount += 1; }
-  stop() { this.onend?.(); }
-  abort() { this.onend?.(); }
+  stop() { if (!this.holdEnd) this.onend?.(); }
+  abort() { if (!this.holdEnd) this.onend?.(); }
   result(transcript, isFinal = false, index = 0) {
     const results = [];
     results[index] = { isFinal, 0: { transcript } };
@@ -123,6 +123,57 @@ try {
     MockRecognition.instances.at(-1).result(`turn ${turn}`, true);
     const text = await session.stop();
     assert(text === `turn ${turn}`, `consecutive turn ${turn} did not resolve cleanly`);
+  }
+
+  // Five questions in one continuous conversation. Speech-end still waits out
+  // the natural pause. Once that pause has finalized the words, releasing the
+  // recognizer must not add the old 750 ms grace period. These times stop at
+  // the transcript; they do not include the model or playback.
+  const consecutiveQuestions = [
+    ["first-question", "How much feed today"],
+    ["follow-up-short", "What about day five"],
+    ["follow-up-long", "Explain the full vannamei feeding schedule for this pond"],
+    ["after-interrupt", "Stop and tell me the ammonia level"],
+    ["after-unmute", "How much feed tomorrow"],
+  ];
+  const turnTimings = [];
+  for (const [label, text] of consecutiveQuestions) {
+    let speechEndedAt = 0;
+    let finalizedAt = 0;
+    const session = startWebDictation("en", {
+      onPartial: () => {},
+      onError: () => {},
+      onUtteranceEnd: () => { finalizedAt = performance.now(); },
+    });
+    const recognition = MockRecognition.instances.at(-1);
+    recognition.holdEnd = true;
+    recognition.result(text, true);
+    recognition.onspeechend?.();
+    speechEndedAt = performance.now();
+    const finalized = await new Promise((resolve) => {
+      const timer = setInterval(() => {
+        if (finalizedAt) {
+          clearInterval(timer);
+          resolve(true);
+        }
+      }, 20);
+      setTimeout(() => {
+        clearInterval(timer);
+        resolve(false);
+      }, 2_000);
+    });
+    assert(finalized, `${label} was not finalized after a natural pause`);
+    const stopStartedAt = performance.now();
+    const heard = await session.stop();
+    const stopMs = Math.round(performance.now() - stopStartedAt);
+    const speechEndToTranscriptMs = Math.round(performance.now() - speechEndedAt);
+    assert(heard === text, `${label} did not keep the finalized question`);
+    assert(stopMs < 200, `${label} waited ${stopMs} ms after the question was already finalized`);
+    turnTimings.push({ label, speechEndToTranscriptMs, stopMs });
+  }
+  console.log("Voice turn transcript timings (no microphone, no model, no playback):");
+  for (const timing of turnTimings) {
+    console.log(`  ${timing.label}: speech-end-to-transcript ${timing.speechEndToTranscriptMs} ms, stop-after-finalized ${timing.stopMs} ms`);
   }
 
   const { isAssistantEchoTranscript, isUnclearVoiceTranscript } = await server.ssrLoadModule(
@@ -504,6 +555,16 @@ try {
   assert(userDuringPause.echoRef === quieter.echoRef, "that voice must not become the new echo");
   assert(learned * 0.45 > quieter.echoRef * BARGE_IN_ECHO_RATIO, "that voice clears the lowered threshold");
 
+  const speech = readFileSync(new URL("../src/lib/ask-prana-speech.ts", import.meta.url), "utf8");
+  assert(speech.includes("releaseUnusedCloudAudio"), "a played device sentence does not wait for unused cloud audio");
+  assert(speech.includes("warmAskPranaDeviceVoices"), "Telugu and Hindi voices are looked up before the answer");
+  assert(speech.includes("PREVIOUS") || speech.includes("setTimeout(resolve, 250)"), "previous playback cleanup cannot hold the next sentence");
+  const chat = readFileSync(new URL("../src/context/ask-prana-chat-context.tsx", import.meta.url), "utf8");
+  assert(chat.includes("Keep the conversation that is already open"), "voice reuses the open conversation");
+  assert(chat.includes("warmAskPranaDeviceVoices()"), "opening Voice Chat warms speech while the farmer is speaking");
+  assert(chat.includes('actualContainer === "wav"'), "an encoded WAV is not decoded again before upload");
+  assert(!chat.includes("sessionCreateEpochRef.current += 1;\n            sessionCreatePromiseRef.current = null;\n            setActiveSessionId(null);\n            voiceModeSessionStartedRef.current = true;"), "the first spoken question no longer discards the chat session");
+
   const voiceMode = readFileSync(new URL("../src/components/ask-prana-voice-mode.tsx", import.meta.url), "utf8");
   assert(voiceMode.includes('recognitionModeRef.current = "auto"'), "opening Voice Chat starts recognition in Auto");
   assert(voiceMode.includes("buildVoiceLanguageRequest(replyLanguage)"), "speech sends the resolved turn language");
@@ -532,7 +593,7 @@ try {
   assert(edge.includes('value.startsWith("hi-")'), "hi-IN stays Hindi in the edge function");
   assert(edge.includes('value.startsWith("en-")'), "en-IN stays English in the edge function");
 
-  console.log("Voice dictation harness passed: final transcript, missing-speechend fallback, late-final preservation, pause cancellation, five consecutive sessions, transcript checks, playback events, transcription language, spoken-turn language, and barge-in echo ceiling.");
+  console.log("Voice dictation harness passed: final transcript, missing-speechend fallback, late-final preservation, pause cancellation, five consecutive sessions, five finalized questions, transcript checks, playback handoff, transcription language, spoken-turn language, and barge-in echo ceiling.");
 } finally {
   await server.close();
 }

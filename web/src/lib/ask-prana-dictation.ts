@@ -519,6 +519,19 @@ export function startWebDictation(
         clearPause();
         clearAmbiguousPause();
         clearRestart();
+        // The end-of-turn pause already waited for the final words. Stopping
+        // the recognizer must not add another grace period before the answer.
+        if (utteranceSent) {
+          settled = true;
+          const text = currentTranscript();
+          try {
+            recognition.abort();
+          } catch {
+            // The engine may already be gone. The transcript is still usable.
+          }
+          resolve(text);
+          return;
+        }
         // `onend` may precede the last `onresult` in Chromium. Do not settle
         // immediately in that case: a short grace period preserves the final
         // words without reintroducing the former five-second stuck state.

@@ -53,11 +53,23 @@ export function wasAskPranaSpeechOutputRecent(withinMs = 1200) {
 }
 const ttsAbortControllers = new Set<AbortController>();
 const failedDeviceVoices = new Set<string>();
+const deviceVoiceLookups = new Map<string, Promise<boolean>>();
 const activeAudioUrls = new Set<string>();
+let appliedAudioModeKey: string | null = null;
 
-/** Clears the remembered device-voice failure when a Voice Chat session opens or closes. */
+/**
+ * Session open and close stay a single hook. A device voice that is missing
+ * or has already failed stays remembered for this page, so the next question
+ * does not rediscover voices or retry a silent device before cloud speech.
+ */
 export function resetAskPranaVoiceSpeechSession() {
-  failedDeviceVoices.clear();
+  appliedAudioModeKey = null;
+}
+
+/** Looks up Telugu and Hindi voices while the farmer is still speaking. */
+export function warmAskPranaDeviceVoices() {
+  void hasDeviceVoiceFor("te-IN");
+  void hasDeviceVoiceFor("hi-IN");
 }
 
 function resumeWebSpeech() {
@@ -114,7 +126,7 @@ export async function isAskPranaSpeaking() {
   }
 }
 
-async function hasDeviceVoiceFor(bcp47: string): Promise<boolean> {
+async function lookupDeviceVoice(bcp47: string): Promise<boolean> {
   try {
     const voices = await Speech.getAvailableVoicesAsync();
     if (!voices?.length) {
@@ -129,6 +141,42 @@ async function hasDeviceVoiceFor(bcp47: string): Promise<boolean> {
   } catch {
     return Platform.OS !== "web";
   }
+}
+
+function hasDeviceVoiceFor(bcp47: string): Promise<boolean> {
+  const key = bcp47.toLowerCase();
+  let pending = deviceVoiceLookups.get(key);
+  if (!pending) {
+    pending = lookupDeviceVoice(key).then((available) => {
+      const code = key.split("-")[0] ?? "";
+      if (!available && (code === "te" || code === "hi")) failedDeviceVoices.add(code);
+      return available;
+    });
+    deviceVoiceLookups.set(key, pending);
+  }
+  return pending;
+}
+
+async function ensureSpeechAudioMode(allowsRecording: boolean) {
+  const key = allowsRecording ? "record" : "playback";
+  if (appliedAudioModeKey === key) return;
+  await setAudioModeAsync({
+    allowsRecording,
+    playsInSilentMode: true,
+  });
+  appliedAudioModeKey = key;
+}
+
+function releaseUnusedCloudAudio(
+  audio: Promise<string | "interrupted" | null> | null,
+) {
+  if (!audio) return;
+  void audio.then(
+    (uri) => {
+      if (typeof uri === "string") forgetAudioUrl(uri);
+    },
+    () => undefined,
+  );
 }
 
 const SPEECH_CHUNK_MAX_CHARS = 160;
@@ -525,10 +573,7 @@ export function createAskPranaSpeechQueue(
     await ensureMode();
     if (!alive()) return { kind: "interrupted" };
     if (mode === "device") return { kind: "device", text };
-    await setAudioModeAsync({
-      allowsRecording: Boolean(options?.keepMicrophoneActive),
-      playsInSilentMode: true,
-    });
+    await ensureSpeechAudioMode(Boolean(options?.keepMicrophoneActive));
     const uri = await fetchCloudSpeechAudio(text, language, generation);
     if (uri === "interrupted" || !alive()) return { kind: "interrupted" };
     if (!uri) return { kind: "failed", reason: "Cloud speech is unavailable right now." };
@@ -537,12 +582,20 @@ export function createAskPranaSpeechQueue(
   let playbackReady = options?.ready ?? null;
   const waitUntilReady = async () => {
     if (!playbackReady) return;
-    const pending = playbackReady;
+    const pendingReady = playbackReady;
     playbackReady = null;
+    // Stopping the previous reply must not hold the next sentence. A stuck
+    // cleanup loses the handoff after a short beat and this sentence plays.
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      await pending;
-    } catch {
-      // Stopping the previous reply must not block this one.
+      await Promise.race([
+        pendingReady.then(() => undefined, () => undefined),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, 250);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   };
   const playPrepared = async (item: PreparedSpeech): Promise<AskPranaSpeakResult> => {
@@ -558,20 +611,18 @@ export function createAskPranaSpeechQueue(
         const cloud = await prepareNext(item.text);
         return playPrepared(cloud);
       }
-      await setAudioModeAsync({
-        allowsRecording: Boolean(options?.keepMicrophoneActive),
-        playsInSilentMode: true,
-      });
+      await ensureSpeechAudioMode(Boolean(options?.keepMicrophoneActive));
       if (!alive()) return { spoke: false, provider: "expo-speech", reason: "interrupted" };
       resumeWebSpeech();
-      // If the device voice has not started quickly, fetch the cloud file
-      // during the rest of the device attempt. Play it only if that attempt fails.
+      // Fetch cloud audio only if the device voice has not started. A sentence
+      // that is already playing must not wait on that unused file.
       const cloudFallback: {
         controller: AbortController | null;
         audio: Promise<string | "interrupted" | null> | null;
       } = { controller: null, audio: null };
+      let deviceStarted = false;
       const earlyCloud = setTimeout(() => {
-        if (!alive()) return;
+        if (deviceStarted || !alive()) return;
         cloudFallback.controller = new AbortController();
         cloudFallback.audio = fetchCloudSpeechAudio(
           item.text,
@@ -579,13 +630,15 @@ export function createAskPranaSpeechQueue(
           generation,
           cloudFallback.controller,
         );
-      }, 400);
-      const spoken = await speakChunkWithExpoSpeech(item.text, option, generation, reportStart);
+      }, 1_200);
+      const spoken = await speakChunkWithExpoSpeech(item.text, option, generation, () => {
+        deviceStarted = true;
+        reportStart();
+      });
       clearTimeout(earlyCloud);
       if (spoken.spoke || spoken.reason === "interrupted") {
         cloudFallback.controller?.abort();
-        const unused = cloudFallback.audio ? await cloudFallback.audio : null;
-        if (typeof unused === "string") forgetAudioUrl(unused);
+        releaseUnusedCloudAudio(cloudFallback.audio);
         return spoken;
       }
       try {
@@ -720,6 +773,7 @@ export function createAskPranaSpeechQueue(
     cancel: () => {
       cancelled = true;
       pending.splice(0);
+      if (prepared?.kind === "cloud") forgetAudioUrl(prepared.uri);
       prepared = null;
       wake();
     },

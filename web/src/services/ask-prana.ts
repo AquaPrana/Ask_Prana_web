@@ -538,6 +538,28 @@ async function askPranaVoice(
   };
 }
 
+let cachedFarmerDisplayName: { name: string; at: number } | null = null;
+const FARMER_NAME_CACHE_MS = 10 * 60 * 1000;
+
+async function resolveCachedFarmerDisplayName(suppliedName: string): Promise<string> {
+  if (suppliedName && suppliedName !== "Farmer") {
+    cachedFarmerDisplayName = { name: suppliedName, at: Date.now() };
+    return suppliedName;
+  }
+  if (
+    cachedFarmerDisplayName &&
+    cachedFarmerDisplayName.name !== "Farmer" &&
+    Date.now() - cachedFarmerDisplayName.at < FARMER_NAME_CACHE_MS
+  ) {
+    return cachedFarmerDisplayName.name;
+  }
+  const resolved = await resolveFarmerDisplayName();
+  if (resolved && resolved !== "Farmer") {
+    cachedFarmerDisplayName = { name: resolved, at: Date.now() };
+  }
+  return resolved;
+}
+
 export async function askPrana(
   question: string,
   context: string | AskPranaRequestContext,
@@ -557,9 +579,7 @@ export async function askPrana(
   // A second read used to run whenever the first result was missing or "Farmer".
   const [enriched, resolvedName] = await Promise.all([
     buildClientContext(requestContext, auth.userId),
-    suppliedName && suppliedName !== "Farmer"
-      ? Promise.resolve(suppliedName)
-      : resolveFarmerDisplayName(),
+    resolveCachedFarmerDisplayName(suppliedName),
   ]);
   const isGeneric = enriched.mode === "generic" || !enriched.pondId;
 

@@ -53,7 +53,7 @@ import {
   recognitionModeFrom,
   type VoiceCaptureSnapshot,
 } from "../lib/ask-prana-transcription-language";
-import { stopAskPranaSpeech } from "../lib/ask-prana-speech";
+import { stopAskPranaSpeech, warmAskPranaDeviceVoices } from "../lib/ask-prana-speech";
 import { languageForQuestionText, voiceTurnLanguage } from "../lib/ask-prana-voice-language";
 import { clearAskPranaDisplayTranslations } from "../lib/ask-prana-display-translation";
 import {
@@ -1856,7 +1856,10 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         question,
       );
 
-      const storedSessionId = await ensureSession();
+      const [storedSessionId, teluguScript] = await Promise.all([
+        ensureSession(),
+        loadTeluguScriptPreference(),
+      ]);
       const sessionId = isValidAskPranaUuid(storedSessionId) ? storedSessionId : null;
       if (sessionCapture) sessionCapture.id = sessionId;
 
@@ -1901,7 +1904,6 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
               source: "default" as const,
               llmLabel: "English",
             };
-      const teluguScript = await loadTeluguScriptPreference();
       const languageMeta = buildLanguageInstructionForLlm({
         language: resolvedLanguage.code,
         teluguScript,
@@ -2383,13 +2385,9 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
 
       try {
         if (fromVoiceMode) {
-          // One shared session for the whole voice conversation.
-          if (!voiceModeSessionStartedRef.current || !sessionIdRef.current) {
-            sessionCreateEpochRef.current += 1;
-            sessionCreatePromiseRef.current = null;
-            setActiveSessionId(null);
-            voiceModeSessionStartedRef.current = true;
-          }
+          // Keep the conversation that is already open. A missing session was
+          // started while the farmer was still speaking, and is created once.
+          voiceModeSessionStartedRef.current = true;
         }
 
         // Session creation is required for both persistence and the AI request,
@@ -2636,8 +2634,14 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
     // A composer Retry row belongs to a composer recording, not this Voice Chat.
     failedRecordingRef.current = null;
     setHasFailedRecording(false);
+    warmAskPranaDeviceVoices();
+    if (!isValidAskPranaUuid(sessionIdRef.current)) {
+      void ensureSession().catch((error) => {
+        console.log("[AskPranaVoice] session prewarm failed:", error);
+      });
+    }
     console.log("[AskPranaVoice] prepareVoiceModeSession");
-  }, []);
+  }, [ensureSession]);
 
   const sendUploadedAttachment = useCallback(
     async (
@@ -3295,7 +3299,11 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
 
       const audioMeta = resolveRecordedAudioMeta(uri, blob.type);
       const actualContainer = await describeRecordedAudioContainer(blob);
-      const decoded = await verifyRecordedAudioDecodes(blob);
+      // A WAV this client just encoded does not need a second browser decode
+      // before upload. Unknown containers still have to prove they play.
+      const decoded = actualContainer === "wav" && blob.size > 1000
+        ? { durationSec: null, reason: null }
+        : await verifyRecordedAudioDecodes(blob);
       console.log("[AskPranaAudio] recording finalized", {
         platform: Platform.OS,
         uriExtension: audioMeta.uriExtension || null,

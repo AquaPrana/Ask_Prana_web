@@ -297,17 +297,25 @@ export async function saveAskPranaPreferredLanguage(
   }
 }
 
+let teluguScriptCache: TeluguScriptPreference | null = null;
+
 export async function loadTeluguScriptPreference(): Promise<TeluguScriptPreference> {
+  if (teluguScriptCache) return teluguScriptCache;
   try {
     const value = await AsyncStorage.getItem(TELUGU_SCRIPT_KEY);
-    if (value === "romanized" || value === "native") return value;
+    if (value === "romanized" || value === "native") {
+      teluguScriptCache = value;
+      return value;
+    }
   } catch {
     // ignore
   }
-  return "native";
+  teluguScriptCache = "native";
+  return teluguScriptCache;
 }
 
 export async function saveTeluguScriptPreference(value: TeluguScriptPreference) {
+  teluguScriptCache = value;
   await AsyncStorage.setItem(TELUGU_SCRIPT_KEY, value);
 }
 

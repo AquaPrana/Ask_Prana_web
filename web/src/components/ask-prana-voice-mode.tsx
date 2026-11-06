@@ -27,6 +27,7 @@ import {
   isAskPranaSpeechOutputActive,
   resetAskPranaVoiceSpeechSession,
   stopAskPranaSpeech,
+  warmAskPranaDeviceVoices,
   wasAskPranaSpeechOutputRecent,
   type AskPranaSpeechQueue,
 } from "../lib/ask-prana-speech";
@@ -1121,6 +1122,7 @@ export function AskPranaVoiceModeModal({
     recognitionModeRef.current = "auto";
     setRecognitionMode("auto");
     resetAskPranaVoiceSpeechSession();
+    warmAskPranaDeviceVoices();
     turnInFlightRef.current = false;
     loopArmedRef.current = true;
     logVoiceLifecycle("session-opened", { sessionId: voiceSessionIdRef.current });
@@ -1712,10 +1714,11 @@ export function AskPranaVoiceModeModal({
       onCancelAsk?.();
     }
     stopBargeInMonitor();
-    await stopAskPranaSpeech();
+    const stoppingSpeech = stopAskPranaSpeech();
     await onCancelListening();
     const typedLanguage = languageForTypedVoiceQuestion(text, recognitionModeRef.current);
     if (!typedLanguage) {
+      await stoppingSpeech;
       setErrorText("I couldn't tell whether that was Telugu, Hindi, or English. Choose one, or say it again.");
       setState("listening");
       stateRef.current = "listening";
