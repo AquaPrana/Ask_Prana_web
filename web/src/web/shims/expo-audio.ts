@@ -105,6 +105,18 @@ class Emitter {
 }
 
 import { encodeWavPcm } from "../../lib/ask-prana-transcription-language";
+import {
+  createRecordingId,
+  decideRecordingQuality,
+  describeAppliedMicrophoneSettings,
+  logRecordingCapture,
+  microphoneCaptureConstraints,
+  MICROPHONE_NOT_READY_MESSAGE,
+  MICROPHONE_UNAVAILABLE_MESSAGE,
+  summarizeRecordingSignal,
+  type AppliedMicrophoneSettings,
+  type RecordingCaptureReport,
+} from "../../lib/ask-prana-recording-capture";
 
 const RECORDING_STATUS_UPDATE = "recordingStatusUpdate";
 const PLAYBACK_STATUS_UPDATE = "playbackStatusUpdate";
@@ -132,6 +144,13 @@ export class AudioRecorder extends Emitter {
   private capturingPcm = false;
   private pcmProcessor: ScriptProcessorNode | null = null;
   private pcmGain: GainNode | null = null;
+  private recordingId = "";
+  private appliedSettings: AppliedMicrophoneSettings | null = null;
+  private trackMuted = false;
+  private trackEnded = false;
+  private tailHoldUntil = 0;
+  private tailFrozen = false;
+  private lastReport: RecordingCaptureReport | null = null;
 
   constructor(private options: WebRecordingOptions) {
     super();
@@ -154,9 +173,28 @@ export class AudioRecorder extends Emitter {
     this.clearTimeouts();
     // A recorder instance represents one capture. Clear only before its first
     // start, never while final dataavailable events can still arrive.
-    if (this.mediaRecorder.state === "inactive") this.recordingChunks = [];
+    if (this.mediaRecorder.state === "inactive") {
+      this.recordingChunks = [];
+      this.pcmChunks = [];
+      this.frozenSamples = new Float32Array(0);
+      this.tailHoldUntil = 0;
+      this.tailFrozen = false;
+      this.lastReport = null;
+    }
     const context = getAudioContext();
-    if (context.state === "suspended") void context.resume();
+    if (context.state !== "running") {
+      this.stream?.getTracks().forEach((audioTrack) => audioTrack.stop());
+      this.stream = null;
+      throw new Error(MICROPHONE_NOT_READY_MESSAGE);
+    }
+    const track = this.stream?.getAudioTracks()[0];
+    if (!track || track.readyState === "ended" || track.muted || this.trackEnded) {
+      this.stream?.getTracks().forEach((audioTrack) => audioTrack.stop());
+      this.stream = null;
+      throw new Error(MICROPHONE_UNAVAILABLE_MESSAGE);
+    }
+    // Capture from this instant. The start event must not discard these samples.
+    this.capturingPcm = true;
     if (this.mediaRecorder.state === "paused") this.mediaRecorder.resume();
     else this.mediaRecorder.start();
     if (options?.forDuration !== undefined) {
@@ -187,22 +225,23 @@ export class AudioRecorder extends Emitter {
         recorder.removeEventListener("error", onError);
       };
       const onStop = () => {
-        // MediaRecorder specifies dataavailable before stop. Deferring one task
-        // also protects Chromium implementations that queue the final callback.
+        // Keep the processor connected for one more buffer so the last words
+        // are not cut off when the recorder stops.
+        const tailMs = Math.ceil((4096 / (this.pcmSampleRate || 48000)) * 1000) + 40;
+        const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+        this.tailHoldUntil = now + tailMs;
+        this.capturingPcm = false;
         setTimeout(() => {
           cleanup();
+          this.finishTail();
           const data = this.wavFromCapturedSamples();
-          if (!data) {
-            reject(new Error("The browser returned an empty audio recording."));
-            return;
-          }
-          const url = URL.createObjectURL(data);
+          const url = data ? URL.createObjectURL(data) : null;
           this.uri = url;
           this.mediaRecorder = null;
           this.stopping = null;
           this.emit(RECORDING_STATUS_UPDATE, { id: this.id, isFinished: true, hasError: false, error: null, url });
           resolve();
-        }, 0);
+        }, tailMs + 80);
       };
       const onError = () => {
         cleanup();
@@ -247,8 +286,27 @@ export class AudioRecorder extends Emitter {
     }
     this.uptimeOfLastStartResume = 0;
     this.currentTime = 0;
-    const stream = await getUserMedia({ audio: true });
+    this.recordingId = createRecordingId();
+    this.trackMuted = false;
+    this.trackEnded = false;
+    this.lastReport = null;
+    const stream = await getUserMedia({ audio: microphoneCaptureConstraints() });
     this.stream = stream;
+    const track = stream.getAudioTracks()[0] ?? null;
+    this.appliedSettings = describeAppliedMicrophoneSettings(track);
+    track?.addEventListener("mute", () => {
+      this.trackMuted = true;
+    });
+    track?.addEventListener("ended", () => {
+      this.trackEnded = true;
+      this.capturingPcm = false;
+    });
+    logRecordingCapture({
+      recordingId: this.recordingId,
+      stage: "microphone-opened",
+      settings: this.appliedSettings,
+      contextState: getAudioContext().state,
+    });
 
     if (options.isMeteringEnabled) {
       const ctx = getAudioContext();
@@ -278,7 +336,13 @@ export class AudioRecorder extends Emitter {
     mediaRecorder.addEventListener("dataavailable", (event) => {
       if (event.data?.size > 0) this.recordingChunks.push(event.data);
     });
-    this.startPcmCapture(stream);
+    try {
+      await this.startPcmCapture(stream);
+    } catch (error) {
+      stream.getTracks().forEach((audioTrack) => audioTrack.stop());
+      this.stream = null;
+      throw error;
+    }
     mediaRecorder.addEventListener("pause", () => {
       this.capturingPcm = false;
       this.currentTime = this.getDurationMillis();
@@ -290,32 +354,37 @@ export class AudioRecorder extends Emitter {
       this.mediaRecorderIsRecording = true;
     });
     mediaRecorder.addEventListener("start", () => {
-      this.pcmChunks = [];
-      this.frozenSamples = new Float32Array(0);
       this.capturingPcm = true;
       this.uptimeOfLastStartResume = Date.now();
       this.currentTime = 0;
       this.mediaRecorderIsRecording = true;
+      logRecordingCapture({
+        recordingId: this.recordingId,
+        stage: "capture-running",
+        sampleRate: this.pcmSampleRate,
+        contextState: getAudioContext().state,
+        settings: this.appliedSettings ?? undefined,
+      });
     });
     mediaRecorder.addEventListener("stop", () => {
-      this.freezeCapturedSamples();
       this.currentTime = 0;
       this.mediaRecorderIsRecording = false;
-      this.stream = null;
-      this.analyserSource?.disconnect();
-      this.analyserSource = null;
-      this.analyser?.disconnect();
-      this.analyser = null;
-      this.analyserBuffer = null;
-      // Clears the recording indicator in the browser tab.
-      stream.getTracks().forEach((track) => track.stop());
     });
     return mediaRecorder;
   }
 
-  private startPcmCapture(stream: MediaStream) {
+  private async startPcmCapture(stream: MediaStream) {
     const context = getAudioContext();
-    if (context.state === "suspended") void context.resume();
+    if (context.state === "suspended") {
+      try {
+        await context.resume();
+      } catch {
+        // The state check below reports that capture is not running.
+      }
+    }
+    if (context.state !== "running") {
+      throw new Error(MICROPHONE_NOT_READY_MESSAGE);
+    }
     this.pcmSampleRate = context.sampleRate || 48000;
     this.pcmChunks = [];
     this.frozenSamples = new Float32Array(0);
@@ -323,10 +392,13 @@ export class AudioRecorder extends Emitter {
     if (!this.analyserSource) this.analyserSource = source;
     const processor = context.createScriptProcessor(4096, 1, 1);
     processor.onaudioprocess = (event) => {
-      if (!this.capturingPcm) return;
-      const input = event.inputBuffer.getChannelData(0);
-      if (!input.length) return;
-      this.pcmChunks.push(new Float32Array(input));
+      const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+      const keep = this.capturingPcm || (this.tailHoldUntil > 0 && !this.tailFrozen && now < this.tailHoldUntil + 80);
+      if (keep) {
+        const input = event.inputBuffer.getChannelData(0);
+        if (input.length) this.pcmChunks.push(new Float32Array(input));
+      }
+      if (this.tailHoldUntil && now >= this.tailHoldUntil) this.finishTail();
     };
     const gain = context.createGain();
     gain.gain.value = 0;
@@ -335,6 +407,46 @@ export class AudioRecorder extends Emitter {
     gain.connect(context.destination);
     this.pcmProcessor = processor;
     this.pcmGain = gain;
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error(MICROPHONE_NOT_READY_MESSAGE)), 700);
+      const deliver = processor.onaudioprocess;
+      processor.onaudioprocess = (event) => {
+        clearTimeout(timeout);
+        processor.onaudioprocess = deliver;
+        deliver?.call(processor, event);
+        resolve();
+      };
+    });
+    const track = stream.getAudioTracks()[0];
+    this.appliedSettings = describeAppliedMicrophoneSettings(track);
+    if (!track || track.readyState === "ended" || track.muted) {
+      throw new Error(MICROPHONE_UNAVAILABLE_MESSAGE);
+    }
+    logRecordingCapture({
+      recordingId: this.recordingId,
+      stage: "capture-ready",
+      sampleRate: this.pcmSampleRate,
+      contextState: context.state,
+      settings: this.appliedSettings,
+      decision: "graph-running",
+    });
+  }
+
+  takeCaptureReport(): RecordingCaptureReport | null {
+    return this.lastReport;
+  }
+
+  get activeRecordingId() {
+    return this.recordingId;
+  }
+
+  private finishTail() {
+    if (this.tailFrozen) return;
+    this.tailFrozen = true;
+    this.capturingPcm = false;
+    this.freezeCapturedSamples();
+    this.stream?.getTracks().forEach((audioTrack) => audioTrack.stop());
+    this.stream = null;
   }
 
   private freezeCapturedSamples() {
@@ -359,8 +471,33 @@ export class AudioRecorder extends Emitter {
   private wavFromCapturedSamples(): Blob | null {
     const samples = this.frozenSamples;
     this.frozenSamples = new Float32Array(0);
-    if (samples.length < 160) return null;
-    const wav = encodeWavPcm(samples, this.pcmSampleRate || 48000);
+    const sampleRate = this.pcmSampleRate || 48000;
+    const quality = decideRecordingQuality(summarizeRecordingSignal(samples, sampleRate), {
+      muted: this.trackMuted,
+      ended: this.trackEnded,
+    });
+    this.lastReport = {
+      recordingId: this.recordingId,
+      sampleRate,
+      contextState: getAudioContext().state,
+      settings: this.appliedSettings ?? describeAppliedMicrophoneSettings(null),
+      quality,
+    };
+    logRecordingCapture({
+      recordingId: this.recordingId,
+      stage: "capture-finalized",
+      durationMs: quality.summary.durationMs,
+      sampleRate,
+      rms: quality.summary.rms,
+      peak: quality.summary.peak,
+      clippedRatio: quality.summary.clippedRatio,
+      voicedMs: quality.summary.voicedMs,
+      decision: quality.reason,
+      contextState: this.lastReport.contextState,
+      settings: this.lastReport.settings,
+    });
+    if (samples.length < 160 || quality.action === "reject") return null;
+    const wav = encodeWavPcm(samples, sampleRate);
     const bytes = new ArrayBuffer(wav.byteLength);
     new Uint8Array(bytes).set(wav);
     return new Blob([bytes], { type: "audio/wav" });

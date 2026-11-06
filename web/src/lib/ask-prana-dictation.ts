@@ -519,9 +519,14 @@ export function startWebDictation(
         clearPause();
         clearAmbiguousPause();
         clearRestart();
-        // The end-of-turn pause already waited for the final words. Stopping
-        // the recognizer must not add another grace period before the answer.
-        if (utteranceSent) {
+        // The end-of-turn pause already waited. Abort immediately only when
+        // every current segment is final. Interim words can still be corrected,
+        // and aborting here would keep that uncorrected text.
+        const pendingInterimCorrection = [...interimSegments.entries()].some(([index, interim]) => {
+          const finalText = finalSegments.get(index);
+          return !finalText || finalText.trim() !== interim.trim();
+        });
+        if (utteranceSent && !pendingInterimCorrection) {
           settled = true;
           const text = currentTranscript();
           try {

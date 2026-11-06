@@ -3,7 +3,7 @@
 // It uses Vite's installed TypeScript loader; no test framework is required.
 import { readFileSync } from "node:fs";
 import { createServer } from "vite";
-import { parseProviderTranscription } from "../../supabase/functions/ask-prana-transcribe/parse-provider-transcription.mjs";
+import { parseProviderTranscription, resolveProviderLanguage } from "../../supabase/functions/ask-prana-transcribe/parse-provider-transcription.mjs";
 
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 const assert = (condition, message) => {
@@ -592,6 +592,142 @@ try {
   assert(edge.includes('value.startsWith("te-")'), "te-IN stays Telugu in the edge function");
   assert(edge.includes('value.startsWith("hi-")'), "hi-IN stays Hindi in the edge function");
   assert(edge.includes('value.startsWith("en-")'), "en-IN stays English in the edge function");
+  assert(edge.includes("resolveProviderLanguage"), "provider language evidence is resolved before a transcript is accepted");
+
+  // A finalized utterance can still contain interim words. Stop must wait for
+  // the browser's final correction instead of aborting immediately.
+  const interimCorrection = startWebDictation("en", {
+    onPartial: () => {},
+    onError: () => {},
+    onUtteranceEnd: () => {},
+  });
+  const interimRecognition = MockRecognition.instances.at(-1);
+  interimRecognition.holdEnd = true;
+  interimRecognition.result("how should i", false, 0);
+  interimRecognition.onspeechend?.();
+  await sleep(1_600);
+  let interimStopResolved = false;
+  const interimStop = interimCorrection.stop().then((text) => {
+    interimStopResolved = true;
+    return text;
+  });
+  await sleep(40);
+  assert(!interimStopResolved, "stop aborted while interim words still needed correction");
+  interimRecognition.result("How should I manage my pond after heavy rain", true, 0);
+  interimRecognition.onend?.();
+  assert(
+    await interimStop === "How should I manage my pond after heavy rain",
+    "the final correction replaced the interim words",
+  );
+
+  const {
+    decideRecordingQuality,
+    microphoneCaptureConstraints,
+    summarizeRecordingSignal,
+  } = await server.ssrLoadModule("/src/lib/ask-prana-recording-capture.ts");
+  const silence = new Float32Array(16_000);
+  const silentDecision = decideRecordingQuality(summarizeRecordingSignal(silence, 16_000));
+  assert(silentDecision.action === "reject" && silentDecision.reason === "too-quiet", "silence is not treated as speech");
+  const silentWav = encodeWavPcm(silence, 16_000);
+  assert(silentWav[0] === 82 && silentWav.byteLength > 1000, "a silent recording can still have a valid WAV header and size");
+  assert(silentDecision.action === "reject", "a valid WAV header is not proof of intelligible speech");
+  const quietSpeech = new Float32Array(16_000);
+  for (let index = 0; index < quietSpeech.length; index += 1) quietSpeech[index] = Math.sin(index / 8) * 0.04;
+  assert(
+    decideRecordingQuality(summarizeRecordingSignal(quietSpeech, 16_000)).action === "accept",
+    "naturally quiet speech is kept",
+  );
+  const tooFaint = new Float32Array(16_000);
+  for (let index = 0; index < tooFaint.length; index += 1) tooFaint[index] = Math.sin(index / 8) * 0.004;
+  assert(
+    decideRecordingQuality(summarizeRecordingSignal(tooFaint, 16_000)).reason === "too-quiet",
+    "near-silent input asks the speaker to move closer",
+  );
+  const clipped = new Float32Array(16_000);
+  clipped.fill(1);
+  assert(decideRecordingQuality(summarizeRecordingSignal(clipped, 16_000)).reason === "clipped", "severe clipping is rejected");
+  const mostlySpeech = quietSpeech.slice();
+  for (let index = 0; index < 80; index += 1) mostlySpeech[index] = 1;
+  assert(
+    decideRecordingQuality(summarizeRecordingSignal(mostlySpeech, 16_000)).action === "accept",
+    "a few clipped peaks do not reject a recording",
+  );
+  const constraints = microphoneCaptureConstraints();
+  assert(constraints.echoCancellation.ideal === true, "echo cancellation is requested");
+  assert(constraints.noiseSuppression.ideal === true && constraints.autoGainControl.ideal === true, "noise suppression and gain control are requested");
+  assert(!JSON.stringify(constraints).includes("false"), "existing echo protection is not disabled");
+
+  const { chooseInterruptionTranscript } = await server.ssrLoadModule("/src/lib/ask-prana-voice-transcript.ts");
+  const echoChoice = chooseInterruptionTranscript({
+    recognizedText: "How should I manage my pond",
+    recognizedLanguage: "en",
+    capturedText: "How should I manage my pond oxygen stays low tomorrow",
+    capturedLanguage: "en",
+    assistantSpoken: "Oxygen stays low in the pond today",
+  });
+  assert(echoChoice?.source === "recognized" && echoChoice.reason === "captured-echo-extension", "a longer echo transcript cannot replace the user");
+  const wholeEcho = chooseInterruptionTranscript({
+    recognizedText: "How should I manage my pond after heavy rain?",
+    recognizedLanguage: "en",
+    capturedText: "Oxygen stays low in the pond today and tomorrow",
+    capturedLanguage: "en",
+    assistantSpoken: "Oxygen stays low in the pond today and tomorrow",
+  });
+  assert(wholeEcho?.source === "recognized", "assistant echo cannot replace the user transcript");
+  const missingRecognizer = chooseInterruptionTranscript({
+    recognizedText: "",
+    recognizedLanguage: null,
+    capturedText: "How should I manage my pond?",
+    capturedLanguage: "en",
+    assistantSpoken: "Oxygen stays low in the pond today",
+  });
+  assert(missingRecognizer?.source === "captured", "an interruption transcript is kept when recognition missed it");
+  const longerUnrelated = chooseInterruptionTranscript({
+    recognizedText: "How should I manage my pond",
+    recognizedLanguage: "en",
+    capturedText: "The weather is nice today and also tomorrow morning",
+    capturedLanguage: "en",
+    assistantSpoken: "",
+  });
+  assert(
+    longerUnrelated?.source === "recognized" && longerUnrelated.reason === "recognized-user-transcript",
+    "the longer transcript does not win by word count",
+  );
+  const leadingWords = chooseInterruptionTranscript({
+    recognizedText: "manage my pond",
+    recognizedLanguage: "en",
+    capturedText: "How should I manage my pond",
+    capturedLanguage: "en",
+    assistantSpoken: "Check the dissolved oxygen",
+  });
+  assert(leadingWords?.source === "captured" && leadingWords.reason === "captured-keeps-leading-words", "words the recognizer missed stay when they are not echo");
+
+  const lowConfidence = resolveProviderLanguage([{ code: "en", confidence: 0.22 }]);
+  assert(lowConfidence.detectedLanguage === null && lowConfidence.languageUncertain === true, "a low provider confidence is not accepted just because English is supported");
+  const confident = resolveProviderLanguage([{ code: "te", confidence: 0.91 }]);
+  assert(confident.detectedLanguage === "te" && confident.languageUncertain === false, "a confident provider language is kept");
+  const noScore = resolveProviderLanguage([{ code: "hi", confidence: null }]);
+  assert(noScore.detectedLanguage === "hi" && noScore.languageConfidence === null, "missing confidence is not invented");
+  const several = resolveProviderLanguage([
+    { code: "en", confidence: null },
+    { code: "te", confidence: null },
+  ]);
+  assert(several.detectedLanguage === null && several.languageUncertain === true, "two supported languages are not silently reduced to one");
+  const uncertainQuestion = acceptSpokenQuestion({
+    mode: "auto",
+    transcript: "How should I manage my pond?",
+    detected: "en",
+    detectionConfidence: 0.2,
+  });
+  assert(uncertainQuestion.action === "choose-language", "an uncertain English detection asks for a language instead of being translated");
+
+  assert(recorder.includes("microphoneCaptureConstraints"), "normal recording uses the shared microphone settings");
+  assert(recorder.includes("tailHoldUntil"), "the final recorded samples are kept");
+  assert(recorder.includes("MICROPHONE_NOT_READY_MESSAGE"), "a suspended audio context is not shown as listening");
+  assert(chat.includes("Composer transcription stays Auto"), "the microphone button does not inherit the website language");
+  assert(chat.includes('? recognitionModeFrom(options.language)\n        : "auto"') || chat.includes(': "auto"'), "a new recording does not reuse the previous language hint");
+  assert(!voiceMode.includes("wordCount(captured.text)"), "interruptions are not chosen by word count");
+  assert(voiceMode.includes("Listening stays hidden until capture is ready"), "Listening is shown only after capture is ready");
 
   console.log("Voice dictation harness passed: final transcript, missing-speechend fallback, late-final preservation, pause cancellation, five consecutive sessions, five finalized questions, transcript checks, playback handoff, transcription language, spoken-turn language, and barge-in echo ceiling.");
 } finally {

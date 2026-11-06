@@ -1,6 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
-import { parseProviderTranscription } from "./parse-provider-transcription.mjs";
+import { parseProviderTranscription, resolveProviderLanguage } from "./parse-provider-transcription.mjs";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -227,6 +227,9 @@ async function readMultipartAudio(req: Request) {
   const languageField = formData.get("language");
   const language =
     typeof languageField === "string" ? languageField.trim().toLowerCase() : "";
+  const recordingField = formData.get("recordingId");
+  const recordingId =
+    typeof recordingField === "string" ? recordingField.trim().slice(0, 80) : "";
 
   if (!(audio instanceof Blob)) {
     return null;
@@ -253,6 +256,7 @@ async function readMultipartAudio(req: Request) {
     bytes: await audio.arrayBuffer(),
     isFile: audio instanceof File,
     language,
+    recordingId,
   };
 }
 
@@ -331,16 +335,19 @@ async function callOpenAiTranscribe(input: {
   }
 
   const transcript = parsed.transcript;
-  const providerDetected = parsed.languageCodes.length === 1
-    ? mapSttLanguage(parsed.languageCodes[0] ?? "")
-    : null;
+  const providerDecision = resolveProviderLanguage(parsed.languageEvidence);
+  const providerDetected = providerDecision.detectedLanguage;
   // An explicit hint is not independent detection. Do not fabricate it here.
   const detectedLanguage = input.language ? null : providerDetected;
+  const languageUncertain = input.language ? false : providerDecision.languageUncertain;
+  const languageConfidence = input.language ? null : providerDecision.languageConfidence;
 
   return {
     ok: true as const,
     transcript,
     detectedLanguage,
+    languageUncertain,
+    languageConfidence,
   };
 }
 
@@ -424,6 +431,7 @@ serve(async (req) => {
       sentFileSize: openAIFile.size,
       actualContainer,
       sttLanguage,
+      recordingId: incoming.recordingId || null,
       maxProviderAttempts: 1,
     });
 
@@ -434,6 +442,9 @@ serve(async (req) => {
         languageSent: sttLanguage,
         languageHint: sttLanguage,
         detectedLanguage: result.detectedLanguage,
+        languageUncertain: result.languageUncertain,
+        languageConfidence: result.languageConfidence,
+        recordingId: incoming.recordingId || null,
         providerAttempts: 1,
       });
     }

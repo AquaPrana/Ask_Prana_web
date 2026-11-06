@@ -1,4 +1,5 @@
 import { getAskPranaLanguageOption, type AskPranaSpeechLanguageCode } from "./ask-prana-language";
+import { CONFIDENT_LANGUAGE_DETECTION } from "./ask-prana-recording-capture";
 
 /**
  * Attempt budget for one Voice Chat recording.
@@ -213,9 +214,12 @@ export function acceptSpokenQuestion(input: {
   mode: AskPranaRecognitionMode;
   transcript: string;
   detected?: string | null;
+  /** Set only when the provider included a numeric confidence. Never invented. */
+  detectionConfidence?: number | null;
 }):
   | { action: "accept"; text: string; language: AskPranaSpeechLanguageCode }
-  | { action: "repeat" } {
+  | { action: "repeat" }
+  | { action: "choose-language"; reason: "missing-language" | "uncertain-language" } {
   const text = input.transcript.trim();
   if (!text) return { action: "repeat" };
   const language = resolveSpokenReplyLanguage({
@@ -223,7 +227,14 @@ export function acceptSpokenQuestion(input: {
     detected: input.detected,
     transcript: text,
   });
-  if (!language) return { action: "repeat" };
+  if (!language) return { action: "choose-language", reason: "missing-language" };
+  if (
+    input.mode === "auto" &&
+    typeof input.detectionConfidence === "number" &&
+    input.detectionConfidence < CONFIDENT_LANGUAGE_DETECTION
+  ) {
+    return { action: "choose-language", reason: "uncertain-language" };
+  }
   return { action: "accept", text, language };
 }
 

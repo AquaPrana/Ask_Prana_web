@@ -10,15 +10,78 @@
  * a parser failure.
  */
 
-function languageCodesFrom(value) {
+function languageEvidenceFrom(value) {
   if (!Array.isArray(value)) return [];
-  const codes = [];
+  const evidence = [];
   for (const entry of value) {
     if (!entry || typeof entry !== "object") continue;
-    const code = entry.code;
-    if (typeof code === "string" && code.trim()) codes.push(code.trim());
+    const code = typeof entry.code === "string" ? entry.code.trim() : "";
+    if (!code) continue;
+    const raw = entry.confidence ?? entry.probability;
+    const confidence = typeof raw === "number" && Number.isFinite(raw) && raw >= 0 && raw <= 1
+      ? raw
+      : null;
+    evidence.push({ code, confidence });
   }
-  return codes;
+  return evidence;
+}
+
+function languageCodesFrom(value) {
+  return languageEvidenceFrom(value).map((entry) => entry.code);
+}
+
+function mapProviderLanguageCode(raw) {
+  const value = String(raw ?? "").trim().toLowerCase();
+  if (value === "te" || value.startsWith("te-") || value.includes("telugu")) return "te";
+  if (value === "hi" || value.startsWith("hi-") || value.includes("hindi")) return "hi";
+  if (value === "en" || value.startsWith("en-") || value.includes("english")) return "en";
+  return null;
+}
+
+/**
+ * One supported language is detection. Several languages, or one language
+ * whose own confidence is below 0.6, are uncertain. Missing confidence is
+ * not invented and does not by itself reject a single detected language.
+ */
+export function resolveProviderLanguage(evidence) {
+  const supported = [];
+  for (const item of evidence ?? []) {
+    const code = mapProviderLanguageCode(item?.code);
+    if (!code) continue;
+    const confidence = typeof item?.confidence === "number" ? item.confidence : null;
+    supported.push({ code, confidence });
+  }
+  const distinct = [];
+  for (const item of supported) {
+    if (!distinct.includes(item.code)) distinct.push(item.code);
+  }
+  if (distinct.length === 0) {
+    return { detectedLanguage: null, languageUncertain: true, languageConfidence: null };
+  }
+  if (distinct.length > 1) {
+    const scored = supported.filter((item) => typeof item.confidence === "number");
+    if (scored.length === supported.length) {
+      const best = scored.reduce((top, item) => (item.confidence > top.confidence ? item : top));
+      const others = scored.filter((item) => item.code !== best.code);
+      if (best.confidence >= 0.6 && others.every((item) => item.confidence < 0.35)) {
+        return {
+          detectedLanguage: best.code,
+          languageUncertain: false,
+          languageConfidence: best.confidence,
+        };
+      }
+    }
+    return { detectedLanguage: null, languageUncertain: true, languageConfidence: null };
+  }
+  const only = supported.find((item) => item.code === distinct[0]);
+  if (typeof only.confidence === "number" && only.confidence < 0.6) {
+    return { detectedLanguage: null, languageUncertain: true, languageConfidence: only.confidence };
+  }
+  return {
+    detectedLanguage: only.code,
+    languageUncertain: false,
+    languageConfidence: typeof only.confidence === "number" ? only.confidence : null,
+  };
 }
 
 function jsonCompletion(body) {
@@ -37,10 +100,12 @@ function jsonCompletion(body) {
   if (typeof parsed.text !== "string") {
     return { ok: false, reason: "missing-completion", doneCount: 0, sawTerminal: false };
   }
+  const languageEvidence = languageEvidenceFrom(parsed.languages);
   return {
     ok: true,
     transcript: parsed.text.trim(),
-    languageCodes: languageCodesFrom(parsed.languages),
+    languageCodes: languageEvidence.map((entry) => entry.code),
+    languageEvidence,
     doneCount: 1,
     sawTerminal: false,
   };
@@ -104,10 +169,12 @@ export function parseProviderTranscription(body, contentType = "") {
   if (typeof done.text !== "string") {
     return { ok: false, reason: "invalid-completion", doneCount: 1, sawTerminal };
   }
+  const languageEvidence = languageEvidenceFrom(done.languages);
   return {
     ok: true,
     transcript: done.text.trim(),
-    languageCodes: languageCodesFrom(done.languages),
+    languageCodes: languageEvidence.map((entry) => entry.code),
+    languageEvidence,
     doneCount: 1,
     sawTerminal,
   };

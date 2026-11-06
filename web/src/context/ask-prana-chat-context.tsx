@@ -41,6 +41,7 @@ import {
   logAskPranaChatTiming,
   logVoiceTranscription,
   transcribeAskPranaAudio,
+  transcribeAskPranaAudioOnce,
   transcribeVoiceRecording,
   type AskPranaAttachment,
   type AskPranaRequestContext,
@@ -56,6 +57,7 @@ import {
 } from "../lib/ask-prana-transcription-language";
 import { stopAskPranaSpeech, warmAskPranaDeviceVoices } from "../lib/ask-prana-speech";
 import { languageForQuestionText, voiceTurnLanguage } from "../lib/ask-prana-voice-language";
+import { logRecordingCapture } from "../lib/ask-prana-recording-capture";
 import { clearAskPranaDisplayTranslations } from "../lib/ask-prana-display-translation";
 import {
   createAskPranaSession,
@@ -770,7 +772,9 @@ type AskPranaChatContextValue = {
   clearVoiceLiveTranscript: () => void;
   /** A composer recording whose transcription failed and can be retried. */
   hasFailedRecording: boolean;
-  retryFailedRecording: () => Promise<string | null>;
+  /** The recording was heard, but Auto could not choose one language. */
+  needsDictationLanguage: boolean;
+  retryFailedRecording: (language?: AskPranaSpeechLanguageCode) => Promise<string | null>;
   discardFailedRecording: () => void;
   /** Discard in-progress dictation recording/transcription; preserves draft. */
   cancelAudioRecording: () => Promise<void>;
@@ -858,6 +862,12 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [voiceAudioLevel, setVoiceAudioLevel] = useState(0);
   const [hasFailedRecording, setHasFailedRecording] = useState(false);
+  const [needsDictationLanguage, setNeedsDictationLanguage] = useState(false);
+  const dictatedQuestionRef = useRef<{
+    text: string;
+    language: AskPranaSpeechLanguageCode;
+    recordingId: string;
+  } | null>(null);
   const failedRecordingRef = useRef<Parameters<typeof transcribeAskPranaAudio>[0] | null>(null);
   const [voiceLiveTranscript, setVoiceLiveTranscript] = useState("");
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
@@ -1892,9 +1902,14 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
             uiLanguage: null,
           })
         : null;
+      const dictated = requestContext?.inputMode === "voice" ? null : dictatedQuestionRef.current;
+      const dictatedLanguage = dictated && question.trim().endsWith(dictated.text)
+        ? dictated.language
+        : null;
+      if (dictated && !dictatedLanguage) dictatedQuestionRef.current = null;
       const questionLanguage = requestContext?.inputMode === "voice"
         ? null
-        : languageForQuestionText(question);
+        : dictatedLanguage ?? languageForQuestionText(question);
       const resolvedLanguage = spokenTurn
         ? {
             code: spokenTurn,
@@ -1904,7 +1919,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         : questionLanguage
           ? {
               code: questionLanguage,
-              source: "script" as const,
+              source: dictatedLanguage ? "context" as const : "script" as const,
               llmLabel: getAskPranaLanguageOption(questionLanguage).llmLabel,
             }
           : {
@@ -2529,7 +2544,11 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
           return null;
         }
 
-        if (!fromVoiceMode && !isSimpleGreeting(apiQuestion) && !languageForQuestionText(apiQuestion)) {
+        const dictatedForSend = dictatedQuestionRef.current;
+        const dictatedLanguage = dictatedForSend && apiQuestion.trim().endsWith(dictatedForSend.text)
+          ? dictatedForSend.language
+          : null;
+        if (!fromVoiceMode && !dictatedLanguage && !isSimpleGreeting(apiQuestion) && !languageForQuestionText(apiQuestion)) {
           const clarify: ChatMessage = {
             id: `assistant-${Date.now()}`,
             role: "assistant",
@@ -3008,12 +3027,17 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
     }
     voiceBusyRef.current = true;
     webDictationSourceRef.current = source;
+    if (source === "composer") {
+      dictatedQuestionRef.current = null;
+      setNeedsDictationLanguage(false);
+    }
     if (source === "voice") {
       // A new utterance replaces any cancelled display-only bubble.
       setVoiceLiveTranscript("");
+      // Auto does not inherit the website language or the previous turn.
       const recognition = options?.language
         ? recognitionModeFrom(options.language)
-        : voiceTranscriptionLanguageRef.current;
+        : "auto";
       const useBrowser = recognition !== "auto"
         && Platform.OS === "web"
         && isWebDictationAvailable();
@@ -3187,13 +3211,15 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         error && typeof error === "object" && "name" in error
           ? String((error as { name?: unknown }).name)
           : "";
+      const spoken = error instanceof Error ? error.message : "";
+      const microphoneMessage = spoken.startsWith("The microphone") ? spoken : null;
       Alert.alert(
         errorName === "NotAllowedError" || errorName === "SecurityError"
           ? "Microphone permission"
           : "Recording failed",
         errorName === "NotAllowedError" || errorName === "SecurityError"
           ? "Allow microphone access for Ask Prana in your browser settings, then try recording again."
-          : "Couldn't start recording. Please try again.",
+          : microphoneMessage ?? "Couldn't start recording. Please try again.",
       );
       // Voice mode needs this rejection to leave its listening state. The
       // composer intentionally keeps its tap handler fire-and-forget.
@@ -3355,7 +3381,29 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       }
 
       const uri = audioRecorder.uri;
+      const captureReport = audioRecorder.takeCaptureReport();
       await releaseRecordingResources();
+
+      if (captureReport?.quality.action === "reject") {
+        const message = captureReport.quality.message ?? "Your voice is too quiet. Please move the phone closer and try again.";
+        logRecordingCapture({
+          recordingId: captureReport.recordingId,
+          stage: "rejected-before-transcription",
+          durationMs: captureReport.quality.summary.durationMs,
+          sampleRate: captureReport.quality.summary.sampleRate,
+          rms: captureReport.quality.summary.rms,
+          peak: captureReport.quality.summary.peak,
+          clippedRatio: captureReport.quality.summary.clippedRatio,
+          voicedMs: captureReport.quality.summary.voicedMs,
+          decision: captureReport.quality.reason,
+        });
+        if (audioRecordingSourceRef.current === "voice") {
+          voiceListenResultRef.current = { status: "repeat", message };
+        } else {
+          Alert.alert("Recording", message);
+        }
+        return null;
+      }
 
       if (!uri) {
         Alert.alert(
@@ -3448,18 +3496,22 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         && captureAtStop?.epoch === epochAtStart
         ? captureAtStop
         : null;
+      // Composer transcription stays Auto. The website language and the
+      // previous Voice Chat choice are not hints.
       const preferredLanguage = voiceCapture
         ? cloudLanguageForRecognition(voiceCapture.language)
         : "auto";
+      const recordingId = captureReport?.recordingId || audioRecorder.activeRecordingId || null;
       const transcribeInput = {
         uri,
         blob,
         mimeType: audioMeta.mimeType,
         fileName: audioMeta.fileName,
-        // The recognition mode captured when this recording started.
         language: preferredLanguage,
+        recordingId,
       };
       let transcript = "";
+      let holdForLanguage = false;
       try {
         if (voiceCapture) {
           const decision = await transcribeVoiceRecording({
@@ -3484,7 +3536,30 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
             transcript = "";
           }
         } else {
-          transcript = await transcribeAskPranaAudio(transcribeInput);
+          const once = await transcribeAskPranaAudioOnce(transcribeInput);
+          transcript = once.transcript;
+          const uncertain = once.languageUncertain || (Boolean(transcript.trim()) && !once.detectedLanguage);
+          logRecordingCapture({
+            recordingId: recordingId ?? "composer",
+            stage: "transcription-decision",
+            languageRequested: preferredLanguage,
+            languageDetected: once.detectedLanguage,
+            decision: uncertain ? "choose-language" : once.detectedLanguage ? "provider-language" : "empty",
+          });
+          if (uncertain && transcript.trim()) {
+            failedRecordingRef.current = transcribeInput;
+            setHasFailedRecording(true);
+            setNeedsDictationLanguage(true);
+            holdForLanguage = true;
+            transcript = "";
+          } else if (once.detectedLanguage && transcript.trim()) {
+            dictatedQuestionRef.current = {
+              text: transcript.trim(),
+              language: once.detectedLanguage,
+              recordingId: recordingId ?? "",
+            };
+            setNeedsDictationLanguage(false);
+          }
         }
       } catch (error) {
         console.log("[AskPranaChat] transcription error:", error);
@@ -3528,6 +3603,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       }
 
       if (!transcript.trim()) {
+        if (holdForLanguage) return null;
         if (webDictationSourceRef.current !== "voice") {
           Alert.alert("Couldn't understand", voiceErrorMessage("VOICE_EMPTY"));
         }
@@ -3555,20 +3631,46 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
   const discardFailedRecording = useCallback(() => {
     failedRecordingRef.current = null;
     setHasFailedRecording(false);
+    setNeedsDictationLanguage(false);
   }, []);
 
-  const retryFailedRecording = useCallback(async (): Promise<string | null> => {
+  const retryFailedRecording = useCallback(async (
+    language?: AskPranaSpeechLanguageCode,
+  ): Promise<string | null> => {
     const failed = failedRecordingRef.current;
     if (!failed || isTranscribingRef.current || isRecordingRef.current) return null;
     isTranscribingRef.current = true;
     setIsTranscribing(true);
     try {
-      const transcript = (await transcribeAskPranaAudio(failed)).trim();
-      discardFailedRecording();
+      const once = await transcribeAskPranaAudioOnce({
+        ...failed,
+        language: language ?? failed.language ?? "auto",
+      });
+      const transcript = once.transcript.trim();
       if (!transcript) {
         Alert.alert("Couldn't understand", voiceErrorMessage("VOICE_EMPTY"));
         return null;
       }
+      const selected = language
+        ?? (once.languageUncertain ? null : once.detectedLanguage);
+      if (!selected) {
+        setNeedsDictationLanguage(true);
+        setHasFailedRecording(true);
+        return null;
+      }
+      dictatedQuestionRef.current = {
+        text: transcript,
+        language: selected,
+        recordingId: failed.recordingId ?? "",
+      };
+      logRecordingCapture({
+        recordingId: failed.recordingId ?? "composer",
+        stage: "transcription-decision",
+        languageRequested: language ?? failed.language ?? "auto",
+        languageDetected: once.detectedLanguage,
+        decision: language ? "explicit-language" : "provider-language",
+      });
+      discardFailedRecording();
       return transcript;
     } catch (error) {
       console.log("[AskPranaChat] transcription retry error:", error);
@@ -3671,6 +3773,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       stopVoiceListening,
       clearVoiceLiveTranscript,
       hasFailedRecording,
+      needsDictationLanguage,
       retryFailedRecording,
       discardFailedRecording,
       cancelAudioRecording,
@@ -3724,6 +3827,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       stopVoiceListening,
       clearVoiceLiveTranscript,
       hasFailedRecording,
+      needsDictationLanguage,
       retryFailedRecording,
       discardFailedRecording,
       cancelAudioRecording,

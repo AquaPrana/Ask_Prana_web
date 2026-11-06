@@ -39,9 +39,18 @@ import {
   stepBargeInEcho,
 } from "../lib/ask-prana-barge-in";
 import {
+  chooseInterruptionTranscript,
   isAssistantEchoTranscript,
   isUnclearVoiceTranscript,
 } from "../lib/ask-prana-voice-transcript";
+import {
+  createRecordingId,
+  decideRecordingQuality,
+  describeAppliedMicrophoneSettings,
+  logRecordingCapture,
+  microphoneCaptureConstraints,
+  summarizeRecordingSignal,
+} from "../lib/ask-prana-recording-capture";
 import { createVoiceScreenWakeLock } from "../lib/ask-prana-screen-wake-lock";
 import {
   logVoiceTranscription,
@@ -458,7 +467,11 @@ type InterruptCapture = {
   turnId: string;
   hadSpeech: () => boolean;
   /** Stops capture and returns 16 kHz mono WAV of the interruption. */
-  takeWav: () => Blob | null;
+  takeWav: () => {
+    blob: Blob | null;
+    recordingId: string;
+    rejectedMessage: string | null;
+  };
 };
 
 function encodeWav(blocks: Float32Array[], length: number, inputRate: number): Blob {
@@ -501,14 +514,23 @@ function encodeWav(blocks: Float32Array[], length: number, inputRate: number): B
   return new Blob([buffer], { type: "audio/wav" });
 }
 
-function wordCount(text: string) {
-  return text.trim() ? text.trim().split(/\s+/).length : 0;
+function interruptionSignal(blocks: Float32Array[], length: number, inputRate: number) {
+  const merged = new Float32Array(length);
+  let offset = 0;
+  for (const block of blocks) {
+    const count = Math.min(block.length, length - offset);
+    if (count <= 0) break;
+    merged.set(block.subarray(0, count), offset);
+    offset += count;
+  }
+  return decideRecordingQuality(summarizeRecordingSignal(merged.subarray(0, offset), inputRate));
 }
 
 async function transcribeInterruption(
   wav: Blob,
   recognition: AskPranaRecognitionMode,
   turnId: string,
+  recordingId: string,
 ): Promise<VoiceTranscriptionDecision> {
   try {
     const decision = await Promise.race([
@@ -520,6 +542,7 @@ async function transcribeInterruption(
         recognition,
         turnId,
         provider: "cloud-recorder",
+        recordingId,
       }),
       new Promise<VoiceTranscriptionDecision>((resolve) =>
         setTimeout(() => resolve({ action: "repeat", retryCount: 0, reason: "empty" }), BARGE_IN_TRANSCRIBE_TIMEOUT_MS),
@@ -711,13 +734,21 @@ export function AskPranaVoiceModeModal({
     }
 
     try {
+      const recordingId = createRecordingId();
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
+        audio: microphoneCaptureConstraints(),
       });
+      const interruptionTrack = stream.getAudioTracks()[0];
+      logRecordingCapture({
+        recordingId,
+        stage: "interruption-microphone-opened",
+        settings: describeAppliedMicrophoneSettings(interruptionTrack),
+      });
+      if (!interruptionTrack || interruptionTrack.readyState === "ended") {
+        stream.getTracks().forEach((track) => track.stop());
+        reportBargeInDeaf();
+        return;
+      }
       if (
         !sessionActiveRef.current ||
         (stateRef.current !== "speaking" && stateRef.current !== "processing")
@@ -744,7 +775,7 @@ export function AskPranaVoiceModeModal({
           // handled below
         }
       }
-      if (audioContext.state !== "running") {
+      if (audioContext.state !== "running" || interruptionTrack.muted) {
         console.log("[AskPranaVoice] barge-in audio context not running:", audioContext.state);
         stream.getTracks().forEach((track) => track.stop());
         void audioContext.close();
@@ -765,6 +796,14 @@ export function AskPranaVoiceModeModal({
       source.connect(processor);
       processor.connect(sink);
       sink.connect(audioContext.destination);
+      logRecordingCapture({
+        recordingId,
+        stage: "interruption-capture-ready",
+        sampleRate: audioContext.sampleRate,
+        contextState: audioContext.state,
+        settings: describeAppliedMicrophoneSettings(interruptionTrack),
+        decision: "graph-running",
+      });
       const sampleRate = audioContext.sampleRate;
       const preRollSamples = Math.round(sampleRate * BARGE_IN_PREROLL_SEC);
       const maxSamples = Math.round(sampleRate * BARGE_IN_MAX_CAPTURE_SEC);
@@ -922,8 +961,25 @@ export function AskPranaVoiceModeModal({
               turnId: `${voiceSessionIdRef.current}-${speechTurnRef.current + 1}`,
               hadSpeech: () => voicedMs >= BARGE_IN_MIN_VOICED_MS,
               takeWav: () => {
+                const quality = pcmLength ? interruptionSignal(pcm, pcmLength, sampleRate) : null;
+                const blob = quality?.action === "accept" ? encodeWav(pcm, pcmLength, sampleRate) : null;
+                logRecordingCapture({
+                  recordingId,
+                  stage: "interruption-finalized",
+                  durationMs: quality?.summary.durationMs,
+                  sampleRate,
+                  rms: quality?.summary.rms,
+                  peak: quality?.summary.peak,
+                  clippedRatio: quality?.summary.clippedRatio,
+                  voicedMs: quality?.summary.voicedMs,
+                  decision: quality?.reason ?? "empty",
+                });
                 release();
-                return pcmLength ? encodeWav(pcm, pcmLength, sampleRate) : null;
+                return {
+                  blob,
+                  recordingId,
+                  rejectedMessage: quality?.action === "reject" ? quality.message : null,
+                };
               },
             };
             logVoiceLifecycle("barge-in-triggered", {
@@ -1035,12 +1091,7 @@ export function AskPranaVoiceModeModal({
         // into an unrelated later turn.
         stopBargeInMonitor();
       }
-      // After a reply, stay on Speaking until the next microphone is actually open.
-      const showListeningNow = reason !== "resume";
-      if (showListeningNow) {
-        setState("listening");
-        stateRef.current = "listening";
-      }
+      // Listening stays hidden until capture is ready.
       setErrorText(null);
       logVoiceLifecycle("recognition-start-requested", { sessionId, attemptId, reason });
       for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -1055,10 +1106,8 @@ export function AskPranaVoiceModeModal({
             await onCancelListening();
             return false;
           }
-          if (!showListeningNow) {
-            setState("listening");
-            stateRef.current = "listening";
-          }
+          setState("listening");
+          stateRef.current = "listening";
           logVoiceLifecycle("recognition-started", { sessionId, attemptId, reason, attempt });
           return true;
         } catch (error) {
@@ -1128,7 +1177,8 @@ export function AskPranaVoiceModeModal({
     turnInFlightRef.current = false;
     loopArmedRef.current = true;
     logVoiceLifecycle("session-opened", { sessionId: voiceSessionIdRef.current });
-    setState(muted ? "muted" : "listening");
+    setState(muted ? "muted" : "idle");
+    stateRef.current = muted ? "muted" : "idle";
     if (!muted) {
       void startListeningSafely("open");
     }
@@ -1490,22 +1540,35 @@ export function AskPranaVoiceModeModal({
       heldAskRef.current = null;
       let outcome = heard;
       const recognizedText = heard.status === "ok" ? heard.text : "";
+      const recognizedLanguage = heard.status === "ok" ? heard.language : null;
       if (capture && capture.recognition === recognitionModeRef.current) {
         const hadSpeech = capture.hadSpeech();
-        const wav = capture.takeWav();
-        if (wav && (hadSpeech || recognizedText)) {
-          const captured = await transcribeInterruption(wav, capture.recognition, capture.turnId);
-          if (
-            captured.action === "accept" &&
-            wordCount(captured.text) >= wordCount(recognizedText)
-          ) {
-            outcome = { status: "ok", text: captured.text, language: captured.language };
+        const taken = capture.takeWav();
+        if (taken.rejectedMessage && !recognizedText) {
+          outcome = { status: "repeat", message: taken.rejectedMessage };
+        } else if (taken.blob && (hadSpeech || recognizedText)) {
+          const captured = await transcribeInterruption(
+            taken.blob,
+            capture.recognition,
+            capture.turnId,
+            taken.recordingId,
+          );
+          const choice = chooseInterruptionTranscript({
+            recognizedText,
+            recognizedLanguage,
+            capturedText: captured.action === "accept" ? captured.text : "",
+            capturedLanguage: captured.action === "accept" ? captured.language : null,
+            assistantSpoken: recentSpokenRef.current,
+          });
+          if (choice) {
+            outcome = { status: "ok", text: choice.text, language: choice.language };
           }
           logVoiceLifecycle("interruption-transcribed", {
             sessionId,
             turnId,
-            recognizedWords: wordCount(recognizedText),
-            capturedWords: captured.action === "accept" ? wordCount(captured.text) : 0,
+            recordingId: taken.recordingId,
+            source: choice?.source ?? "none",
+            reason: choice?.reason ?? captured.reason,
           });
         }
       }
@@ -1541,7 +1604,9 @@ export function AskPranaVoiceModeModal({
           await runTurnFromTranscript("", heldAsk);
           return;
         }
-        await askToRepeat("I couldn't understand that. Please say it again.");
+        await askToRepeat(outcome.status === "repeat" && outcome.message
+          ? outcome.message
+          : "I couldn't understand that. Please say it again.");
         return;
       }
       const transcript = outcome.text;
@@ -1823,7 +1888,7 @@ export function AskPranaVoiceModeModal({
       return slowAnswer ? "This is taking longer than usual…" : "Preparing your answer…";
     }
     if (state === "speaking") return "Speaking…";
-    if (state === "interrupted") return "Listening…";
+    if (state === "interrupted") return "";
     if (state === "muted") return "Muted";
     if (state === "reconnecting") return "Reconnecting…";
     if (state === "error") return errorText || "Something went wrong";

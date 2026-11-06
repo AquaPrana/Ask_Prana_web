@@ -328,6 +328,7 @@ export default function AskPranaScreen() {
     stopVoiceListening,
     clearVoiceLiveTranscript,
     hasFailedRecording,
+    needsDictationLanguage,
     retryFailedRecording,
     discardFailedRecording,
     cancelAudioRecording,
@@ -1554,17 +1555,47 @@ export default function AskPranaScreen() {
             ) : hasFailedRecording && !isRecording && !voiceInline ? (
               <View style={styles.failedRecordingRow}>
                 <Text style={styles.failedRecordingText}>
-                  Voice message couldn't be processed.
+                  {needsDictationLanguage
+                    ? "Choose English, Telugu, or Hindi, or say it again."
+                    : "Voice message couldn't be processed."}
                 </Text>
-                <Pressable
-                  onPress={() => { void handleRetryFailedRecording(); }}
-                  disabled={isSending}
-                  style={({ pressed }) => [styles.failedRecordingAction, pressed && styles.pressed]}
-                  accessibilityRole="button"
-                  accessibilityLabel="Retry voice message"
-                >
-                  <Text style={styles.failedRecordingRetryText}>Retry</Text>
-                </Pressable>
+                {needsDictationLanguage ? (
+                  <>
+                    {([
+                      ["en", "English"],
+                      ["te", "Telugu"],
+                      ["hi", "Hindi"],
+                    ] as const).map(([code, label]) => (
+                      <Pressable
+                        key={code}
+                        onPress={() => {
+                          void (async () => {
+                            const transcript = await retryFailedRecording(code);
+                            if (!transcript) return;
+                            const existing = draft.trim();
+                            setDraft(existing ? `${existing} ${transcript}` : transcript);
+                          })();
+                        }}
+                        disabled={isSending}
+                        style={({ pressed }) => [styles.failedRecordingAction, pressed && styles.pressed]}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Transcribe in ${label}`}
+                      >
+                        <Text style={styles.failedRecordingRetryText}>{label}</Text>
+                      </Pressable>
+                    ))}
+                  </>
+                ) : (
+                  <Pressable
+                    onPress={() => { void handleRetryFailedRecording(); }}
+                    disabled={isSending}
+                    style={({ pressed }) => [styles.failedRecordingAction, pressed && styles.pressed]}
+                    accessibilityRole="button"
+                    accessibilityLabel="Retry voice message"
+                  >
+                    <Text style={styles.failedRecordingRetryText}>Retry</Text>
+                  </Pressable>
+                )}
                 <Pressable
                   onPress={discardFailedRecording}
                   style={({ pressed }) => [styles.failedRecordingAction, pressed && styles.pressed]}

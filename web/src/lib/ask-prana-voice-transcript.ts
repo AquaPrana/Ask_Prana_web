@@ -4,6 +4,8 @@
  * uses an unexpected script.
  */
 
+import type { AskPranaSpeechLanguageCode } from "./ask-prana-language";
+
 const NON_SPEECH_HALLUCINATIONS = [
   "thanks for watching",
   "thank you for watching",
@@ -46,4 +48,88 @@ export function isAssistantEchoTranscript(transcript: string, spoken: string): b
   if (saidWords.length < 4) return false;
   const overlap = saidWords.filter((word) => answerWords.has(word)).length;
   return overlap / saidWords.length >= 0.72;
+}
+
+function transcriptWords(text: string): string[] {
+  return spokenKey(text).split(" ").filter(Boolean);
+}
+
+export type InterruptionTranscriptChoice = {
+  text: string;
+  language: AskPranaSpeechLanguageCode;
+  source: "recognized" | "captured";
+  reason: string;
+};
+
+/**
+ * Pick the interruption transcript from speech evidence.
+ * A longer transcript does not win. Assistant echo, including extra words
+ * added to an otherwise real question, cannot replace the user transcript.
+ */
+export function chooseInterruptionTranscript(input: {
+  recognizedText: string;
+  recognizedLanguage: AskPranaSpeechLanguageCode | null;
+  capturedText: string;
+  capturedLanguage: AskPranaSpeechLanguageCode | null;
+  assistantSpoken: string;
+}): InterruptionTranscriptChoice | null {
+  const usable = (text: string, language: AskPranaSpeechLanguageCode | null) => {
+    const trimmed = text.trim();
+    if (!language || !trimmed || isUnclearVoiceTranscript(trimmed)) return false;
+    return !isAssistantEchoTranscript(trimmed, input.assistantSpoken);
+  };
+  const recognizedOk = usable(input.recognizedText, input.recognizedLanguage);
+  const capturedOk = usable(input.capturedText, input.capturedLanguage);
+  if (recognizedOk && capturedOk && input.recognizedLanguage && input.capturedLanguage) {
+    const recognizedWords = transcriptWords(input.recognizedText);
+    const capturedWords = transcriptWords(input.capturedText);
+    const assistantWords = new Set(transcriptWords(input.assistantSpoken));
+    const extra = capturedWords.filter((word) => !recognizedWords.includes(word));
+    const extraEcho = extra.filter((word) => assistantWords.has(word)).length;
+    const extraIsEcho = extra.length >= 2 && extraEcho / extra.length >= 0.5;
+    if (extraIsEcho) {
+      return {
+        text: input.recognizedText.trim(),
+        language: input.recognizedLanguage,
+        source: "recognized",
+        reason: "captured-echo-extension",
+      };
+    }
+    const recognizedKey = spokenKey(input.recognizedText);
+    const capturedKey = spokenKey(input.capturedText);
+    const capturedExtendsRecognized = Boolean(recognizedKey) &&
+      capturedKey !== recognizedKey &&
+      (capturedKey.startsWith(recognizedKey) || capturedKey.endsWith(recognizedKey));
+    if (capturedExtendsRecognized && extra.length > 0) {
+      return {
+        text: input.capturedText.trim(),
+        language: input.capturedLanguage,
+        source: "captured",
+        reason: "captured-keeps-leading-words",
+      };
+    }
+    return {
+      text: input.recognizedText.trim(),
+      language: input.recognizedLanguage,
+      source: "recognized",
+      reason: "recognized-user-transcript",
+    };
+  }
+  if (capturedOk && input.capturedLanguage) {
+    return {
+      text: input.capturedText.trim(),
+      language: input.capturedLanguage,
+      source: "captured",
+      reason: "recognized-missing",
+    };
+  }
+  if (recognizedOk && input.recognizedLanguage) {
+    return {
+      text: input.recognizedText.trim(),
+      language: input.recognizedLanguage,
+      source: "recognized",
+      reason: "captured-rejected",
+    };
+  }
+  return null;
 }

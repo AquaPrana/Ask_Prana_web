@@ -925,6 +925,7 @@ type TranscribeInput = {
   mimeType?: string | null;
   fileName?: string | null;
   language?: string | null;
+  recordingId?: string | null;
 };
 
 function useDocumentedRecording(input: TranscribeInput): TranscribeInput {
@@ -947,9 +948,11 @@ export async function transcribeAskPranaAudio(input: TranscribeInput) {
   return first.transcript;
 }
 
-async function transcribeAskPranaAudioOnce(input: TranscribeInput): Promise<{
+export async function transcribeAskPranaAudioOnce(input: TranscribeInput): Promise<{
   transcript: string;
   detectedLanguage: AskPranaSpeechLanguageCode | null;
+  languageUncertain: boolean;
+  languageConfidence: number | null;
 }> {
   const auth = await requireAskPranaAuth();
   const config = getSupabasePublicConfig();
@@ -987,6 +990,9 @@ async function transcribeAskPranaAudioOnce(input: TranscribeInput): Promise<{
   if (input.language?.trim()) {
     formData.append("language", input.language.trim());
   }
+  if (input.recordingId?.trim()) {
+    formData.append("recordingId", input.recordingId.trim());
+  }
 
   let response: Response;
   try {
@@ -1004,12 +1010,26 @@ async function transcribeAskPranaAudioOnce(input: TranscribeInput): Promise<{
     throw classifyTranscribeError(formatUnknownError(error));
   }
 
-  let data: { transcript?: string; error?: unknown; code?: unknown; detectedLanguage?: string | null } | null = null;
+  let data: {
+    transcript?: string;
+    error?: unknown;
+    code?: unknown;
+    detectedLanguage?: string | null;
+    languageUncertain?: boolean;
+    languageConfidence?: number | null;
+  } | null = null;
   const rawText = await response.text();
   console.log("[AskPranaAudio] upload completed", { status: response.status });
   try {
     data = rawText
-      ? (JSON.parse(rawText) as { transcript?: string; error?: unknown; code?: unknown; detectedLanguage?: string | null })
+      ? (JSON.parse(rawText) as {
+          transcript?: string;
+          error?: unknown;
+          code?: unknown;
+          detectedLanguage?: string | null;
+          languageUncertain?: boolean;
+          languageConfidence?: number | null;
+        })
       : null;
   } catch {
     console.log("[askPrana] transcribe API error response", rawText);
@@ -1036,9 +1056,17 @@ async function transcribeAskPranaAudioOnce(input: TranscribeInput): Promise<{
     throw classifyTranscribeError(detail ? `${message} ${detail}` : message);
   }
 
+  const languageConfidence = typeof data?.languageConfidence === "number"
+    && data.languageConfidence >= 0
+    && data.languageConfidence <= 1
+    ? data.languageConfidence
+    : null;
   console.log("[AskPranaAudio] transcription completed", {
     transcriptLength: data?.transcript?.trim().length ?? 0,
     detectedLanguage: data?.detectedLanguage ?? null,
+    languageUncertain: data?.languageUncertain === true,
+    languageConfidence,
+    recordingId: input.recordingId ?? null,
   });
   return {
     transcript: data?.transcript?.trim() ?? "",
@@ -1047,6 +1075,8 @@ async function transcribeAskPranaAudioOnce(input: TranscribeInput): Promise<{
     detectedLanguage: data?.detectedLanguage === "te" || data?.detectedLanguage === "hi" || data?.detectedLanguage === "en"
       ? data.detectedLanguage
       : null,
+    languageUncertain: data?.languageUncertain === true,
+    languageConfidence,
   };
 }
 
@@ -1057,6 +1087,8 @@ export function logVoiceTranscription(detail: {
   languageSent: string;
   retryCount: number;
   reason: string;
+  recordingId?: string | null;
+  languageDetected?: string | null;
 }) {
   if (process.env.NODE_ENV === "production") return;
   console.debug("[AskPranaVoiceTranscription]", detail);
@@ -1069,7 +1101,7 @@ export function logVoiceTranscription(detail: {
  */
 export type VoiceListenResult =
   | { status: "ok"; text: string; language: AskPranaSpeechLanguageCode }
-  | { status: "repeat" }
+  | { status: "repeat"; message?: string }
   | { status: "choose-language" }
   | { status: "error"; message: string }
   | { status: "cancelled" };
@@ -1096,6 +1128,8 @@ export async function transcribeVoiceRecording(input: TranscribeInput & {
     recognition: input.recognition,
     transcript: first.transcript,
     detected: first.detectedLanguage,
+    detectionConfidence: first.languageConfidence,
+    languageUncertain: first.languageUncertain,
   });
   logVoiceTranscription({
     turnId: input.turnId,
@@ -1104,6 +1138,8 @@ export async function transcribeVoiceRecording(input: TranscribeInput & {
     languageSent,
     retryCount: decision.retryCount,
     reason: decision.reason,
+    recordingId: input.recordingId ?? null,
+    languageDetected: first.detectedLanguage,
   });
   return decision;
 }
@@ -1112,12 +1148,22 @@ function finishVoiceTranscription(input: {
   recognition: AskPranaRecognitionMode;
   transcript: string;
   detected: AskPranaSpeechLanguageCode | null;
+  detectionConfidence?: number | null;
+  languageUncertain?: boolean;
 }): VoiceTranscriptionDecision {
+  if (input.languageUncertain && input.recognition === "auto") {
+    if (!input.transcript.trim()) return { action: "repeat", retryCount: 0, reason: "empty" };
+    return { action: "choose-language", retryCount: 0, reason: "uncertain-language" };
+  }
   const accepted = acceptSpokenQuestion({
     mode: input.recognition,
     transcript: input.transcript,
     detected: input.detected,
+    detectionConfidence: input.detectionConfidence,
   });
+  if (accepted.action === "choose-language") {
+    return { action: "choose-language", retryCount: 0, reason: accepted.reason };
+  }
   if (accepted.action === "repeat") {
     return { action: "repeat", retryCount: 0, reason: "empty" };
   }
