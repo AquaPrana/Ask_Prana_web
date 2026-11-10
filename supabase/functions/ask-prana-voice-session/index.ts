@@ -159,7 +159,9 @@ Deno.serve(async (req) => {
           transcription: {
             model: "gpt-realtime-whisper",
             delay: "low",
-            ...(language === "auto" ? { languages: ["te", "hi", "en"] } : { language }),
+            // Auto: send no language, so the transcriber detects it itself.
+            // (gpt-realtime-whisper rejects the "languages" list.)
+            ...(language === "auto" ? {} : { language }),
           },
           // Ends the farmer's turn by meaning, not a fixed silence. Speaking
           // over the reply stops it (interrupt_response).
