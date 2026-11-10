@@ -42,6 +42,7 @@ import {
   logVoiceTranscription,
   transcribeAskPranaAudio,
   transcribeAskPranaAudioOnce,
+  prewarmAskPranaTranscription,
   transcribeVoiceRecording,
   type AskPranaAttachment,
   type AskPranaRequestContext,
@@ -781,6 +782,11 @@ type AskPranaChatContextValue = {
   hasFailedRecording: boolean;
   /** The recording was heard, but Auto could not choose one language. */
   needsDictationLanguage: boolean;
+  /**
+   * Composer dictation text already placed in the input box while its
+   * language was uncertain; a language choice replaces exactly this text.
+   */
+  uncertainDictationText: string | null;
   retryFailedRecording: (language?: AskPranaSpeechLanguageCode) => Promise<string | null>;
   discardFailedRecording: () => void;
   /** Discard in-progress dictation recording/transcription; preserves draft. */
@@ -870,6 +876,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
   const [voiceAudioLevel, setVoiceAudioLevel] = useState(0);
   const [hasFailedRecording, setHasFailedRecording] = useState(false);
   const [needsDictationLanguage, setNeedsDictationLanguage] = useState(false);
+  const [uncertainDictationText, setUncertainDictationText] = useState<string | null>(null);
   const dictatedQuestionRef = useRef<{
     text: string;
     language: AskPranaSpeechLanguageCode;
@@ -3273,6 +3280,13 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         return;
       }
 
+      // Composer dictation uploads a 16 kHz WAV (a third of the bytes) and
+      // wakes the transcription function while the farmer speaks. Voice Chat
+      // keeps its full-rate WAV and timing unchanged.
+      (audioRecorder as { setWavSampleRate?: (rate: number | null) => void })
+        .setWavSampleRate?.(source === "composer" ? 16000 : null);
+      if (source === "composer") prewarmAskPranaTranscription();
+
       await audioRecorder.prepareToRecordAsync(ASK_PRANA_VOICE_RECORDING_OPTIONS);
       if (operationEpoch !== dictationEpochRef.current) {
         audioRecorder.releaseMicrophone();
@@ -3429,7 +3443,10 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
     }
   }, [clearVoiceSilenceWatch]);
 
-  const captureRecordingTranscript = useCallback(async (): Promise<string | null> => {
+  const captureRecordingTranscript = useCallback(async (options?: {
+    /** Composer box: show an uncertain-language transcript instead of holding it. */
+    showUncertainTranscript?: boolean;
+  }): Promise<string | null> => {
     clearVoiceSilenceWatch();
     if (voiceStopInFlightRef.current) {
       console.log("[AskPranaChat] stop skipped: already stopping");
@@ -3663,7 +3680,14 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
             languageDetected: once.detectedLanguage,
             decision: uncertain ? "choose-language" : once.detectedLanguage ? "provider-language" : "empty",
           });
-          if (uncertain && transcript.trim()) {
+          if (uncertain && transcript.trim() && options?.showUncertainTranscript) {
+            // Put the words in the box now; the language row stays available
+            // to redo them, replacing only this text.
+            failedRecordingRef.current = transcribeInput;
+            setHasFailedRecording(true);
+            setNeedsDictationLanguage(true);
+            setUncertainDictationText(transcript.trim());
+          } else if (uncertain && transcript.trim()) {
             failedRecordingRef.current = transcribeInput;
             setHasFailedRecording(true);
             setNeedsDictationLanguage(true);
@@ -3750,6 +3774,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
     failedRecordingRef.current = null;
     setHasFailedRecording(false);
     setNeedsDictationLanguage(false);
+    setUncertainDictationText(null);
   }, []);
 
   const retryFailedRecording = useCallback(async (
@@ -3817,7 +3842,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
     if (webDictationRef.current) {
       return finishWebDictation();
     }
-    const transcript = await captureRecordingTranscript();
+    const transcript = await captureRecordingTranscript({ showUncertainTranscript: true });
     if (!transcript) {
       return null;
     }
@@ -3894,6 +3919,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       clearVoiceLiveTranscript,
       hasFailedRecording,
       needsDictationLanguage,
+      uncertainDictationText,
       retryFailedRecording,
       discardFailedRecording,
       cancelAudioRecording,
@@ -3950,6 +3976,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       clearVoiceLiveTranscript,
       hasFailedRecording,
       needsDictationLanguage,
+      uncertainDictationText,
       retryFailedRecording,
       discardFailedRecording,
       cancelAudioRecording,

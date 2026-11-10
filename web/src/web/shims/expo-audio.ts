@@ -104,7 +104,7 @@ class Emitter {
   }
 }
 
-import { encodeWavPcm } from "../../lib/ask-prana-transcription-language";
+import { downsamplePcm, encodeWavPcm } from "../../lib/ask-prana-transcription-language";
 import {
   createRecordingId,
   decideRecordingQuality,
@@ -151,6 +151,8 @@ export class AudioRecorder extends Emitter {
   private tailHoldUntil = 0;
   private tailFrozen = false;
   private lastReport: RecordingCaptureReport | null = null;
+  /** Sample rate of the uploaded WAV; null keeps the microphone's own rate. */
+  private wavSampleRate: number | null = null;
 
   constructor(private options: WebRecordingOptions) {
     super();
@@ -158,6 +160,14 @@ export class AudioRecorder extends Emitter {
 
   get isRecording() {
     return this.mediaRecorder?.state === "recording";
+  }
+
+  /**
+   * Chooses the sample rate of the next recording's WAV. Composer dictation
+   * uses 16 kHz (a third of the 48 kHz upload); null keeps the full rate.
+   */
+  setWavSampleRate(rate: number | null) {
+    this.wavSampleRate = rate && rate > 0 ? rate : null;
   }
 
   async prepareToRecordAsync(_options?: RecordingOptions) {
@@ -530,7 +540,13 @@ export class AudioRecorder extends Emitter {
       settings: this.lastReport.settings,
     });
     if (samples.length < 160 || quality.action === "reject") return null;
-    const wav = encodeWavPcm(samples, sampleRate);
+    const targetRate = this.wavSampleRate && this.wavSampleRate < sampleRate
+      ? this.wavSampleRate
+      : sampleRate;
+    const wav = encodeWavPcm(
+      targetRate === sampleRate ? samples : downsamplePcm(samples, sampleRate, targetRate),
+      targetRate,
+    );
     const bytes = new ArrayBuffer(wav.byteLength);
     new Uint8Array(bytes).set(wav);
     return new Blob([bytes], { type: "audio/wav" });

@@ -348,6 +348,7 @@ export default function AskPranaScreen() {
     clearVoiceLiveTranscript,
     hasFailedRecording,
     needsDictationLanguage,
+    uncertainDictationText,
     retryFailedRecording,
     discardFailedRecording,
     cancelAudioRecording,
@@ -747,6 +748,8 @@ export default function AskPranaScreen() {
   }, [refreshScrollToLatestVisibility, renderedConversationMessages.length, voiceInline]);
 
   const handleSend = (question: string) => {
+    // The dictated words were sent as they are; drop the "wrong language?" row.
+    if (uncertainDictationText) discardFailedRecording();
     void sendQuestion(question, requestContext);
   };
 
@@ -1729,7 +1732,9 @@ export default function AskPranaScreen() {
               <View style={styles.failedRecordingRow}>
                 <Text style={styles.failedRecordingText}>
                   {needsDictationLanguage
-                    ? "Choose English, Telugu, or Hindi, or say it again."
+                    ? uncertainDictationText
+                      ? "Words not right? Choose the language you spoke:"
+                      : "Choose English, Telugu, or Hindi, or say it again."
                     : "Voice message couldn't be processed."}
                 </Text>
                 {needsDictationLanguage ? (
@@ -1743,8 +1748,14 @@ export default function AskPranaScreen() {
                         key={code}
                         onPress={() => {
                           void (async () => {
+                            const shown = uncertainDictationText;
                             const transcript = await retryFailedRecording(code);
                             if (!transcript) return;
+                            // Replace the words already shown for this recording.
+                            if (shown && draft.includes(shown)) {
+                              setDraft(draft.replace(shown, transcript));
+                              return;
+                            }
                             const existing = draft.trim();
                             setDraft(existing ? `${existing} ${transcript}` : transcript);
                           })();
@@ -1773,9 +1784,11 @@ export default function AskPranaScreen() {
                   onPress={discardFailedRecording}
                   style={({ pressed }) => [styles.failedRecordingAction, pressed && styles.pressed]}
                   accessibilityRole="button"
-                  accessibilityLabel="Discard voice message"
+                  accessibilityLabel={uncertainDictationText ? "Keep the dictated text" : "Discard voice message"}
                 >
-                  <Text style={styles.failedRecordingDiscardText}>Discard</Text>
+                  <Text style={styles.failedRecordingDiscardText}>
+                    {uncertainDictationText ? "Keep" : "Discard"}
+                  </Text>
                 </Pressable>
               </View>
             ) : null}

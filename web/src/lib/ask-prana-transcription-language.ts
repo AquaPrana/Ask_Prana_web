@@ -125,6 +125,27 @@ export function providerAudioFileCode(input: {
 }
 
 /** 16-bit mono PCM WAV. The leading bytes are the RIFF header used for file transcription. */
+/**
+ * Lowers the sample rate of mono PCM for speech-to-text uploads (for example
+ * 48 kHz -> 16 kHz, a third of the bytes). Each output sample averages the
+ * input samples it covers, which also filters out frequencies the lower rate
+ * cannot hold. Speech models work at 16 kHz, so recognition is unaffected.
+ */
+export function downsamplePcm(samples: Float32Array, fromRate: number, toRate: number): Float32Array {
+  if (!(toRate > 0) || !(fromRate > toRate)) return samples;
+  const ratio = fromRate / toRate;
+  const length = Math.floor(samples.length / ratio);
+  const out = new Float32Array(length);
+  for (let index = 0; index < length; index += 1) {
+    const start = Math.floor(index * ratio);
+    const end = Math.min(samples.length, Math.max(start + 1, Math.floor((index + 1) * ratio)));
+    let sum = 0;
+    for (let cursor = start; cursor < end; cursor += 1) sum += samples[cursor];
+    out[index] = sum / (end - start);
+  }
+  return out;
+}
+
 export function encodeWavPcm(samples: Float32Array, sampleRate: number): Uint8Array {
   const bytesPerSample = 2;
   const dataSize = samples.length * bytesPerSample;

@@ -943,6 +943,25 @@ function useDocumentedRecording(input: TranscribeInput): TranscribeInput {
  * Composer transcription is one provider attempt. Do not use UI language or
  * transcript script to retry/translate a recording in another language.
  */
+let lastTranscribeWarmupAt = 0;
+const TRANSCRIBE_WARMUP_INTERVAL_MS = 4 * 60 * 1000;
+
+/**
+ * Called when composer dictation starts: refreshes the login token and wakes
+ * the transcription function while the farmer is still speaking, so the
+ * upload after Stop does not wait for either. Never throws.
+ */
+export function prewarmAskPranaTranscription() {
+  void ensureValidSession().catch(() => undefined);
+  const now = Date.now();
+  if (now - lastTranscribeWarmupAt < TRANSCRIBE_WARMUP_INTERVAL_MS) return;
+  lastTranscribeWarmupAt = now;
+  const config = getSupabasePublicConfig();
+  if (!config.url) return;
+  // The function answers OPTIONS without auth or work; any request boots it.
+  void fetch(`${config.url}/functions/v1/ask-prana-transcribe`, { method: "OPTIONS" }).catch(() => undefined);
+}
+
 export async function transcribeAskPranaAudio(input: TranscribeInput) {
   const first = await transcribeAskPranaAudioOnce(input);
   return first.transcript;
