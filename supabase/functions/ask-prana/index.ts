@@ -32,7 +32,10 @@ import {
   mimeForFormat,
   resolveRequestedDocumentFormat,
 } from "./lib/document-export.ts";
-import { buildSpeciesCultureReferenceContext } from "./lib/species-culture-reference.ts";
+import {
+  buildCrabCultureReferenceContext,
+  buildSpeciesCultureReferenceContext,
+} from "./lib/species-culture-reference.ts";
 import {
   allowsShrimpReference,
   buildAquacultureDomainContext,
@@ -135,6 +138,17 @@ Answer style:
 • Decision questions (harvest, high ammonia, disease): put the decision or main finding first.
 • Do not repeat the same warning. Do not write textbook lists unless the farmer asked for a list.
 • Never say you are unable to answer, unable to help, or unable to give a proper response. Always give the best practical answer with available data; if something is missing, say what is missing and still provide useful next steps. Exception: if you cannot tell what the farmer is asking, follow the Unclear questions rule and ask them to ask again.
+
+Comparison answers (typed chat; questions such as "difference between A and B", "A vs B", "compare A and B", "A or B, which is better"):
+• Open with one or two plain sentences that state the core difference directly. If one item is a type, stage or subset of the other, say so in that opening. No preamble such as "Great question" and no vague openers such as "they differ mainly in…".
+• Then give exactly ONE comparison table. Header row: | Aspect | <A> | <B> | using the farmer's own names for A and B (add a column only when the farmer compared more than two items). Start and end every row with |. Use 4–7 rows chosen for what matters in this comparison — for farming practices usually starting stock or inputs, purpose, duration, culture system, feeding, and main management risks. Keep each cell to one short phrase or sentence: no bullets, no bold, no line breaks inside a cell.
+• Durations, sizes, densities and yields: give a typical range and name what it depends on (starting size or condition, temperature, salinity, feeding, system). Never present a range as fixed or guaranteed. Use ranges from the supplied reference context when available; otherwise say that it varies instead of inventing a number.
+• Describe practices concretely instead of with vague labels: for example "carefully managed feeding based on consumption and water quality" rather than "intensive feeding"; name the actual risk (cannibalism, escapes, poor water quality, moulting losses) rather than "high risk".
+• After the table, add ONE short practical example (one or two sentences) showing when a farmer would choose each option.
+• Stop there: no closing summary that repeats the table, no profit or income claims unless the farmer supplied the numbers, and no citations, source names or links unless they appear in the supplied context.
+• Keep the prose outside the table under about 120 words. Write table headers and cells in the answer language (Telugu and Hindi answers use Telugu or Hindi text in the table; units and terms such as pH or DO may stay as written).
+• This comparison layout applies even when the farmer did not ask for a table. An explicit format request (bullets, only points, short answer, Excel, document) still wins.
+• Voice turns: never use a table; say the core difference and the single most useful point in two to four short sentences.
 `;
 
 const RESPONSE_FORMAT_RULES = `
@@ -3046,6 +3060,10 @@ Deliver the FULL useful answer in that layout now. Do not switch back to plain p
           noRecordsJoin: false,
         })
         : null;
+      const crabCultureRef = buildCrabCultureReferenceContext({
+        question: farmerQuestion,
+        recentUserTurns,
+      });
       systemPrompt = `
 ${ROLE_PROMPT}
 
@@ -3082,7 +3100,7 @@ Farmer display name: ${farmerNameForPrompt || "unavailable"}
 Attachment Status:
 ${attachmentStatus}
 
-${cultureDomainContext ? `${cultureDomainContext}\n` : ""}${speciesCultureRef ? `${speciesCultureRef}\n` : ""}
+${cultureDomainContext ? `${cultureDomainContext}\n` : ""}${speciesCultureRef ? `${speciesCultureRef}\n` : ""}${crabCultureRef ? `${crabCultureRef}\n` : ""}
 Recent Conversation:
 ${history || "none"}
 
@@ -3241,6 +3259,11 @@ If this is a normal general question with no prior health context, do not invent
           thinFarmData,
         })
         : null;
+      const crabCultureRef = buildCrabCultureReferenceContext({
+        question: farmerQuestion,
+        recentUserTurns,
+        pondSpecies: typeof cycle?.species === "string" ? cycle.species : null,
+      });
 
       const pondContext = `
 Mode: pond
@@ -3294,7 +3317,7 @@ ${checkTrayTrend}
 Existing-cycle / no-history baseline:
 ${baselineContext}
 
-${cultureDomainContext ? `${cultureDomainContext}\n` : ""}${speciesCultureRef ? `${speciesCultureRef}\n` : ""}
+${cultureDomainContext ? `${cultureDomainContext}\n` : ""}${speciesCultureRef ? `${speciesCultureRef}\n` : ""}${crabCultureRef ? `${crabCultureRef}\n` : ""}
 Feed schedule (client-only, not in pond_logs):
 ${feedScheduleSummary ?? "unavailable"}
 

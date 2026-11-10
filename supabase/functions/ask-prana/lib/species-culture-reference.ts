@@ -168,3 +168,43 @@ export function buildSpeciesCultureReferenceContext(input: {
 
   return null;
 }
+
+
+const CRAB_PATTERN = /\b(mud\s*crabs?|crabs?|crablets?|scylla)\b/i;
+const CRAB_INDIC = ["పీత", "పీతల", "केकड़", "केकडा", "केकडे"];
+
+function mentionsCrab(text: string | null | undefined): boolean {
+  const value = String(text ?? "");
+  return CRAB_PATTERN.test(value) || CRAB_INDIC.some((alias) => value.includes(alias));
+}
+
+/**
+ * Mud crab (Scylla spp.) grow-out and fattening reference. General guidance,
+ * not measured farm data. Ranges follow SEAFDEC Aquaculture Extension Manual
+ * No. 27 "Mudcrab" (1999) and the FAO mud crab aquaculture manual (2011).
+ */
+export function buildCrabCultureReferenceContext(input: {
+  question: string;
+  recentUserTurns?: string[];
+  pondSpecies?: string | null;
+}): string | null {
+  const recent = (input.recentUserTurns ?? []).slice(-2);
+  if (
+    !mentionsCrab(input.question) &&
+    !recent.some(mentionsCrab) &&
+    !mentionsCrab(input.pondSpecies)
+  ) {
+    return null;
+  }
+  return `
+MUD CRAB (Scylla spp.) CULTURE REFERENCE (general guidance, not measured farm data; results vary by site)
+- Grow-out raises juveniles or small crabs (hatchery crablets or wild seed) to market size in ponds or mangrove pens, as monoculture or polyculture with fish.
+- Fattening holds market-sized crabs that are lean or recently moulted ("water crabs", light and soft) until the meat fills and the shell hardens. Fattening is also a form of crab farming, with a short cycle.
+- Grow-out duration: commonly about 4–5 months per crop (SEAFDEC pond guide: harvest around 120–150 days). It is longer from very small seed or in cooler water; harvesting the larger crabs first lets smaller ones grow.
+- Fattening duration: commonly about 2–4 weeks (SEAFDEC: 15–30 days, with about half the crabs ready in 15–20 days). It is not fixed: it depends on each crab's starting condition and size, sex, water temperature and feeding. Check crabs individually and harvest when full and hard, not on a fixed day.
+- Systems: grow-out in brackishwater ponds or pens with secure fencing and hiding places; fattening in small ponds, pens, cages, or individual boxes/compartments (individual holding cuts cannibalism and improves survival).
+- Feeding: trash fish, mussel or clam meat, or formulated crab feed. Adjust the daily amount to what is eaten (remove leftovers) and to water quality. SEAFDEC grow-out uses about 10% of crab biomass per day for small crabs, falling to about 5% for larger crabs, as a starting point only.
+- Main risks: cannibalism (especially at moulting), escapes through dikes and fences, poor water quality (low oxygen, sudden salinity changes; feeding drops sharply below about 20 °C), losses of weak or damaged crabs, and inconsistent seed or lean-crab supply. Do not promise survival rates or profit.
+- Do not apply shrimp feed charts, check-tray rules or shrimp disease names to crabs.
+`.trim();
+}

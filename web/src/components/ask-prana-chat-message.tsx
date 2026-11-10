@@ -75,6 +75,20 @@ const colors = {
   viewerBg: "#0B0F15",
 };
 
+/**
+ * Desktop chat table tokens. The Ask Prana chat screen only has a dark theme,
+ * so the table follows it: dark surfaces, light text, subtle borders.
+ */
+const desktopTableColors = {
+  surface: "#151B24",
+  header: "#F4F7FA",
+  headerBg: "#1D2531",
+  rowLabel: "#EDF2F8",
+  rowLabelBg: "#18202B",
+  text: "#D5DDE8",
+  border: "#2D3746",
+};
+
 const SCREEN = Dimensions.get("window");
 
 /* eslint-disable react-hooks/immutability -- Reanimated shared values are intentionally mutated inside gesture worklets. */
@@ -261,7 +275,123 @@ function buildFormattedBlocks(text: string): FormattedBlock[] {
   return blocks;
 }
 
+/**
+ * Same desktop rule as the chat screen (app/ask-prana.tsx): web, and the wider
+ * of the React Native and browser viewport widths is at least 1024 px.
+ * Phones and tablets below that width keep the stacked card layout.
+ */
+const CHAT_TABLE_DESKTOP_MIN_WIDTH = 1024;
+
+function useDesktopChatTable() {
+  const { width } = useWindowDimensions();
+  if (Platform.OS !== "web") return false;
+  const browserWidth = typeof window !== "undefined" ? window.innerWidth : 0;
+  return Math.max(width, browserWidth) >= CHAT_TABLE_DESKTOP_MIN_WIDTH;
+}
+
+/** Below these widths a column stops shrinking and the table scrolls sideways. */
+const DESKTOP_TABLE_FIRST_COL_MIN = 140;
+const DESKTOP_TABLE_COL_MIN = 200;
+
+function AskPranaDesktopChatTable({
+  headers,
+  bodyRows,
+}: {
+  headers: string[];
+  bodyRows: string[][];
+}) {
+  const colCount = headers.length;
+  const tableMinWidth =
+    DESKTOP_TABLE_FIRST_COL_MIN + (colCount - 1) * DESKTOP_TABLE_COL_MIN;
+  // A horizontal ScrollView lets content grow to its unwrapped text width, so
+  // the table gets an explicit width: the message column, or the minimum
+  // column widths when those are wider (then it scrolls sideways).
+  const [availableWidth, setAvailableWidth] = useState(0);
+  const tableWidth = Math.max(availableWidth, tableMinWidth);
+  const columnStyle = (colIndex: number) =>
+    colIndex === 0
+      ? { flexGrow: 0.75, flexBasis: 0, minWidth: DESKTOP_TABLE_FIRST_COL_MIN }
+      : { flexGrow: 1, flexBasis: 0, minWidth: DESKTOP_TABLE_COL_MIN };
+
+  return (
+    <ScrollView
+      horizontal
+      nestedScrollEnabled
+      showsHorizontalScrollIndicator
+      onLayout={(event) => {
+        const width = Math.floor(event.nativeEvent.layout.width);
+        if (width > 0 && width !== availableWidth) setAvailableWidth(width);
+      }}
+      style={styles.desktopTableScroll}
+    >
+      <View
+        role="table"
+        style={[styles.desktopTable, { width: tableWidth }]}
+      >
+        <View role="row" style={[styles.desktopTableRow, styles.desktopTableHeaderRow]}>
+          {headers.map((header, colIndex) => (
+            <View
+              key={`th-${colIndex}`}
+              role="columnheader"
+              style={[
+                styles.desktopTableCell,
+                columnStyle(colIndex),
+                colIndex === colCount - 1 && styles.desktopTableCellLast,
+              ]}
+            >
+              <Text style={styles.desktopTableHeaderText}>
+                {renderInlineMarkdown(header.trim(), desktopTableColors.header, true)}
+              </Text>
+            </View>
+          ))}
+        </View>
+        {bodyRows.map((row, rowIndex) => (
+          <View
+            key={`tr-${rowIndex}`}
+            role="row"
+            style={[
+              styles.desktopTableRow,
+              rowIndex === bodyRows.length - 1 && styles.desktopTableRowLast,
+            ]}
+          >
+            {row.map((cell, colIndex) => {
+              const isRowLabel = colIndex === 0;
+              const value = cell?.trim() || "—";
+              return (
+                <View
+                  key={`td-${rowIndex}-${colIndex}`}
+                  role="cell"
+                  style={[
+                    styles.desktopTableCell,
+                    columnStyle(colIndex),
+                    isRowLabel && styles.desktopTableRowLabelCell,
+                    colIndex === colCount - 1 && styles.desktopTableCellLast,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.desktopTableCellText,
+                      isRowLabel && styles.desktopTableRowLabelText,
+                    ]}
+                  >
+                    {renderInlineMarkdown(
+                      value,
+                      isRowLabel ? desktopTableColors.rowLabel : desktopTableColors.text,
+                      isRowLabel,
+                    )}
+                  </Text>
+                </View>
+              );
+            })}
+          </View>
+        ))}
+      </View>
+    </ScrollView>
+  );
+}
+
 function AskPranaChatTable({ rows }: { rows: string[][] }) {
+  const isDesktop = useDesktopChatTable();
   const colCount = Math.max(1, ...rows.map((row) => row.length));
   const normalized = rows.map((row) => {
     const next = [...row];
@@ -276,7 +406,12 @@ function AskPranaChatTable({ rows }: { rows: string[][] }) {
         ? []
         : [];
 
-  // Prefer labeled cards whenever we have a header + body (mobile-friendly "table").
+  // Desktop: one compact table with the headers shown once.
+  if (isDesktop && headers.length >= 2 && bodyRows.length > 0) {
+    return <AskPranaDesktopChatTable headers={headers} bodyRows={bodyRows} />;
+  }
+
+  // Phones and tablets: labeled cards whenever we have a header + body.
   if (headers.length >= 2 && bodyRows.length > 0) {
     return (
       <View style={styles.tableCardStack}>
@@ -1469,6 +1604,61 @@ const styles = StyleSheet.create({
     fontSize: 11,
     lineHeight: 15,
     fontWeight: "500",
+  },
+  desktopTableScroll: {
+    marginVertical: 4,
+    width: "100%",
+    maxWidth: "100%",
+  },
+  desktopTable: {
+    borderWidth: 1,
+    borderColor: desktopTableColors.border,
+    borderRadius: 10,
+    overflow: "hidden",
+    backgroundColor: desktopTableColors.surface,
+  },
+  desktopTableRow: {
+    flexDirection: "row",
+    alignItems: "stretch",
+    borderBottomWidth: 1,
+    borderBottomColor: desktopTableColors.border,
+  },
+  desktopTableRowLast: {
+    borderBottomWidth: 0,
+  },
+  desktopTableHeaderRow: {
+    backgroundColor: desktopTableColors.headerBg,
+  },
+  desktopTableCell: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRightWidth: 1,
+    borderRightColor: desktopTableColors.border,
+    justifyContent: "flex-start",
+  },
+  desktopTableCellLast: {
+    borderRightWidth: 0,
+  },
+  desktopTableRowLabelCell: {
+    backgroundColor: desktopTableColors.rowLabelBg,
+  },
+  desktopTableHeaderText: {
+    color: desktopTableColors.header,
+    fontFamily: ASK_PRANA_FONT_FAMILY,
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: "600",
+  },
+  desktopTableCellText: {
+    color: desktopTableColors.text,
+    fontFamily: ASK_PRANA_FONT_FAMILY,
+    fontSize: 14,
+    lineHeight: 21,
+    fontWeight: "400",
+  },
+  desktopTableRowLabelText: {
+    color: desktopTableColors.rowLabel,
+    fontWeight: "600",
   },
   tableCardStack: {
     gap: 10,

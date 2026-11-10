@@ -1192,7 +1192,8 @@ export default function AskPranaScreen() {
               keyExtractor={(item) => item.id}
               contentContainerStyle={[
                 styles.chatContent,
-                voiceInline && styles.chatContentWithVoiceDock,
+                voiceInline && !isDesktop && styles.chatContentWithVoiceDock,
+                voiceInline && isDesktop && styles.chatContentDesktopVoice,
               ]}
               showsVerticalScrollIndicator={false}
               onScroll={readListScrollPosition}
@@ -2061,10 +2062,15 @@ const styles = StyleSheet.create({
     gap: 14,
     backgroundColor: colors.background,
   },
-  // The voice orb is positioned over the message column. Reserve its dock so
-  // the newest bubble never sits beneath the orb or its status label.
+  // Phones cover the conversation with the full-screen voice stage. The extra
+  // padding is unused there and is not applied on desktop.
   chatContentWithVoiceDock: {
     paddingBottom: 156,
+  },
+  // Desktop voice keeps the orb below this list, so the thread only needs a
+  // small gap before the dock.
+  chatContentDesktopVoice: {
+    paddingBottom: 20,
   },
   emptyChat: {
     flex: 1,

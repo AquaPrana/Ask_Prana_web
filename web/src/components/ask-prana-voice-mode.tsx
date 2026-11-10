@@ -1972,19 +1972,13 @@ export function AskPranaVoiceModeModal({
   if (!visible) return null;
 
   if (variant === "overlay") {
+    // Desktop only. The parent mounts this under the message list and above
+    // the composer. Questions and answers stay in the conversation stream.
+    const dockStatus = state === "processing" && !slowAnswer ? "Thinking…" : statusLabel;
     return (
-      <View pointerEvents="box-none" style={styles.overlayHost}>
+      <View style={styles.overlayHost}>
         {orb}
-        {statusLabel ? <Text style={styles.status}>{statusLabel}</Text> : null}
-        {userCaption ? (
-          <Text
-            style={styles.overlayTranscript}
-            numberOfLines={3}
-            accessibilityLabel={`You said: ${userCaption}`}
-          >
-            {userCaption}
-          </Text>
-        ) : null}
+        {dockStatus ? <Text style={styles.status}>{dockStatus}</Text> : null}
         {errorText ? <Text style={styles.errorHint}>{errorText}</Text> : null}
         {wakeLockNote ? <Text style={styles.wakeLockNote}>{wakeLockNote}</Text> : null}
         {state === "error" && retryQuestion ? (
@@ -2156,15 +2150,13 @@ const styles = StyleSheet.create({
       : {}),
   },
   overlayHost: {
-    position: "absolute",
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
     alignItems: "center",
-    justifyContent: "flex-end",
-    paddingBottom: 28,
-    zIndex: 5,
+    justifyContent: "center",
+    gap: 8,
+    paddingTop: 36,
+    paddingBottom: 10,
+    backgroundColor: "#171717",
+    overflow: "hidden",
   },
   overlayTranscript: {
     position: "absolute",
