@@ -277,7 +277,7 @@ function VoiceSkyOrb({
  * exposing a repeated geometric edge. The draw loop mutates only the canvas,
  * never React state, and is released as soon as Voice Mode unmounts.
  */
-function VoiceOrb({
+export function VoiceOrb({
   size,
   state,
   audioLevel,

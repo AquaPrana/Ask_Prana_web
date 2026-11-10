@@ -48,6 +48,7 @@ import { AskPranaChatSidebar } from "../components/ask-prana-chat-sidebar";
 import { AskPranaLogo } from "../components/ask-prana-logo";
 import { AskPranaRecordingWaveform } from "../components/ask-prana-recording-waveform";
 import { AskPranaVoiceModeModal } from "../components/ask-prana-voice-mode";
+import { AskPranaRealtimeVoice } from "../components/ask-prana-realtime-voice";
 import { AskPranaVoiceWaveformIcon } from "../components/ask-prana-voice-waveform-icon";
 import { useAskPranaChat, type ChatMessage } from "../context/ask-prana-chat-context";
 import {
@@ -66,6 +67,12 @@ import {
   selectAskPranaLanguageWhenReady,
   useAskPranaDisplayTranslation,
 } from "../lib/ask-prana-display-translation";
+/**
+ * Voice Chat engine. "realtime" uses the OpenAI Realtime voice chat
+ * (gpt-realtime-2.1-mini); anything else keeps the classic Voice Chat.
+ */
+const REALTIME_VOICE_ENABLED = import.meta.env.EXPO_PUBLIC_VOICE_ENGINE === "realtime";
+
 const colors = {
   primary: "#16A34A",
   primaryDark: "#15803D",
@@ -330,6 +337,8 @@ export default function AskPranaScreen() {
     editAndResendUserMessage,
     askFromVoiceMode,
     prepareVoiceModeSession,
+    recordRealtimeVoiceMessage,
+    getRecentVoiceHistory,
     sendImageAttachment,
     sendDocumentAttachment,
     startAudioRecording,
@@ -1279,7 +1288,23 @@ export default function AskPranaScreen() {
             ) : null}
             </>
           )}
-          {voiceInline ? (
+          {voiceInline && REALTIME_VOICE_ENABLED ? (
+            <AskPranaRealtimeVoice
+              visible={voiceModeOpen}
+              variant={isDesktop ? "overlay" : "screen"}
+              draft={draft}
+              onChangeDraft={setDraft}
+              onClose={() => {
+                setVoiceModeOpen(false);
+                setVoiceMuted(false);
+              }}
+              getHistory={getRecentVoiceHistory}
+              onUserText={(text) => recordRealtimeVoiceMessage("user", text)}
+              onAssistantText={(text) => recordRealtimeVoiceMessage("assistant", text)}
+              onMutedChange={setVoiceMuted}
+              onRegisterActions={registerVoiceActions}
+            />
+          ) : voiceInline ? (
             <AskPranaVoiceModeModal
               visible={voiceModeOpen}
                 variant={isDesktop ? "overlay" : "screen"}

@@ -17,3 +17,6 @@ verify_jwt = false
 
 [functions.google-auth]
 verify_jwt = false
+
+[functions.ask-prana-voice-session]
+verify_jwt = false

@@ -740,6 +740,13 @@ type AskPranaChatContextValue = {
   } | null>;
   /** Call when opening voice mode so the first turn starts a fresh shared session. */
   prepareVoiceModeSession: () => void;
+  /**
+   * Realtime voice chat: adds one spoken (or typed) line to this chat and
+   * saves it in the background. Lines arrive in conversation order.
+   */
+  recordRealtimeVoiceMessage: (role: "user" | "assistant", text: string) => void;
+  /** Recent chat turns as plain text, for the realtime voice model's context. */
+  getRecentVoiceHistory: () => { role: "user" | "assistant"; text: string }[];
   /** `source` opens the camera or gallery directly instead of asking first. */
   sendImageAttachment: (
     requestContext?: AskPranaRequestContext,
@@ -2769,6 +2776,62 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
     console.log("[AskPranaVoice] prepareVoiceModeSession");
   }, [ensureSession]);
 
+  const realtimeVoiceLastAtRef = useRef(0);
+  const recordRealtimeVoiceMessage = useCallback(
+    (role: "user" | "assistant", text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed) return;
+      const context = resolveContext();
+      // Strictly increasing timestamps keep the saved order identical to the
+      // spoken order, even for two lines in the same millisecond.
+      const at = Math.max(Date.now(), realtimeVoiceLastAtRef.current + 1);
+      realtimeVoiceLastAtRef.current = at;
+      const message: ChatMessage = {
+        id: `${role}-realtime-${at}-${Math.random().toString(36).slice(2, 7)}`,
+        role,
+        text: trimmed,
+        messageType: "text",
+        createdAt: new Date(at).toISOString(),
+        preserveSpokenLanguage: true,
+        ...(role === "user"
+          ? { pondName: context.useGeneric ? GENERIC_ASSISTANT_LABEL : selectedPondName ?? undefined }
+          : {}),
+      };
+      setMessages((current) => {
+        const next = [...current, message];
+        messagesRef.current = next;
+        return next;
+      });
+      if (role === "user") setVoiceLiveTranscript("");
+      const sessionPromise = ensureSession();
+      enqueuePersist(async () => {
+        try {
+          const activeSessionId = await sessionPromise;
+          const saved = await persistMessage(message, context.pondId, activeSessionId);
+          setMessages((current) => {
+            if (!current.some((item) => item.id === message.id)) return current;
+            const next = current.map((item) => (item.id === message.id ? saved : item));
+            messagesRef.current = next;
+            return next;
+          });
+        } catch (persistError) {
+          console.log("[AskPranaRealtime] voice message persistence failed:", persistError);
+        }
+      });
+    },
+    [ensureSession, enqueuePersist, persistMessage, resolveContext, selectedPondName],
+  );
+
+  const getRecentVoiceHistory = useCallback(
+    () =>
+      messagesRef.current
+        .filter((message) => message.id !== "welcome")
+        .slice(-8)
+        .map((message) => ({ role: message.role, text: historyTextForMessage(message) }))
+        .filter((item) => item.text.trim()),
+    [],
+  );
+
   const sendUploadedAttachment = useCallback(
     async (
       messageType: Exclude<ChatMessageType, "text">,
@@ -3819,6 +3882,8 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       editAndResendUserMessage,
       askFromVoiceMode,
       prepareVoiceModeSession,
+      recordRealtimeVoiceMessage,
+      getRecentVoiceHistory,
       sendImageAttachment,
       sendDocumentAttachment,
       startAudioRecording,
@@ -3873,6 +3938,8 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       editAndResendUserMessage,
       askFromVoiceMode,
       prepareVoiceModeSession,
+      recordRealtimeVoiceMessage,
+      getRecentVoiceHistory,
       sendImageAttachment,
       sendDocumentAttachment,
       startAudioRecording,
