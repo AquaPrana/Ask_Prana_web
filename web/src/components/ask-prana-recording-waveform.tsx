@@ -16,6 +16,8 @@ type Props = {
   activeColor: string;
   /** Only enable for capture paths that do not already own a MediaStream. */
   useBrowserAnalyser?: boolean;
+  /** Stop sampling and keep the captured bars on screen (while transcribing). */
+  frozen?: boolean;
 };
 
 /**
@@ -27,6 +29,7 @@ export function AskPranaRecordingWaveform({
   quietColor,
   activeColor,
   useBrowserAnalyser = false,
+  frozen = false,
 }: Props) {
   const [width, setWidth] = useState(0);
   const [samples, setSamples] = useState<number[]>([]);
@@ -102,6 +105,7 @@ export function AskPranaRecordingWaveform({
   }, [useBrowserAnalyser]);
 
   useEffect(() => {
+    if (frozen) return;
     const id = setInterval(() => {
       const value = webLevelRef.current ?? levelRef.current;
       setSamples((current) => {
@@ -111,7 +115,7 @@ export function AskPranaRecordingWaveform({
       });
     }, SAMPLE_INTERVAL_MS);
     return () => clearInterval(id);
-  }, []);
+  }, [frozen]);
 
   const barCount = Math.max(0, Math.floor((width + BAR_GAP) / BAR_STEP));
   const visible = samples.slice(-barCount);

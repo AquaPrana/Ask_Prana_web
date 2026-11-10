@@ -1372,7 +1372,9 @@ export default function AskPranaScreen() {
               <Text style={styles.attachmentError}>{attachmentError}</Text>
             ) : null}
 
-            {isRecording && !voiceModeOpen ? (
+            {(isRecording || isTranscribing) && !voiceModeOpen ? (
+            // Dictation pill. After Stop it stays on screen with the captured
+            // waveform and a spinner until the words land in the box.
             <View style={styles.inputRow}>
               <View style={[styles.inputShell, styles.inputShellDesktop, styles.recordingShell]}>
                 <Pressable
@@ -1387,30 +1389,43 @@ export default function AskPranaScreen() {
                   <Feather name="x" size={18} color={colors.white} />
                 </Pressable>
                 <AskPranaRecordingWaveform
-                  level={voiceAudioLevel}
+                  level={isRecording ? voiceAudioLevel : 0}
                   quietColor="rgba(255,255,255,0.35)"
                   activeColor={colors.white}
+                  frozen={!isRecording}
                 />
-                <Text style={styles.recordingTimer}>{recordingTimerLabel}</Text>
-                <Pressable
-                  onPress={handleStopDictation}
-                  style={({ pressed }) => [
-                    styles.recordingCircleButton,
-                    styles.recordingStopCircle,
-                    pressed && styles.pressed,
-                  ]}
-                  accessibilityRole="button"
-                  accessibilityLabel={t("askPrana.stopRecording")}
-                >
-                  <View style={styles.recordingStopSquare} />
-                </Pressable>
+                {isRecording ? (
+                  <>
+                    <Text style={styles.recordingTimer}>{recordingTimerLabel}</Text>
+                    <Pressable
+                      onPress={handleStopDictation}
+                      style={({ pressed }) => [
+                        styles.recordingCircleButton,
+                        styles.recordingStopCircle,
+                        pressed && styles.pressed,
+                      ]}
+                      accessibilityRole="button"
+                      accessibilityLabel={t("askPrana.stopRecording")}
+                    >
+                      <View style={styles.recordingStopSquare} />
+                    </Pressable>
+                  </>
+                ) : (
+                  <View
+                    style={styles.recordingCircleButton}
+                    accessibilityRole="progressbar"
+                    accessibilityLabel={t("askPrana.transcribingHint")}
+                  >
+                    <ActivityIndicator size="small" color={colors.white} />
+                  </View>
+                )}
                 <Pressable
                   onPress={() => { void handleSendDictation(); }}
-                  disabled={isSending}
+                  disabled={isSending || !isRecording}
                   style={({ pressed }) => [
                     styles.sendButton,
                     styles.recordingSendButton,
-                    isSending && styles.sendButtonDisabled,
+                    (isSending || !isRecording) && styles.sendButtonDisabled,
                     pressed && styles.pressed,
                   ]}
                   accessibilityRole="button"
@@ -1725,9 +1740,12 @@ export default function AskPranaScreen() {
               ) : null}
 
             {isTranscribing ? (
-              <Text style={styles.recordingHint}>
-                {t("askPrana.transcribingHint")}
-              </Text>
+              // Composer dictation shows its loading state in the pill above.
+              voiceModeOpen ? (
+                <Text style={styles.recordingHint}>
+                  {t("askPrana.transcribingHint")}
+                </Text>
+              ) : null
             ) : hasFailedRecording && !isRecording && !voiceInline ? (
               <View style={styles.failedRecordingRow}>
                 <Text style={styles.failedRecordingText}>
