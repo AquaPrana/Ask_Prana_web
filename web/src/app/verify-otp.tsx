@@ -4,6 +4,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   StatusBar,
   StyleSheet,
   Text,
@@ -21,16 +22,15 @@ import { saveFarmerProfile } from "../services/local-profile";
 import { useProfile } from "../context/profile-context";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
-import {
-  AUTH_DARK_BACKGROUND,
-  PhoneLoginBackground,
-} from "../components/phone-login-background";
+import Feather from "@expo/vector-icons/Feather";
+import { PranaHeader, PranaHeaderButton } from "../components/prana-header";
+import { PRANA_FONT, prana, pranaGradientStyle } from "../constants/prana-theme";
 
 const colors = {
   // Dark Ask Prana theme — matches the phone login screen.
   teal: "#2DD4BF",
   tealDark: "#0B5F59",
-  background: AUTH_DARK_BACKGROUND,
+  background: prana.cream,
   text: "#F5F5F5",
   white: "#FFFFFF",
   mutedText: "#C9D1D0",
@@ -251,292 +251,249 @@ export default function VerifyOtpScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [otp]);
 
+  const isDesktop = windowWidth >= 1024;
+  const goBack = () => {
+    // Login opens this screen with replace, so there is often
+    // no history entry; go to login to change the number.
+    if (router.canGoBack()) router.back();
+    else router.replace("/phone-login" as never);
+  };
+
+  const form = (
+    <>
+      <Text style={styles.eyebrow}>SECURE VERIFICATION</Text>
+      <Text style={styles.heading} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>
+        Enter 6-digit OTP
+      </Text>
+      <Text style={styles.sentTo}>Enter the code sent to your mobile number.</Text>
+      <View style={styles.phoneLine}>
+        <Text style={styles.phoneText}>{phoneDisplay}</Text>
+        <Pressable onPress={goBack} accessibilityRole="button" accessibilityLabel="Change mobile number" hitSlop={8}>
+          <Text style={styles.changeLink}>Change</Text>
+        </Pressable>
+      </View>
+
+      <Pressable
+        onPress={focusOtpInput}
+        style={styles.otpRowWrap}
+        accessibilityRole="button"
+        accessibilityLabel="OTP verification code"
+      >
+        <View style={styles.otpRow} pointerEvents="none">
+          {Array.from({ length: 6 }).map((_, index) => {
+            const digit = otp[index] ?? "";
+            const isFilled = digit.length > 0;
+            const isActive = index === otp.length && otp.length < 6;
+            return (
+              <View
+                key={index}
+                style={[styles.otpBox, (isFilled || isActive) && styles.otpBoxFilled]}
+              >
+                <Text style={styles.otpDigit}>{digit}</Text>
+              </View>
+            );
+          })}
+        </View>
+
+        <TextInput
+          ref={otpInputRef}
+          value={otp}
+          onChangeText={handleOtpChange}
+          autoFocus
+          showSoftInputOnFocus
+          keyboardType="number-pad"
+          inputMode="numeric"
+          maxLength={6}
+          style={styles.otpOverlayInput}
+          textContentType="oneTimeCode"
+          autoComplete="sms-otp"
+          importantForAutofill="yes"
+          returnKeyType="done"
+          onSubmitEditing={handleVerifyOtp}
+          accessibilityLabel="OTP verification code"
+          caretHidden
+          contextMenuHidden={false}
+          pointerEvents="none"
+        />
+      </Pressable>
+
+      <View style={styles.expiryRow}>
+        <Feather name="clock" size={12} color={prana.muted} />
+        <Text style={styles.expiryText}>Code expires in 5 minutes</Text>
+      </View>
+
+      <Pressable
+        onPress={() => void handleVerifyOtp()}
+        disabled={!isOtpValid || isVerifying}
+        style={[styles.verifyButton, pranaGradientStyle, (!isOtpValid || isVerifying) && styles.verifyButtonDisabled]}
+        accessibilityRole="button"
+      >
+        {isVerifying ? (
+          <>
+            <ActivityIndicator color="#FFFFFF" />
+            <Text style={styles.verifyText}>Verifying…</Text>
+          </>
+        ) : (
+          <>
+            <Text style={styles.verifyText}>Verify & continue</Text>
+            <Feather name="arrow-right" size={18} color="#FFFFFF" />
+          </>
+        )}
+      </Pressable>
+
+      <View style={styles.resendContainer}>
+        <Text style={styles.resendLine}>
+          <Text style={styles.resendPrompt}>Didn't receive it?{"  "}</Text>
+          <Text
+            onPress={isResendDisabled ? undefined : handleResendOtp}
+            style={[styles.resendAction, isResendDisabled && styles.resendActionDisabled]}
+            accessibilityRole="button"
+            accessibilityState={{ disabled: isResendDisabled }}
+          >
+            {isResending
+              ? "Sending…"
+              : isResendDisabled
+              ? `Resend in ${resendSeconds}s`
+              : "Resend OTP"}
+          </Text>
+        </Text>
+      </View>
+
+      <Pressable onPress={goBack} style={styles.backLinkWrap} accessibilityRole="button">
+        <Feather name="arrow-left" size={13} color="#217C73" />
+        <Text style={styles.backLink}>Back to mobile number</Text>
+      </Pressable>
+    </>
+  );
+
   return (
     <View style={styles.root}>
-      <StatusBar barStyle="light-content" backgroundColor={colors.background} />
-
-      <PhoneLoginBackground appearance="dark">
-        <KeyboardAvoidingView
-          style={styles.keyboardView}
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
-        >
-          <SafeAreaView style={styles.safeArea} edges={["top", "bottom"]}>
-            <View style={styles.page}>
-              <View style={styles.headerArea}>
-                <View style={styles.headerRow}>
-                  <Pressable
-                    onPress={() => {
-                      // Login opens this screen with replace, so there is often
-                      // no history entry; go to login to change the number.
-                      if (router.canGoBack()) router.back();
-                      else router.replace("/phone-login" as never);
-                    }}
-                    style={styles.backButton}
-                    accessibilityRole="button"
-                    accessibilityLabel="Go back"
-                    hitSlop={8}
-                  >
-                    <Text style={styles.backArrow}>←</Text>
-                  </Pressable>
-
-                  <Text style={styles.headerTitle} pointerEvents="none">
-                    Verify OTP
-                  </Text>
-
-                  <View style={styles.headerSide} />
-                </View>
-              </View>
-
-              <View style={styles.contentArea}>
-                <View style={styles.content}>
-                  <Text style={styles.eyebrow}>SECURE VERIFICATION</Text>
-                  <Text
-                    style={[
-                      styles.heading,
-                      {
-                        fontSize: titleSize,
-                        lineHeight: Math.round(titleSize * 1.15),
-                      },
-                    ]}
-                    numberOfLines={1}
-                    adjustsFontSizeToFit
-                    minimumFontScale={0.85}
-                  >
-                    Enter 6-digit OTP
-                  </Text>
-                  <Text style={styles.sentTo}>
-                    Enter the OTP sent to your mobile number {phoneDisplay}
-                  </Text>
-
-                  <Pressable
-                    onPress={focusOtpInput}
-                    style={styles.otpRowWrap}
-                    accessibilityRole="button"
-                    accessibilityLabel="OTP verification code"
-                  >
-                    <View
-                      style={[styles.otpRow, { gap: otpGap }]}
-                      pointerEvents="none"
-                    >
-                      {Array.from({ length: 6 }).map((_, index) => {
-                        const digit = otp[index] ?? "";
-                        const isFilled = digit.length > 0;
-                        const isActive =
-                          index === otp.length && otp.length < 6;
-
-                        return (
-                          <View
-                            key={index}
-                            style={[
-                              styles.otpBox,
-                              {
-                                width: otpBoxSize,
-                                height: otpBoxSize,
-                              },
-                              (isFilled || isActive) && styles.otpBoxFilled,
-                            ]}
-                          >
-                            <Text style={styles.otpDigit}>{digit}</Text>
-                          </View>
-                        );
-                      })}
-                    </View>
-
-                    <TextInput
-                      ref={otpInputRef}
-                      value={otp}
-                      onChangeText={handleOtpChange}
-                      autoFocus
-                      showSoftInputOnFocus
-                      keyboardType="number-pad"
-                      inputMode="numeric"
-                      maxLength={6}
-                      style={styles.otpOverlayInput}
-                      textContentType="oneTimeCode"
-                      autoComplete="sms-otp"
-                      importantForAutofill="yes"
-                      returnKeyType="done"
-                      onSubmitEditing={handleVerifyOtp}
-                      accessibilityLabel="OTP verification code"
-                      caretHidden
-                      contextMenuHidden={false}
-                      pointerEvents="none"
-                    />
-                  </Pressable>
-
-                  <Text style={styles.expiryText}>
-                    OTP expires in 5 minutes
-                  </Text>
-
-                  {isVerifying ? (
-                    <View style={styles.verifyingRow}>
-                      <ActivityIndicator color={colors.teal} />
-                      <Text style={styles.verifyingText}>Verifying…</Text>
-                    </View>
-                  ) : null}
-
-                  <View style={styles.resendContainer}>
-                    <Text style={styles.resendLine}>
-                      <Text style={styles.resendPrompt}>
-                        Didn't receive it?{" "}
-                      </Text>
-                      <Text
-                        onPress={
-                          isResendDisabled ? undefined : handleResendOtp
-                        }
-                        style={[
-                          styles.resendAction,
-                          isResendDisabled && styles.resendActionDisabled,
-                        ]}
-                        accessibilityRole="button"
-                        accessibilityState={{ disabled: isResendDisabled }}
-                      >
-                        {isResending
-                          ? "Sending…"
-                          : isResendDisabled
-                          ? `Resend OTP in ${resendSeconds}s`
-                          : "Resend OTP"}
-                      </Text>
-                    </Text>
-                  </View>
-                </View>
-              </View>
-            </View>
-          </SafeAreaView>
-        </KeyboardAvoidingView>
-      </PhoneLoginBackground>
+      <StatusBar
+        barStyle={isDesktop ? "dark-content" : "light-content"}
+        backgroundColor={isDesktop ? prana.desktopHeader : prana.headerDark}
+      />
+      {isDesktop ? (
+        <PranaHeader
+          variant="light"
+          left={<PranaHeaderButton icon="arrow-left" tone="light" onPress={goBack} label="Go back" />}
+        />
+      ) : (
+        <PranaHeader
+          variant="wave"
+          left={<PranaHeaderButton icon="arrow-left" onPress={goBack} label="Go back" />}
+          right={<View style={{ width: 42 }} />}
+        />
+      )}
+      <KeyboardAvoidingView
+        style={styles.keyboardView}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+      >
+        <SafeAreaView style={styles.safeArea} edges={["bottom"]}>
+          <ScrollView
+            contentContainerStyle={[styles.scrollContent, isDesktop && styles.scrollContentDesktop]}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            <View style={[styles.content, isDesktop && styles.card]}>{form}</View>
+          </ScrollView>
+        </SafeAreaView>
+      </KeyboardAvoidingView>
     </View>
   );
 }
 
+const F = PRANA_FONT;
+
 const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-    backgroundColor: colors.background,
-    overflow: "hidden",
+  root: { flex: 1, backgroundColor: prana.cream, overflow: "hidden" },
+  keyboardView: { flex: 1, overflow: "hidden" },
+  safeArea: { flex: 1, backgroundColor: "transparent" },
+  scrollContent: { flexGrow: 1, paddingHorizontal: 24, paddingTop: 14, paddingBottom: 28 },
+  scrollContentDesktop: { alignItems: "center", justifyContent: "center", paddingVertical: 40 },
+  content: { width: "100%", maxWidth: 540 },
+  card: {
+    maxWidth: 440,
+    paddingHorizontal: 32,
+    paddingVertical: 30,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: prana.line,
+    backgroundColor: prana.cream,
+    shadowColor: "#1D4B36",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.08,
+    shadowRadius: 30,
   },
-  keyboardView: {
-    flex: 1,
-    overflow: "hidden",
+  eyebrow: {
+    color: prana.tealText,
+    fontFamily: F,
+    fontSize: 10,
+    lineHeight: 13,
+    fontWeight: "800",
+    letterSpacing: 1.1,
+    marginBottom: 8,
   },
-  safeArea: {
-    flex: 1,
-    backgroundColor: "transparent",
-    overflow: "hidden",
+  heading: {
+    color: prana.ink,
+    fontFamily: F,
+    fontSize: 29,
+    lineHeight: 34,
+    fontWeight: "800",
+    marginBottom: 12,
   },
-  page: {
-    flex: 1,
-    overflow: "hidden",
+  sentTo: {
+    color: prana.muted,
+    fontFamily: F,
+    fontSize: 13,
+    lineHeight: 21,
+    marginBottom: 27,
   },
-  headerArea: {
-    height: 60,
-    justifyContent: "center",
-  },
-  headerRow: {
-    height: 44,
-    paddingHorizontal: 20,
+  phoneLine: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    gap: 4,
+    marginTop: -8,
+    marginBottom: 20,
   },
-  headerSide: {
-    width: 40,
-    height: 40,
-  },
-  backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: colors.card,
-    borderWidth: 1,
-    borderColor: colors.borderEmpty,
-    alignItems: "center",
-    justifyContent: "center",
-    zIndex: 2,
-    shadowColor: colors.shadow,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.12,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  backArrow: {
-    color: colors.text,
-    fontSize: 20,
-    fontWeight: "700",
-    lineHeight: 22,
-    marginTop: -1,
-  },
-  headerTitle: {
-    ...StyleSheet.absoluteFill,
-    textAlign: "center",
-    textAlignVertical: "center",
-    color: colors.text,
-    fontSize: 22,
-    fontWeight: "700",
-    lineHeight: 44,
-  },
-  contentArea: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 20,
-    paddingVertical: 28,
-  },
-  content: {
-    width: "100%",
-    maxWidth: 540,
-  },
-  eyebrow: {
-    color: colors.teal,
-    fontSize: 14,
-    lineHeight: 18,
+  phoneText: {
+    flexShrink: 1,
+    color: prana.ink,
+    fontFamily: F,
+    fontSize: 15,
+    lineHeight: 20,
     fontWeight: "800",
-    letterSpacing: 1.2,
-    textTransform: "uppercase",
-    marginBottom: 18,
-    textAlign: "center",
+    letterSpacing: 0.4,
   },
-  heading: {
-    color: colors.text,
-    fontWeight: "800",
-    marginBottom: 16,
-    textAlign: "center",
+  changeLink: {
+    color: "#217C73",
+    fontFamily: F,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: "700",
+    paddingVertical: 12,
+    paddingHorizontal: 4,
   },
-  sentTo: {
-    color: colors.mutedText,
-    fontSize: 17,
-    lineHeight: 24,
-    fontWeight: "600",
-    marginBottom: 40,
-    textAlign: "center",
-  },
-  otpRowWrap: {
-    position: "relative",
-    marginBottom: 40,
-  },
-  otpRow: {
-    flexDirection: "row",
-    justifyContent: "center",
-    alignItems: "center",
-  },
+  otpRowWrap: { position: "relative", marginTop: 14, marginBottom: 15 },
+  otpRow: { flexDirection: "row", gap: 7 },
   otpBox: {
-    borderRadius: 13,
+    flex: 1,
+    minWidth: 0,
+    height: 53,
+    borderRadius: 11,
     borderWidth: 1.5,
-    borderColor: colors.borderEmpty,
-    backgroundColor: colors.otpEmptyFill,
+    borderColor: "#C4D0BE",
+    backgroundColor: prana.card,
     alignItems: "center",
     justifyContent: "center",
   },
-  otpBoxFilled: {
-    borderColor: colors.teal,
-    borderWidth: 2,
-    backgroundColor: colors.otpFilledFill,
-  },
+  otpBoxFilled: { borderColor: prana.teal },
   otpDigit: {
-    color: colors.text,
-    fontSize: 30,
+    color: prana.ink,
+    fontFamily: F,
+    fontSize: 23,
+    lineHeight: 28,
     fontWeight: "800",
-    lineHeight: 34,
   },
   otpOverlayInput: {
     ...StyleSheet.absoluteFill,
@@ -554,44 +511,36 @@ const styles = StyleSheet.create({
         } as object)
       : null),
   },
-  expiryText: {
-    color: colors.mutedSoft,
-    fontSize: 15,
-    lineHeight: 20,
-    fontWeight: "600",
-    textAlign: "center",
-  },
-  verifyingRow: {
-    marginTop: 16,
+  expiryRow: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 24 },
+  expiryText: { color: prana.muted, fontFamily: F, fontSize: 11, lineHeight: 15 },
+  verifyButton: {
+    minHeight: 54,
+    borderRadius: 12,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 10,
+    shadowColor: "#24665A",
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.1,
+    shadowRadius: 14,
   },
-  verifyingText: {
-    color: colors.teal,
-    fontSize: 14,
-    fontWeight: "700",
-  },
-  resendContainer: {
-    marginTop: 48,
+  verifyButtonDisabled: { opacity: 0.48 },
+  verifyText: { color: "#FFFFFF", fontFamily: F, fontSize: 14, lineHeight: 20, fontWeight: "800" },
+  resendContainer: { marginTop: 12, marginBottom: 13, alignItems: "center" },
+  resendLine: { textAlign: "center", fontFamily: F, fontSize: 11, lineHeight: 16 },
+  resendPrompt: { color: prana.muted },
+  resendAction: { color: "#217C73", fontWeight: "700" },
+  resendActionDisabled: { color: "#7FA79B", fontWeight: "600" },
+  backLinkWrap: {
+    flexDirection: "row",
     alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+    minHeight: 44,
+    paddingBottom: 18,
+    borderBottomWidth: 1,
+    borderBottomColor: prana.line,
   },
-  resendLine: {
-    textAlign: "center",
-    fontSize: 16,
-    lineHeight: 22,
-  },
-  resendPrompt: {
-    color: colors.mutedText,
-    fontWeight: "600",
-  },
-  resendAction: {
-    color: colors.teal,
-    fontWeight: "800",
-  },
-  resendActionDisabled: {
-    color: colors.mutedSoft,
-    fontWeight: "700",
-  },
+  backLink: { color: "#217C73", fontFamily: F, fontSize: 12, lineHeight: 16, fontWeight: "700" },
 });

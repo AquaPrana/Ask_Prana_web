@@ -8,11 +8,15 @@ import {
 import { sendOTP } from "../services/auth";
 import { finishGoogleSignIn, startGoogleSignIn, takeGoogleReturn } from "../services/google-sign-in";
 import { isValidEmail, normalizeEmail, sendEmailLoginCode } from "../services/profile";
-import {
-  AUTH_DARK_BACKGROUND,
-} from "../components/phone-login-background";
 import { AskPranaLogo } from "../components/ask-prana-logo";
 import { AskPranaVoiceWaveformIcon } from "../components/ask-prana-voice-waveform-icon";
+import {
+  PranaBrand,
+  PranaHeader,
+  PranaHeaderButton,
+  PranaHeaderLogin,
+} from "../components/prana-header";
+import { PRANA_FONT, prana, pranaGradientStyle } from "../constants/prana-theme";
 import { PRIMARY_CTA_START } from "../constants/primary-cta";
 import Feather from "@expo/vector-icons/Feather";
 
@@ -33,24 +37,24 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Svg, { Path } from "react-native-svg";
 
-// Dark Ask Prana theme with teal accents taken from the logo.
+// AskPrana cream / teal theme.
 const colors = {
-  primary: "#2DD4BF",
-  primaryDark: "#0B5F59",
-  primaryBright: "#5EEAD4",
-  background: AUTH_DARK_BACKGROUND,
+  primary: prana.teal,
+  primaryDark: prana.tealDeep,
+  primaryBright: prana.teal,
+  background: prana.cream,
   white: "#FFFFFF",
-  text: "#F5F5F5",
-  textSoft: "#C9D1D0",
-  muted: "#A0A0A0",
-  border: "#363636",
-  inputBg: "#212121",
-  placeholder: "#6F7777",
-  error: "#F87171",
-  ctaDisabled: "#26302F",
-  ctaDisabledText: "#7C8886",
+  text: prana.ink,
+  textSoft: prana.muted,
+  muted: "#8A9985",
+  border: prana.inputBorder,
+  inputBg: prana.card,
+  placeholder: "#8A9B8B",
+  error: prana.error,
+  ctaDisabled: "#9FC0B6",
+  ctaDisabledText: "#FFFFFF",
   ctaGradientStart: PRIMARY_CTA_START,
-  shadow: "#000000",
+  shadow: "#1D4B36",
 };
 
 const fonts = {
@@ -85,7 +89,7 @@ function GoogleMark() {
 function AppleMark() {
   return (
     <Svg width={18} height={18} viewBox="0 0 24 24">
-      <Path fill="#FFFFFF" d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zm4.961-3.066c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701z" />
+      <Path fill="#245B4E" d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zm4.961-3.066c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701z" />
     </Svg>
   );
 }
@@ -95,8 +99,8 @@ function PhoneMark() {
     <Svg width={18} height={18} viewBox="0 0 24 24">
       <Path
         fill="none"
-        stroke="#FFFFFF"
-        strokeWidth={2}
+        stroke="#245B4E"
+        strokeWidth={1.6}
         strokeLinecap="round"
         strokeLinejoin="round"
         d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"
@@ -272,177 +276,265 @@ export default function PhoneLoginScreen() {
     );
   }
 
+  const loginForm = (
+    <>
+      <Text style={styles.kicker}>WELCOME TO ASKPRANA</Text>
+      <Text style={styles.authTitle}>Log in or sign up</Text>
+      <Text style={styles.authSubtitle}>Choose how you'd like to continue.</Text>
+      {phoneStep ? (
+        <View style={styles.inputGroup}>
+          <Text style={styles.label}>Mobile number</Text>
+          <View style={[styles.inputContainer, inputFocused && styles.inputContainerFocused, errorMessage ? styles.inputContainerError : null]}>
+            <TextInput
+              value={phoneInput}
+              onChangeText={(value) => {
+                setPhoneInput(value);
+                if (errorMessage) setErrorMessage(null);
+              }}
+              editable={!isSendingOtp}
+              placeholder="10-digit mobile number"
+              placeholderTextColor={colors.placeholder}
+              keyboardType="phone-pad"
+              style={styles.input}
+              onFocus={() => setInputFocused(true)}
+              onBlur={() => setInputFocused(false)}
+              onSubmitEditing={() => void handleSendOtp(phoneInput, "phone")}
+              accessibilityLabel="Mobile number"
+            />
+          </View>
+        </View>
+      ) : (
+        <>
+          <View style={styles.providerList}>
+            <Pressable onPress={() => void handleGoogle()} disabled={googleBusy} style={({ pressed }) => [styles.providerButton, pressed && styles.pressed]} accessibilityRole="button">
+              <View style={styles.providerIcon}><GoogleMark /></View>
+              <Text style={styles.providerText}>{googleBusy ? "Opening Google..." : "Continue with Google"}</Text>
+            </Pressable>
+            {googleNotice ? <Text style={styles.googleNotice}>{googleNotice}</Text> : null}
+            <Pressable style={({ pressed }) => [styles.providerButton, pressed && styles.pressed]} accessibilityRole="button">
+              <View style={styles.providerIcon}><AppleMark /></View>
+              <Text style={styles.providerText}>Continue with Apple</Text>
+            </Pressable>
+            <Pressable
+              onPress={() => {
+                setErrorMessage(null);
+                setPhoneStep(true);
+              }}
+              style={({ pressed }) => [styles.providerButton, pressed && styles.pressed]}
+              accessibilityRole="button"
+            >
+              <View style={styles.providerIcon}><PhoneMark /></View>
+              <Text style={styles.providerText}>Continue with phone</Text>
+            </Pressable>
+          </View>
+          <View style={styles.orRow}>
+            <View style={styles.orLine} />
+            <Text style={styles.orDivider}>OR</Text>
+            <View style={styles.orLine} />
+          </View>
+          <Text style={styles.label}>Email address</Text>
+          <View style={[styles.inputContainer, inputFocused && styles.inputContainerFocused, errorMessage ? styles.inputContainerError : null]}>
+            <TextInput
+              value={identifierInput}
+              onChangeText={(value) => {
+                setIdentifierInput(value);
+                if (errorMessage) setErrorMessage(null);
+              }}
+              editable={!isSendingOtp}
+              placeholder="Email address"
+              placeholderTextColor={colors.placeholder}
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoCorrect={false}
+              autoComplete="email"
+              style={styles.input}
+              onFocus={() => setInputFocused(true)}
+              onBlur={() => setInputFocused(false)}
+              onSubmitEditing={() => void handleSendOtp(identifierInput, "email")}
+              accessibilityLabel="Email address"
+            />
+          </View>
+        </>
+      )}
+      {errorMessage ? (
+        <Text style={styles.errorText} accessibilityLiveRegion="polite">{errorMessage}</Text>
+      ) : null}
+      <Pressable
+        onPress={() => void handleSendOtp(phoneStep ? phoneInput : identifierInput, phoneStep ? "phone" : "email")}
+        disabled={phoneStep ? !canSendPhone : !canSendEmail}
+        style={[styles.continueButton, pranaGradientStyle, (phoneStep ? !canSendPhone : !canSendEmail) && styles.continueDisabled]}
+        accessibilityRole="button"
+      >
+        {isSendingOtp ? (
+          <ActivityIndicator color="#FFFFFF" />
+        ) : (
+          <>
+            <Text style={styles.continueText}>Continue</Text>
+            <Feather name="arrow-right" size={18} color="#FFFFFF" />
+          </>
+        )}
+      </Pressable>
+      {phoneStep ? (
+        <Pressable onPress={() => { setPhoneStep(false); setErrorMessage(null); }} accessibilityRole="button" style={styles.backLinkWrap}>
+          <Feather name="arrow-left" size={13} color="#217C73" />
+          <Text style={styles.backLink}>Back</Text>
+        </Pressable>
+      ) : null}
+    </>
+  );
+
+  const closeButton = (
+    <Pressable
+      onPress={() => setPanelOpen(false)}
+      style={styles.closeButton}
+      accessibilityRole="button"
+      accessibilityLabel="Close"
+    >
+      <Feather name="x" size={17} color="#52806B" />
+    </Pressable>
+  );
+
+  // Phones: the login form is its own page under the wave header.
+  if (panelOpen && !isDesktop) {
+    return (
+      <View style={styles.root}>
+        <StatusBar barStyle="light-content" backgroundColor={prana.headerDark} />
+        <PranaHeader
+          variant="wave"
+          left={<PranaHeaderButton icon="message-square" onPress={() => setPanelOpen(false)} label="Back to chat" />}
+          right={<View style={{ width: 42 }} />}
+        />
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+          <ScrollView
+            contentContainerStyle={[styles.mobileForm, { paddingBottom: Math.max(insets.bottom, 24) }]}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            <View style={styles.mobileCloseRow}>{closeButton}</View>
+            {loginForm}
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </View>
+    );
+  }
+
+  const composerPreview = (
+    <Pressable
+      onPress={openLogin}
+      style={[styles.previewComposer, isDesktop ? styles.previewComposerDesktop : { paddingBottom: Math.max(insets.bottom, 12) }]}
+      accessibilityRole="button"
+      accessibilityLabel="Message AskPrana"
+    >
+      <View style={styles.previewRow}>
+        <View style={[styles.tileAttach, isDesktop && styles.tileAttachDesktop]}>
+          <Feather name="paperclip" size={19} color="#397F6E" />
+          <Text style={styles.tileLabel}>Attach</Text>
+        </View>
+        <View style={[styles.previewBox, isDesktop && styles.previewBoxDesktop]}>
+          <Text style={styles.previewComposerText} numberOfLines={1}>Message AskPrana…</Text>
+          <View style={styles.previewDictate}>
+            <Feather name="mic" size={17} color="#538478" />
+            <Text style={styles.dictateLabel}>Dictate</Text>
+          </View>
+        </View>
+        <View style={[styles.tileSend, pranaGradientStyle, isDesktop && styles.tileSendDesktop]}>
+          <Feather name="send" size={19} color="#FFFFFF" />
+          <Text style={[styles.tileLabel, { color: "#FFFFFF" }]}>Send</Text>
+        </View>
+      </View>
+      <View style={styles.previewChips}>
+        <View style={styles.previewChip}>
+          <AskPranaVoiceWaveformIcon size={16} color="#397C6A" />
+          <Text style={styles.previewChipText}>Voice chat</Text>
+        </View>
+      </View>
+      <Text style={styles.previewNote}>Type a message, attach a file or use the mic.</Text>
+    </Pressable>
+  );
+
   return (
     <View style={styles.root}>
-      <StatusBar barStyle="light-content" backgroundColor={colors.background} />
+      <StatusBar
+        barStyle={isDesktop ? "dark-content" : "light-content"}
+        backgroundColor={isDesktop ? prana.desktopHeader : prana.tealDeep}
+      />
       <View style={styles.shell}>
         {showSidebar ? (
-          <View style={[styles.previewSidebar, !isDesktop && styles.previewSidebarMobile]}>
+          <View style={[styles.previewSidebar, !isDesktop && styles.previewSidebarMobile, !isDesktop && { paddingTop: insets.top + 24 }]}>
             <View style={styles.previewBrandRow}>
               <View style={styles.previewBrand}>
-                <AskPranaLogo size={28} decorative />
-                <Text style={styles.previewBrandText}>ASK PRANA</Text>
+                <AskPranaLogo size={31} decorative />
+                <Text style={styles.previewBrandText}>AskPrana</Text>
               </View>
-              <Pressable onPress={() => setShellSidebar(false)} accessibilityRole="button" accessibilityLabel="Close sidebar">
-                <Feather name={isDesktop ? "sidebar" : "x"} size={17} color="#9AA4B2" />
+              <Pressable onPress={() => setShellSidebar(false)} style={styles.collapseButton} accessibilityRole="button" accessibilityLabel="Close sidebar">
+                <Feather name={isDesktop ? "sidebar" : "x"} size={18} color="#82927E" />
               </Pressable>
             </View>
             <Pressable onPress={openLogin} style={styles.previewNewChat} accessibilityRole="button">
-              <Feather name="plus" size={18} color="#F4F7FA" />
+              <Feather name="plus" size={16} color="#235B4B" />
               <Text style={styles.previewNewChatText}>New chat</Text>
             </Pressable>
             <Pressable onPress={openLogin} style={styles.previewSearch} accessibilityRole="button">
-              <Feather name="search" size={16} color="#9AA4B2" />
+              <Feather name="search" size={15} color="#7D927F" />
               <Text style={styles.previewSearchText}>Search chats</Text>
             </Pressable>
+            <Text style={styles.sidebarLabel}>YOUR CONVERSATIONS</Text>
+            <Text style={styles.sidebarEmpty}>Your conversations will appear here after you sign in.</Text>
+            <View style={{ flex: 1 }} />
+            <View style={styles.sidebarBottom}>
+              <Pressable onPress={openLogin} style={[styles.sidebarLogin, pranaGradientStyle]} accessibilityRole="button">
+                <Text style={styles.sidebarLoginText}>Log in</Text>
+              </Pressable>
+            </View>
           </View>
         ) : null}
-        <View style={styles.previewMain}>
-          <View style={styles.previewHeader}>
-            {showSidebar ? <View style={styles.previewHeaderSide} /> : (
-              <Pressable onPress={() => setShellSidebar(true)} style={styles.previewHeaderSide} accessibilityRole="button" accessibilityLabel="Open sidebar">
-                <Feather name="menu" size={21} color="#0F766E" />
-              </Pressable>
-            )}
-            <View style={styles.previewHeaderCenter}>
-              <AskPranaLogo size={28} decorative />
-              <Text style={styles.previewTitle}>Ask Prana</Text>
-            </View>
-            <View style={[styles.previewHeaderSide, styles.previewHeaderRight]}>
-              {panelOpen ? null : (
-                <Pressable onPress={openLogin} style={styles.reopenButton} accessibilityRole="button">
-                  <Text style={styles.reopenText}>Log in</Text>
-                </Pressable>
-              )}
-            </View>
+        <View style={[styles.previewMain, !isDesktop && { backgroundColor: prana.tealDeep, paddingTop: insets.top }]}>
+          <PranaHeader
+            variant={isDesktop ? "light" : "teal"}
+            includeTopInset={false}
+            left={
+              showSidebar && isDesktop ? null : (
+                <PranaHeaderButton
+                  icon="menu"
+                  tone={isDesktop ? "light" : "dark"}
+                  onPress={() => setShellSidebar(true)}
+                  label="Open sidebar"
+                />
+              )
+            }
+            right={<PranaHeaderLogin onPress={openLogin} tone={isDesktop ? "light" : "dark"} />}
+          />
+          <View style={styles.previewBody}>
+            <Pressable onPress={openLogin} style={styles.previewEmpty} accessibilityRole="button" accessibilityLabel="Log in to chat">
+              <PranaBrand
+                color={prana.ink}
+                iconSize={isDesktop ? 48 : 29}
+                wordSize={isDesktop ? 46 : 29}
+                subtitle={null}
+              />
+              <Text style={[styles.guestSubtitle, isDesktop && styles.guestSubtitleDesktop]}>Your aquaculture assistant</Text>
+              <Text style={[styles.guestCopy, isDesktop && styles.guestCopyDesktop]}>
+                Ask about your pond, water quality, feeding, growth or harvest.
+              </Text>
+            </Pressable>
+            {composerPreview}
           </View>
-          <Pressable onPress={openLogin} style={styles.previewEmpty} accessibilityRole="button">
-            <AskPranaLogo size={72} decorative />
-            <Text style={styles.previewTitle}>Ask Prana</Text>
-          </Pressable>
-          <Pressable onPress={openLogin} style={[styles.previewComposer, { marginBottom: Math.max(insets.bottom, 16) }]} accessibilityRole="button" accessibilityLabel="Message Ask Prana">
-            <Feather name="plus" size={22} color="#9AA4B2" />
-            <Text style={styles.previewComposerText}>Message Ask Prana</Text>
-            <Feather name="mic" size={18} color="#F4F7FA" />
-            <View style={styles.previewSend}>
-              <AskPranaVoiceWaveformIcon size={16} color="#4ADE80" />
-            </View>
-          </Pressable>
         </View>
       </View>
       {panelOpen ? (
         <KeyboardAvoidingView
           style={styles.loginOverlay}
           behavior={Platform.OS === "ios" ? "padding" : undefined}
-          pointerEvents="box-none"
         >
+          <Pressable style={styles.overlayBackdrop} onPress={() => setPanelOpen(false)} accessibilityLabel="Close" />
           <ScrollView
             contentContainerStyle={styles.loginOverlayContent}
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
           >
             <View style={styles.authCard}>
-                  <View style={styles.authHeader}>
-                    <Text style={styles.authTitle}>Log in or sign up</Text>
-                    <Pressable
-                      onPress={() => setPanelOpen(false)}
-                      style={styles.closeButton}
-                      accessibilityRole="button"
-                      accessibilityLabel="Close"
-                    >
-                      <Text style={styles.closeMark}>×</Text>
-                    </Pressable>
-                  </View>
-                  {phoneStep ? (
-                    <View style={styles.inputGroup}>
-                      <Text style={styles.label}>Mobile number</Text>
-                      <View style={[styles.inputContainer, inputFocused && styles.inputContainerFocused, errorMessage ? styles.inputContainerError : null]}>
-                        <TextInput
-                          value={phoneInput}
-                          onChangeText={(value) => {
-                            setPhoneInput(value);
-                            if (errorMessage) setErrorMessage(null);
-                          }}
-                          editable={!isSendingOtp}
-                          placeholder="10-digit mobile number"
-                          placeholderTextColor={colors.placeholder}
-                          keyboardType="phone-pad"
-                          style={styles.input}
-                          onFocus={() => setInputFocused(true)}
-                          onBlur={() => setInputFocused(false)}
-                          onSubmitEditing={() => void handleSendOtp(phoneInput, "phone")}
-                          accessibilityLabel="Mobile number"
-                        />
-                      </View>
-                    </View>
-                  ) : (
-                    <>
-                      <Pressable onPress={() => void handleGoogle()} disabled={googleBusy} style={styles.providerButton} accessibilityRole="button">
-                        <View style={styles.providerContent}>
-                          <GoogleMark />
-                          <Text style={styles.providerText}>{googleBusy ? "Opening Google..." : "Continue with Google"}</Text>
-                        </View>
-                      </Pressable>
-                      {googleNotice ? <Text style={styles.googleNotice}>{googleNotice}</Text> : null}
-                      <Pressable style={styles.providerButton} accessibilityRole="button">
-                        <View style={styles.providerContent}>
-                          <AppleMark />
-                          <Text style={styles.providerText}>Continue with Apple</Text>
-                        </View>
-                      </Pressable>
-                      <Pressable
-                        onPress={() => {
-                          setErrorMessage(null);
-                          setPhoneStep(true);
-                        }}
-                        style={styles.providerButton}
-                        accessibilityRole="button"
-                      >
-                        <View style={styles.providerContent}>
-                          <PhoneMark />
-                          <Text style={styles.providerText}>Continue with phone</Text>
-                        </View>
-                      </Pressable>
-                      <Text style={styles.orDivider}>OR</Text>
-                      <View style={[styles.inputContainer, inputFocused && styles.inputContainerFocused, errorMessage ? styles.inputContainerError : null]}>
-                        <TextInput
-                          value={identifierInput}
-                          onChangeText={(value) => {
-                            setIdentifierInput(value);
-                            if (errorMessage) setErrorMessage(null);
-                          }}
-                          editable={!isSendingOtp}
-                          placeholder="Email address"
-                          placeholderTextColor={colors.placeholder}
-                          keyboardType="email-address"
-                          autoCapitalize="none"
-                          autoCorrect={false}
-                          autoComplete="email"
-                          style={styles.input}
-                          onFocus={() => setInputFocused(true)}
-                          onBlur={() => setInputFocused(false)}
-                          onSubmitEditing={() => void handleSendOtp(identifierInput, "email")}
-                          accessibilityLabel="Email address"
-                        />
-                      </View>
-                    </>
-                  )}
-                  {errorMessage ? (
-                    <Text style={styles.errorText} accessibilityLiveRegion="polite">{errorMessage}</Text>
-                  ) : null}
-                  <Pressable
-                    onPress={() => void handleSendOtp(phoneStep ? phoneInput : identifierInput, phoneStep ? "phone" : "email")}
-                    disabled={phoneStep ? !canSendPhone : !canSendEmail}
-                    style={[styles.continueButton, (phoneStep ? !canSendPhone : !canSendEmail) && styles.continueDisabled]}
-                    accessibilityRole="button"
-                  >
-                    {isSendingOtp ? <ActivityIndicator color="#171717" /> : <Text style={styles.continueText}>Continue</Text>}
-                  </Pressable>
-                  {phoneStep ? (
-                    <Pressable onPress={() => { setPhoneStep(false); setErrorMessage(null); }} accessibilityRole="button">
-                      <Text style={styles.backLink}>Back</Text>
-                    </Pressable>
-                  ) : null}
+              <View style={styles.cardCloseRow}>{closeButton}</View>
+              {loginForm}
             </View>
           </ScrollView>
         </KeyboardAvoidingView>
@@ -451,6 +543,7 @@ export default function PhoneLoginScreen() {
   );
 }
 
+const F = PRANA_FONT;
 
 const styles = StyleSheet.create({
   root: {
@@ -461,394 +554,165 @@ const styles = StyleSheet.create({
   fontLoading: {
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: colors.background,
   },
-  safeArea: {
-    flex: 1,
-    backgroundColor: "transparent",
-    overflow: "hidden",
-  },
-  keyboardView: {
-    flex: 1,
-    overflow: "hidden",
-  },
-  scroll: {
-    flex: 1,
-  },
-  pageContent: {
+  pressed: { opacity: 0.85 },
+  // ---- Login form ----
+  mobileForm: {
     flexGrow: 1,
-    paddingHorizontal: 20,
+    paddingHorizontal: 24,
+    paddingTop: 4,
   },
-  centerWrapper: {
-    flex: 1,
+  mobileCloseRow: { alignItems: "flex-end", marginBottom: -14, zIndex: 2 },
+  cardCloseRow: { alignItems: "flex-end", marginBottom: -18, zIndex: 2 },
+  closeButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 11,
     alignItems: "center",
     justifyContent: "center",
-    paddingVertical: 32,
+    backgroundColor: "#E6EBD8",
   },
-  loginContainer: {
-    width: "100%",
-    maxWidth: 540,
-  },
-  brandBlock: {
-    alignItems: "center",
-    marginBottom: 24,
-  },
-  welcomeLabel: {
-    color: colors.primary,
-    fontFamily: fonts.bold,
-    fontSize: 11,
-    lineHeight: 14,
-    letterSpacing: 1.4,
-    textTransform: "uppercase",
+  kicker: {
+    color: prana.tealText,
+    fontFamily: F,
+    fontSize: 10,
+    lineHeight: 13,
+    fontWeight: "800",
+    letterSpacing: 1.1,
+    marginTop: 15,
     marginBottom: 8,
-    textAlign: "center",
   },
-  title: {
-    color: colors.text,
-    fontFamily: fonts.extraBold,
-    marginBottom: 8,
-    textAlign: "center",
+  authTitle: {
+    color: prana.ink,
+    fontFamily: F,
+    fontSize: 29,
+    lineHeight: 34,
+    fontWeight: "800",
+    marginBottom: 12,
   },
-  subtitle: {
-    color: colors.textSoft,
-    fontFamily: fonts.medium,
-    fontSize: 15,
+  authSubtitle: {
+    color: prana.muted,
+    fontFamily: F,
+    fontSize: 13,
     lineHeight: 21,
-    marginBottom: 18,
+    marginBottom: 19,
+  },
+  providerList: { gap: 9 },
+  providerButton: {
+    minHeight: 48,
+    paddingHorizontal: 36,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#B7CDB8",
+    backgroundColor: prana.card,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  providerIcon: {
+    position: "absolute",
+    left: 15,
+    top: 0,
+    bottom: 0,
+    justifyContent: "center",
+  },
+  providerText: {
+    color: "#245B4E",
+    fontFamily: F,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: "700",
     textAlign: "center",
   },
-  inputGroup: {
-    gap: 8,
-    marginBottom: 16,
+  googleNotice: {
+    color: prana.muted,
+    fontFamily: F,
+    fontSize: 12,
+    lineHeight: 16,
+    textAlign: "center",
   },
+  orRow: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 16 },
+  orLine: { flex: 1, height: 1, backgroundColor: "#D8DFC8" },
+  orDivider: {
+    color: colors.muted,
+    fontFamily: F,
+    fontSize: 10,
+    lineHeight: 13,
+  },
+  inputGroup: { gap: 0, marginBottom: 0 },
   label: {
-    color: colors.text,
-    fontFamily: fonts.bold,
-    fontSize: 14,
-    lineHeight: 18,
+    color: prana.ink,
+    fontFamily: F,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: "700",
+    marginBottom: 9,
   },
   inputContainer: {
-    height: 54,
-    borderWidth: 1,
+    height: 51,
+    borderWidth: 1.4,
     borderColor: colors.border,
-    borderRadius: 12,
+    borderRadius: 11,
     backgroundColor: colors.inputBg,
     overflow: "hidden",
   },
-  inputContainerFocused: {
-    borderColor: colors.primary,
-  },
-  inputContainerError: {
-    borderColor: colors.error,
-  },
+  inputContainerFocused: { borderColor: prana.teal },
+  inputContainerError: { borderColor: colors.error },
   input: {
     flex: 1,
     height: "100%",
-    paddingHorizontal: 14,
-    color: colors.text,
-    fontFamily: fonts.medium,
-    fontSize: 16,
-    lineHeight: 22,
+    paddingHorizontal: 12,
+    color: prana.ink,
+    fontFamily: F,
+    fontSize: 14,
+    lineHeight: 20,
     ...(Platform.OS === "web"
       ? ({ outlineStyle: "none", outlineWidth: 0 } as object)
       : null),
   },
   errorText: {
     color: colors.error,
-    fontFamily: fonts.medium,
+    fontFamily: F,
     fontSize: 12,
     lineHeight: 16,
-  },
-  googleNotice: {
-    color: colors.textSoft,
-    fontFamily: fonts.medium,
-    fontSize: 12,
-    lineHeight: 16,
-    textAlign: "center",
-  },
-  actions: {
-    gap: 12,
-  },
-  button: {
-    height: 54,
-    borderRadius: 12,
-    alignItems: "center",
-    justifyContent: "center",
-    overflow: "hidden",
-    shadowColor: colors.shadow,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 10,
-    elevation: 3,
-  },
-  buttonPressed: {
-    opacity: 0.92,
-  },
-  buttonContent: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-  },
-  buttonText: {
-    color: colors.white,
-    fontFamily: fonts.bold,
-    fontSize: 15,
-    lineHeight: 20,
-    letterSpacing: 0.4,
-    textTransform: "uppercase",
-  },
-  buttonTextDisabled: {
-    color: colors.ctaDisabledText,
-  },
-  termsText: {
-    marginTop: 4,
-    textAlign: "center",
-    color: colors.muted,
-    fontFamily: fonts.medium,
-    fontSize: 11,
-    lineHeight: 15,
-  },
-  authCard: {
-    width: "100%",
-    maxWidth: 400,
-    gap: 12,
-    paddingHorizontal: 24,
-    paddingTop: 28,
-    paddingBottom: 22,
-    borderRadius: 28,
-    backgroundColor: "#2F2F2F",
-  },
-  authHeader: {
-    minHeight: 44,
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 8,
-  },
-  authTitle: {
-    color: colors.white,
-    fontFamily: fonts.bold,
-    fontSize: 20,
-    lineHeight: 26,
-    textAlign: "center",
-  },
-  closeButton: {
-    position: "absolute",
-    right: 0,
-    top: 0,
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#3A3A3A",
-  },
-  closeMark: {
-    color: colors.white,
-    fontSize: 22,
-    lineHeight: 24,
-  },
-  providerButton: {
-    minHeight: 48,
-    borderRadius: 24,
-    borderWidth: 1,
-    borderColor: "#5A5A5A",
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#303030",
-  },
-  providerContent: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 10,
-  },
-  providerText: {
-    color: colors.white,
-    fontFamily: fonts.medium,
-    fontSize: 16,
-    lineHeight: 22,
-  },
-  orDivider: {
-    color: colors.muted,
-    fontFamily: fonts.medium,
-    fontSize: 12,
-    lineHeight: 16,
-    textAlign: "center",
-    letterSpacing: 1,
+    marginTop: 9,
   },
   continueButton: {
-    minHeight: 48,
-    borderRadius: 24,
+    marginTop: 12,
+    minHeight: 54,
+    borderRadius: 12,
+    flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#FFFFFF",
+    gap: 10,
+    shadowColor: "#24665A",
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.1,
+    shadowRadius: 14,
   },
-  continueDisabled: {
-    opacity: 0.55,
-  },
+  continueDisabled: { opacity: 0.48 },
   continueText: {
-    color: "#171717",
-    fontFamily: fonts.bold,
-    fontSize: 16,
-    lineHeight: 22,
+    color: "#FFFFFF",
+    fontFamily: F,
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: "800",
+  },
+  backLinkWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+    minHeight: 44,
+    marginTop: 6,
   },
   backLink: {
-    color: colors.textSoft,
-    fontFamily: fonts.medium,
-    fontSize: 14,
-    lineHeight: 20,
-    textAlign: "center",
+    color: "#217C73",
+    fontFamily: F,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: "700",
   },
-  reopenButton: {
-    minHeight: 44,
-    paddingHorizontal: 18,
-    borderRadius: 22,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#FFFFFF",
-  },
-  reopenText: {
-    color: "#171717",
-    fontFamily: fonts.bold,
-    fontSize: 15,
-    lineHeight: 20,
-  },
-  shell: {
-    flex: 1,
-    flexDirection: "row",
-    backgroundColor: "#171717",
-  },
-  previewSidebar: {
-    width: 280,
-    borderRightWidth: 1,
-    borderRightColor: "#2A303C",
-    backgroundColor: "#171717",
-    paddingHorizontal: 12,
-    paddingTop: 12,
-    gap: 10,
-  },
-  previewSidebarMobile: {
-    position: "absolute",
-    top: 0,
-    bottom: 0,
-    left: 0,
-    zIndex: 2,
-  },
-  previewBrandRow: {
-    minHeight: 44,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  previewBrand: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-  },
-  previewBrandText: {
-    color: "#F4F7FA",
-    fontFamily: fonts.bold,
-    fontSize: 18,
-    lineHeight: 23,
-  },
-  previewNewChat: {
-    minHeight: 42,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    backgroundColor: "#21262F",
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-  },
-  previewNewChatText: {
-    color: "#F4F7FA",
-    fontFamily: fonts.bold,
-    fontSize: 14,
-    lineHeight: 20,
-  },
-  previewSearch: {
-    minHeight: 38,
-    borderWidth: 1,
-    borderColor: "#2A303C",
-    borderRadius: 7,
-    paddingHorizontal: 10,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 9,
-  },
-  previewSearchText: {
-    color: "#9AA4B2",
-    fontFamily: fonts.medium,
-    fontSize: 14,
-    lineHeight: 20,
-  },
-  previewMain: {
-    flex: 1,
-    minWidth: 0,
-  },
-  previewHeader: {
-    height: 64,
-    paddingHorizontal: 16,
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  previewHeaderSide: {
-    width: 96,
-    height: 40,
-    alignItems: "flex-start",
-    justifyContent: "center",
-  },
-  previewHeaderRight: {
-    alignItems: "flex-end",
-    width: 110,
-  },
-  previewHeaderCenter: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 10,
-  },
-  previewTitle: {
-    color: "#F4F7FA",
-    fontFamily: fonts.bold,
-    fontSize: 20,
-    lineHeight: 25,
-  },
-  previewEmpty: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 12,
-  },
-  previewComposer: {
-    minHeight: 52,
-    marginHorizontal: 16,
-    marginBottom: 16,
-    paddingHorizontal: 14,
-    borderRadius: 28,
-    borderWidth: 1,
-    borderColor: "#2A303C",
-    backgroundColor: "#212121",
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-  },
-  previewComposerText: {
-    flex: 1,
-    color: "#9AA4B2",
-    fontFamily: fonts.medium,
-    fontSize: 15,
-    lineHeight: 22,
-  },
-  previewSend: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: "#0F766E",
-    alignItems: "center",
-    justifyContent: "center",
-  },
+  // ---- Desktop login card ----
   loginOverlay: {
     position: "absolute",
     top: 0,
@@ -856,10 +720,308 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
   },
+  overlayBackdrop: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    backgroundColor: "rgba(21, 57, 58, 0.4)",
+  },
   loginOverlayContent: {
     flexGrow: 1,
     alignItems: "center",
     justifyContent: "center",
     padding: 20,
+  },
+  authCard: {
+    width: "100%",
+    maxWidth: 440,
+    paddingHorizontal: 32,
+    paddingTop: 24,
+    paddingBottom: 28,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: prana.line,
+    backgroundColor: prana.cream,
+    shadowColor: "#15393A",
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.18,
+    shadowRadius: 40,
+  },
+  // ---- Guest shell ----
+  shell: {
+    flex: 1,
+    flexDirection: "row",
+    backgroundColor: prana.cream,
+  },
+  previewSidebar: {
+    width: 264,
+    borderRightWidth: 1,
+    borderRightColor: prana.sidebarBorder,
+    backgroundColor: prana.sidebar,
+    paddingTop: 29,
+    paddingHorizontal: 19,
+    paddingBottom: 19,
+  },
+  previewSidebarMobile: {
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+    left: 0,
+    width: "84%",
+    maxWidth: 320,
+    zIndex: 5,
+    shadowColor: "#15393A",
+    shadowOffset: { width: 12, height: 0 },
+    shadowOpacity: 0.13,
+    shadowRadius: 40,
+  },
+  previewBrandRow: {
+    paddingHorizontal: 7,
+    paddingBottom: 28,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  previewBrand: { flexDirection: "row", alignItems: "center", gap: 9 },
+  previewBrandText: {
+    color: prana.ink,
+    fontFamily: F,
+    fontSize: 24,
+    lineHeight: 29,
+    fontWeight: "800",
+    letterSpacing: -0.4,
+  },
+  collapseButton: { width: 29, height: 29, alignItems: "center", justifyContent: "center" },
+  previewNewChat: {
+    minHeight: 49,
+    paddingHorizontal: 15,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#8EB49E",
+    backgroundColor: "#DCE9D6",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 11,
+  },
+  previewNewChatText: {
+    color: "#235B4B",
+    fontFamily: F,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "700",
+  },
+  previewSearch: {
+    minHeight: 42,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: "#CBD5BF",
+    backgroundColor: "#F8F8E9",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+  },
+  previewSearchText: {
+    color: "#829481",
+    fontFamily: F,
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  sidebarLabel: {
+    color: "#94A08A",
+    fontFamily: F,
+    fontSize: 9,
+    lineHeight: 12,
+    fontWeight: "800",
+    letterSpacing: 1.2,
+    marginTop: 29,
+    marginBottom: 4,
+    marginHorizontal: 9,
+  },
+  sidebarEmpty: {
+    color: "#8C9C85",
+    fontFamily: F,
+    fontSize: 11,
+    lineHeight: 20,
+    paddingVertical: 14,
+    paddingHorizontal: 9,
+  },
+  sidebarBottom: {
+    borderTopWidth: 1,
+    borderTopColor: "#D4DDC5",
+    paddingTop: 4,
+  },
+  sidebarLogin: {
+    minHeight: 43,
+    marginTop: 10,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  sidebarLoginText: {
+    color: "#FFFFFF",
+    fontFamily: F,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: "800",
+  },
+  previewMain: {
+    flex: 1,
+    minWidth: 0,
+  },
+  previewBody: {
+    flex: 1,
+    minHeight: 0,
+    backgroundColor: prana.cream,
+  },
+  previewEmpty: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 29,
+  },
+  guestSubtitle: {
+    color: "#34766A",
+    fontFamily: F,
+    fontSize: 14,
+    lineHeight: 21,
+    fontWeight: "700",
+    marginTop: 14,
+    textAlign: "center",
+  },
+  guestSubtitleDesktop: { fontSize: 17, lineHeight: 24, marginTop: 20, color: "#4F8174" },
+  guestCopy: {
+    color: "#6A8574",
+    fontFamily: F,
+    fontSize: 12,
+    lineHeight: 21,
+    marginTop: 10,
+    textAlign: "center",
+    maxWidth: 420,
+  },
+  guestCopyDesktop: { fontSize: 14, lineHeight: 24, maxWidth: 580 },
+  previewComposer: {
+    backgroundColor: prana.card,
+    borderTopWidth: 1,
+    borderTopColor: prana.line,
+    paddingTop: 12,
+    paddingHorizontal: 14,
+    gap: 10,
+    shadowColor: "#325B41",
+    shadowOffset: { width: 0, height: -3 },
+    shadowOpacity: 0.06,
+    shadowRadius: 16,
+  },
+  previewComposerDesktop: {
+    width: "100%",
+    maxWidth: 840,
+    alignSelf: "center",
+    marginBottom: 19,
+    paddingTop: 15,
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    borderWidth: 1,
+    borderColor: "#C8D9BF",
+    borderTopColor: "#C8D9BF",
+    borderRadius: 18,
+    shadowOffset: { width: 0, height: 6 },
+    shadowRadius: 25,
+  },
+  previewRow: { flexDirection: "row", alignItems: "stretch", gap: 7 },
+  tileAttach: {
+    width: 44,
+    minHeight: 54,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: prana.attachBorder,
+    backgroundColor: prana.attachBg,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 2,
+  },
+  tileAttachDesktop: { width: 47, minHeight: 58, borderWidth: 0 },
+  tileSend: {
+    width: 44,
+    minHeight: 54,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 2,
+  },
+  tileSendDesktop: { width: 51, minHeight: 58 },
+  tileLabel: {
+    color: "#397F6E",
+    fontFamily: F,
+    fontSize: 8,
+    lineHeight: 10,
+    fontWeight: "700",
+  },
+  previewBox: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#B9CEBA",
+    borderRadius: 13,
+    backgroundColor: prana.card,
+    paddingLeft: 10,
+    paddingRight: 3,
+    paddingVertical: 3,
+  },
+  previewBoxDesktop: { borderWidth: 0, backgroundColor: "#F5F6E7", paddingLeft: 17 },
+  previewComposerText: {
+    flex: 1,
+    color: prana.placeholder,
+    fontFamily: F,
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  previewDictate: {
+    width: 39,
+    minHeight: 44,
+    alignSelf: "stretch",
+    marginLeft: 5,
+    borderLeftWidth: 1,
+    borderLeftColor: "#E1E6D3",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 2,
+  },
+  dictateLabel: {
+    color: "#538478",
+    fontFamily: F,
+    fontSize: 7,
+    lineHeight: 9,
+    fontWeight: "600",
+  },
+  previewChips: { flexDirection: "row", gap: 7 },
+  previewChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    minHeight: 43,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: prana.chipBorder,
+    backgroundColor: prana.chip,
+  },
+  previewChipText: {
+    color: prana.chipText,
+    fontFamily: F,
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: "700",
+  },
+  previewNote: {
+    textAlign: "center",
+    color: "#75877C",
+    fontFamily: F,
+    fontSize: 9,
+    lineHeight: 13,
   },
 });

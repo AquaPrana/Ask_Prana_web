@@ -18,21 +18,23 @@ import { useRouter } from "expo-router";
 import { useTranslation } from "react-i18next";
 import { UserAvatar } from "./user-avatar";
 import { AskPranaLogo } from "./ask-prana-logo";
+import { PranaHeader, PranaHeaderButton } from "./prana-header";
+import { PRANA_FONT, prana } from "../constants/prana-theme";
 import { useProfile } from "../context/profile-context";
 import { useAskPranaChat } from "../context/ask-prana-chat-context";
-import { ASK_PRANA_FONT_FAMILY } from "../constants/ask-prana-typography";
 import type { AskPranaSessionSummary } from "../services/ask-prana-messages";
 import { useAskPranaDisplayTranslation } from "../lib/ask-prana-display-translation";
 
+// AskPrana cream / teal theme.
 const colors = {
-  accent: "#16A34A",
-  background: "#171717",
-  border: "#2F2F2F",
-  danger: "#F87171",
-  muted: "#A0A0A0",
-  selected: "#2A2A2A",
-  activeConversation: "#1F2E25",
-  text: "#F5F5F5",
+  accent: prana.teal,
+  background: prana.sidebar,
+  border: "#D4DDC5",
+  danger: "#9E4B3D",
+  muted: "#7D927F",
+  selected: "#DCE9D6",
+  activeConversation: "#E0E8D3",
+  text: prana.ink,
   white: "#FFFFFF",
 };
 
@@ -502,24 +504,21 @@ export function AskPranaChatSidebar({
   ) : null;
 
   const content = (
-    <View style={[styles.sidebar, isDesktop && styles.desktopSidebar]}>
+    <View style={[styles.sidebar, isDesktop ? styles.desktopSidebar : styles.mobileSidebar]}>
+      {isDesktop ? (
       <View style={styles.topArea}>
         <View style={styles.brandRow}>
           <View style={styles.brandMark}>
-            <AskPranaLogo size={30} decorative />
-            <Text style={styles.brand}>ASK PRANA</Text>
+            <AskPranaLogo size={31} decorative />
+            <Text style={styles.brand}>AskPrana</Text>
           </View>
           <Pressable
             onPress={onClose}
             style={styles.iconButton}
             accessibilityRole="button"
-            accessibilityLabel={isDesktop ? t("askPrana.collapseSidebar") : t("askPrana.closeHistory")}
+            accessibilityLabel={t("askPrana.collapseSidebar")}
           >
-            <Feather
-              name={isDesktop ? "sidebar" : "x"}
-              size={17}
-              color={colors.muted}
-            />
+            <Feather name="sidebar" size={18} color="#82927E" />
           </Pressable>
         </View>
         <Pressable
@@ -527,16 +526,16 @@ export function AskPranaChatSidebar({
           style={({ pressed }) => [styles.newChatButton, pressed && styles.pressed]}
           accessibilityRole="button"
         >
-          <Feather name="plus" size={18} color={colors.text} />
-          <Text style={styles.newChatText}>{t("askPrana.newConversation")}</Text>
+          <Feather name="plus" size={16} color="#235B4B" />
+          <Text style={styles.newChatText}>{t("askPrana.newChatShort")}</Text>
         </Pressable>
         <View style={styles.searchBox}>
-          <Feather name="search" size={16} color={colors.muted} />
+          <Feather name="search" size={15} color="#7D927F" />
           <TextInput
             value={searchText}
             onChangeText={setSearchText}
             placeholder={t("askPrana.searchChats")}
-            placeholderTextColor={colors.muted}
+            placeholderTextColor="#829481"
             style={styles.searchInput}
             accessibilityLabel={t("askPrana.searchChats")}
             returnKeyType="search"
@@ -552,7 +551,53 @@ export function AskPranaChatSidebar({
             </Pressable>
           ) : null}
         </View>
+        <Text style={styles.sidebarLabel}>{t("askPrana.yourConversations")}</Text>
       </View>
+      ) : (
+      <View style={styles.mobileTop}>
+        <Pressable
+          onPress={onClose}
+          style={styles.backLink}
+          accessibilityRole="button"
+          accessibilityLabel={t("askPrana.closeHistory")}
+        >
+          <Feather name="arrow-left" size={13} color="#217C73" />
+          <Text style={styles.backLinkText}>{t("askPrana.backToChat")}</Text>
+        </Pressable>
+        <Text style={styles.kicker}>ASKPRANA</Text>
+        <Text style={styles.mobileTitle}>{t("askPrana.historyTitle")}</Text>
+        <Text style={styles.mobileSubtitle}>{t("askPrana.historySubtitle")}</Text>
+        <View style={[styles.searchBox, styles.searchBoxMobile]}>
+          <TextInput
+            value={searchText}
+            onChangeText={setSearchText}
+            placeholder={t("askPrana.searchConversations")}
+            placeholderTextColor="#8A9B8B"
+            style={[styles.searchInput, styles.searchInputMobile]}
+            accessibilityLabel={t("askPrana.searchChats")}
+            returnKeyType="search"
+          />
+          {searchText ? (
+            <Pressable
+              onPress={() => setSearchText("")}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel={t("askPrana.clearSearch")}
+            >
+              <Feather name="x" size={15} color={colors.muted} />
+            </Pressable>
+          ) : null}
+        </View>
+        <Pressable
+          onPress={() => void startNewChat()}
+          style={({ pressed }) => [styles.newChatMobile, pressed && styles.pressed]}
+          accessibilityRole="button"
+        >
+          <Feather name="plus" size={15} color="#286C62" />
+          <Text style={styles.newChatMobileText}>{t("askPrana.newChatShort")}</Text>
+        </Pressable>
+      </View>
+      )}
 
       <ScrollView
         style={styles.historyList}
@@ -768,7 +813,20 @@ export function AskPranaChatSidebar({
         >
           <View style={[styles.drawerRoot, drawerRootWeb]}>
             <Pressable style={styles.backdrop} onPress={onClose} />
-            <View style={styles.mobileDrawer}>{content}</View>
+            <View style={styles.mobileDrawer}>
+              <PranaHeader
+                variant="wave"
+                left={
+                  <PranaHeaderButton
+                    icon="message-square"
+                    onPress={onClose}
+                    label={t("askPrana.closeHistory")}
+                  />
+                }
+                right={<View style={{ width: 42 }} />}
+              />
+              {content}
+            </View>
             {floatingMenu}
           </View>
         </Modal>
@@ -839,91 +897,104 @@ const styles = StyleSheet.create({
     width: "100%",
     minWidth: 0,
     backgroundColor: colors.background,
-    borderRightWidth: 1,
-    borderRightColor: colors.border,
-    paddingHorizontal: 12,
-    paddingTop: 12,
   },
   desktopSidebar: {
-    width: 280,
-    minWidth: 280,
-    maxWidth: 320,
+    width: 264,
+    minWidth: 264,
+    maxWidth: 264,
     flexGrow: 0,
     flexShrink: 0,
-    flexBasis: 280,
+    flexBasis: 264,
     height: "100%",
+    borderRightWidth: 1,
+    borderRightColor: prana.sidebarBorder,
+    paddingTop: 29,
+    paddingHorizontal: 19,
+    paddingBottom: 19,
   },
-  topArea: { gap: 12 },
+  topArea: { gap: 0 },
   brandRow: {
-    minHeight: 34,
-    paddingHorizontal: 4,
+    paddingHorizontal: 7,
+    paddingBottom: 28,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
   },
-  brandMark: { flexDirection: "row", alignItems: "center", gap: 10 },
-  brand: { color: colors.text, fontFamily: ASK_PRANA_FONT_FAMILY, fontSize: 18, lineHeight: 23, fontWeight: "600" },
-  iconButton: { width: 32, height: 32, alignItems: "center", justifyContent: "center" },
+  brandMark: { flexDirection: "row", alignItems: "center", gap: 9 },
+  brand: { color: prana.ink, fontFamily: PRANA_FONT, fontSize: 24, lineHeight: 29, fontWeight: "800", letterSpacing: -0.4 },
+  iconButton: { width: 29, height: 29, borderRadius: 7, alignItems: "center", justifyContent: "center" },
   newChatButton: {
-    minHeight: 42,
-    paddingHorizontal: 12,
+    minHeight: 49,
+    paddingHorizontal: 15,
+    paddingVertical: 12,
     flexDirection: "row",
     alignItems: "center",
-    gap: 10,
-    backgroundColor: colors.selected,
-    borderRadius: 8,
+    gap: 11,
+    backgroundColor: "#DCE9D6",
+    borderWidth: 1,
+    borderColor: "#8EB49E",
+    borderRadius: 12,
   },
-  newChatText: { color: colors.text, fontFamily: ASK_PRANA_FONT_FAMILY, fontSize: 14, lineHeight: 20, fontWeight: "600" },
+  newChatText: { color: "#235B4B", fontFamily: PRANA_FONT, fontSize: 13, lineHeight: 18, fontWeight: "700" },
   searchBox: {
-    minHeight: 38,
+    minHeight: 42,
+    marginTop: 12,
     flexDirection: "row",
     alignItems: "center",
     gap: 9,
     borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 7,
-    paddingHorizontal: 10,
+    borderColor: "#CBD5BF",
+    backgroundColor: "#F8F8E9",
+    borderRadius: 10,
+    paddingHorizontal: 12,
   },
-  searchInput: { flex: 1, color: colors.text, fontFamily: ASK_PRANA_FONT_FAMILY, fontSize: 14, lineHeight: 20, fontWeight: "400", paddingVertical: 6 },
-  historyList: { flex: 1, marginTop: 16, overflow: "visible" },
-  historyContent: { paddingBottom: 16, gap: 20, overflow: "visible" },
+  searchInput: {
+    flex: 1,
+    minWidth: 0,
+    color: "#255E50",
+    fontFamily: PRANA_FONT,
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: "400",
+    paddingVertical: 8,
+    ...(Platform.OS === "web" ? ({ outlineStyle: "none", outlineWidth: 0 } as object) : null),
+  },
+  historyList: { flex: 1, marginTop: 8, overflow: "visible" },
+  historyContent: { paddingBottom: 16, gap: 16, overflow: "visible" },
   loadingState: { paddingVertical: 24, alignItems: "center" },
-  emptyText: { color: colors.muted, fontFamily: ASK_PRANA_FONT_FAMILY, fontSize: 13, padding: 12, lineHeight: 19, fontWeight: "400" },
+  emptyText: { color: "#6D8976", fontFamily: PRANA_FONT, fontSize: 11, paddingVertical: 18, paddingHorizontal: 9, lineHeight: 20, fontWeight: "400" },
   group: { gap: 3, overflow: "visible" },
   groupLabel: {
-    color: colors.muted,
-    fontFamily: ASK_PRANA_FONT_FAMILY,
-    fontSize: 12,
-    lineHeight: 16,
-    fontWeight: "600",
-    marginBottom: 5,
-    paddingHorizontal: 7,
+    color: "#94A08A",
+    fontFamily: PRANA_FONT,
+    fontSize: 9,
+    lineHeight: 12,
+    fontWeight: "800",
+    letterSpacing: 1.1,
+    textTransform: "uppercase",
+    marginBottom: 4,
+    paddingHorizontal: 9,
   },
   itemWrap: { position: "relative", flexDirection: "row", alignItems: "center", overflow: "visible", zIndex: 0 },
   itemWrapMenuOpen: { zIndex: 10 },
   conversationItem: {
-    minHeight: 42,
+    minHeight: 44,
     flex: 1,
     minWidth: 0,
-    borderRadius: 7,
-    paddingHorizontal: 9,
-    paddingVertical: 7,
+    borderRadius: 9,
+    paddingHorizontal: 11,
+    paddingVertical: 11,
     justifyContent: "center",
     ...(Platform.OS === "web"
       ? ({ transitionProperty: "background-color", transitionDuration: "180ms" } as object)
       : null),
   },
-  activeItem: {
-    backgroundColor: colors.activeConversation,
-    borderLeftWidth: 3,
-    borderLeftColor: colors.accent,
-    paddingLeft: 6, // 9 - 3 so the title stays aligned with unselected rows
-  },
-  hoveredItem: { backgroundColor: "#242424" },
+  activeItem: { backgroundColor: colors.activeConversation },
+  hoveredItem: { backgroundColor: "#E1E8D5" },
   itemCopy: { flex: 1, minWidth: 0, gap: 2 },
   itemTitleRow: { flexDirection: "row", alignItems: "center", gap: 5, minWidth: 0 },
-  itemTitle: { color: colors.text, fontFamily: ASK_PRANA_FONT_FAMILY, fontSize: 14, lineHeight: 19, fontWeight: "500" },
-  itemPreview: { color: colors.muted, fontFamily: ASK_PRANA_FONT_FAMILY, fontSize: 12, lineHeight: 16, fontWeight: "400" },
+  itemTitle: { color: "#245C50", fontFamily: PRANA_FONT, fontSize: 12, lineHeight: 17, fontWeight: "600", flexShrink: 1 },
+  itemPreview: { color: "#8C9B85", fontFamily: PRANA_FONT, fontSize: 10, lineHeight: 14, fontWeight: "400" },
   menuButton: {
     width: 32,
     height: 32,
@@ -936,7 +1007,7 @@ const styles = StyleSheet.create({
       : null),
   },
   menuButtonHidden: { opacity: 0 },
-  menuButtonHovered: { backgroundColor: "#2A2A2A" },
+  menuButtonHovered: { backgroundColor: "#E1E8D5" },
   itemMenu: {
     position: "absolute",
     top: 36,
@@ -944,95 +1015,126 @@ const styles = StyleSheet.create({
     zIndex: 1,
   },
   itemMenuContent: {
-    width: 168,
+    width: 180,
     minHeight: 132,
     padding: 6,
-    borderRadius: 8,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: "#3A3A3A",
-    backgroundColor: "#2A2A2A",
-    shadowColor: "#000000",
+    borderColor: "#B5CBB3",
+    backgroundColor: prana.card,
+    shadowColor: "#1D4B36",
     shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.35,
-    shadowRadius: 12,
+    shadowOpacity: 0.13,
+    shadowRadius: 20,
     elevation: 8,
     overflow: "hidden",
   },
   itemMenuUpward: { top: undefined, bottom: 36 },
   menuAction: { minHeight: 40, borderRadius: 6, paddingHorizontal: 10, flexDirection: "row", alignItems: "center", gap: 10 },
-  menuActionHovered: { backgroundColor: "#3A3A3A" },
-  deleteActionHovered: { backgroundColor: "rgba(239, 68, 68, 0.15)" },
-  menuActionText: { color: "#F5F5F5", fontFamily: ASK_PRANA_FONT_FAMILY, fontSize: 14, lineHeight: 20, fontWeight: "500" },
+  menuActionHovered: { backgroundColor: prana.attachBg },
+  deleteActionHovered: { backgroundColor: "rgba(158, 75, 61, 0.1)" },
+  menuActionText: { color: "#225E50", fontFamily: PRANA_FONT, fontSize: 13, lineHeight: 18, fontWeight: "600" },
   deleteText: { color: colors.danger },
   profileRow: {
     minHeight: 62,
     borderTopWidth: 1,
     borderTopColor: colors.border,
+    paddingTop: 10,
+    paddingHorizontal: 7,
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
   },
   profileCopy: { flex: 1, minWidth: 0, gap: 2 },
-  profileName: { color: colors.text, fontFamily: ASK_PRANA_FONT_FAMILY, fontSize: 14, lineHeight: 19, fontWeight: "600" },
-  profileSubtitle: { color: colors.muted, fontFamily: ASK_PRANA_FONT_FAMILY, fontSize: 12, lineHeight: 16, fontWeight: "400" },
+  profileName: { color: "#2F5D4C", fontFamily: PRANA_FONT, fontSize: 12, lineHeight: 17, fontWeight: "700" },
+  profileSubtitle: { color: "#829480", fontFamily: PRANA_FONT, fontSize: 10, lineHeight: 14, fontWeight: "400" },
   pressed: { opacity: 0.78 },
-  drawerRoot: { flex: 1, width: "100%", height: "100%", flexDirection: "row" },
+  drawerRoot: { flex: 1, width: "100%", height: "100%", flexDirection: "row", backgroundColor: prana.cream },
   backdrop: {
     position: "absolute",
     top: 0,
     right: 0,
     bottom: 0,
     left: 0,
-    backgroundColor: "rgba(0,0,0,0.58)",
+    backgroundColor: prana.cream,
     zIndex: 0,
   },
-  mobileDrawer: { width: "86%", maxWidth: 340, height: "100%", zIndex: 1 },
-  dialogBackdrop: {
-    flex: 1,
-    justifyContent: "center",
-    paddingHorizontal: 24,
-    backgroundColor: "rgba(0,0,0,0.65)",
-  },
+  mobileDrawer: { width: "100%", height: "100%", zIndex: 1, backgroundColor: prana.cream },
+  dialogBackdrop: { flex: 1, justifyContent: "center", paddingHorizontal: 24, backgroundColor: "rgba(21,57,58,0.4)" },
   dialog: {
     width: "100%",
     maxWidth: 420,
     alignSelf: "center",
     padding: 20,
     gap: 14,
-    borderRadius: 10,
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: "#191E23",
+    borderColor: prana.line,
+    backgroundColor: prana.card,
   },
-  dialogTitle: { color: colors.text, fontFamily: ASK_PRANA_FONT_FAMILY, fontSize: 17, lineHeight: 22, fontWeight: "600" },
-  dialogBody: { color: colors.muted, fontFamily: ASK_PRANA_FONT_FAMILY, fontSize: 14, lineHeight: 21, fontWeight: "400" },
+  dialogTitle: { color: prana.ink, fontFamily: PRANA_FONT, fontSize: 17, lineHeight: 22, fontWeight: "800" },
+  dialogBody: { color: prana.muted, fontFamily: PRANA_FONT, fontSize: 14, lineHeight: 21, fontWeight: "400" },
   renameInput: {
-    minHeight: 42,
-    color: colors.text,
-    fontFamily: ASK_PRANA_FONT_FAMILY,
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: colors.border,
-    paddingHorizontal: 10,
+    minHeight: 46,
+    color: prana.ink,
+    fontFamily: PRANA_FONT,
+    borderRadius: 11,
+    borderWidth: 1.4,
+    borderColor: prana.inputBorder,
+    backgroundColor: prana.card,
+    paddingHorizontal: 12,
     fontSize: 14,
     fontWeight: "400",
   },
   dialogActions: { flexDirection: "row", justifyContent: "flex-end", gap: 8 },
-  secondaryButton: { minHeight: 38, justifyContent: "center", paddingHorizontal: 12 },
-  secondaryButtonText: { color: colors.text, fontFamily: ASK_PRANA_FONT_FAMILY, fontSize: 13, lineHeight: 18, fontWeight: "500" },
-  primaryButton: {
-    minHeight: 38,
-    justifyContent: "center",
-    paddingHorizontal: 14,
-    borderRadius: 6,
-    backgroundColor: colors.accent,
+  secondaryButton: { minHeight: 40, justifyContent: "center", paddingHorizontal: 14, borderRadius: 10, borderWidth: 1, borderColor: "#B9CEBC" },
+  secondaryButtonText: { color: "#286C62", fontFamily: PRANA_FONT, fontSize: 13, lineHeight: 18, fontWeight: "700" },
+  primaryButton: { minHeight: 40, justifyContent: "center", paddingHorizontal: 16, borderRadius: 10, backgroundColor: prana.teal },
+  deleteButton: { minHeight: 40, justifyContent: "center", paddingHorizontal: 16, borderRadius: 10, backgroundColor: "#9E4B3D" },
+  primaryButtonText: { color: colors.white, fontFamily: PRANA_FONT, fontSize: 13, lineHeight: 18, fontWeight: "800" },
+  mobileSidebar: {
+    backgroundColor: prana.cream,
+    paddingHorizontal: 24,
+    paddingBottom: 12,
   },
-  deleteButton: {
-    minHeight: 38,
-    justifyContent: "center",
-    paddingHorizontal: 14,
-    borderRadius: 6,
-    backgroundColor: "#B94444",
+  searchBoxMobile: {
+    minHeight: 51,
+    marginTop: 0,
+    borderWidth: 1.4,
+    borderColor: prana.inputBorder,
+    backgroundColor: prana.card,
+    borderRadius: 11,
   },
-  primaryButtonText: { color: colors.white, fontFamily: ASK_PRANA_FONT_FAMILY, fontSize: 14, lineHeight: 19, fontWeight: "600" },
+  searchInputMobile: { color: prana.ink, fontSize: 13 },
+  sidebarLabel: {
+    color: "#94A08A",
+    fontFamily: PRANA_FONT,
+    fontSize: 9,
+    lineHeight: 12,
+    fontWeight: "800",
+    letterSpacing: 1.2,
+    textTransform: "uppercase",
+    marginTop: 29,
+    marginBottom: 4,
+    marginHorizontal: 9,
+  },
+  mobileTop: { paddingTop: 8 },
+  backLink: { flexDirection: "row", alignItems: "center", gap: 5, alignSelf: "flex-start", minHeight: 40, paddingRight: 8, marginBottom: 6 },
+  backLinkText: { color: "#217C73", fontFamily: PRANA_FONT, fontSize: 12, lineHeight: 16, fontWeight: "700" },
+  kicker: { color: prana.tealText, fontFamily: PRANA_FONT, fontSize: 10, lineHeight: 13, fontWeight: "800", letterSpacing: 1.1, marginBottom: 8 },
+  mobileTitle: { color: prana.ink, fontFamily: PRANA_FONT, fontSize: 29, lineHeight: 34, fontWeight: "800", marginBottom: 12 },
+  mobileSubtitle: { color: prana.muted, fontFamily: PRANA_FONT, fontSize: 13, lineHeight: 21, marginBottom: 27 },
+  newChatMobile: {
+    minHeight: 48,
+    marginTop: 13,
+    marginBottom: 5,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#B9CEBC",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+  newChatMobileText: { color: "#286C62", fontFamily: PRANA_FONT, fontSize: 12, lineHeight: 16, fontWeight: "700" },
 });

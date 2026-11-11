@@ -5,17 +5,19 @@ import {
   Modal,
   Platform,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
+  useWindowDimensions,
 } from "react-native";
 import Feather from "@expo/vector-icons/Feather";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useTranslation } from "react-i18next";
 import { UserAvatar } from "../components/user-avatar";
+import { PranaHeader, PranaHeaderButton } from "../components/prana-header";
+import { PRANA_FONT, prana, pranaGradientStyle } from "../constants/prana-theme";
 import { useProfile } from "../context/profile-context";
 import {
   pickProfilePhotoCandidate,
@@ -38,16 +40,17 @@ import {
   updateCurrentUserProfile,
 } from "../services/profile";
 
+// AskPrana cream / teal theme.
 const colors = {
-  background: "#171717",
-  card: "#212121",
-  border: "#363636",
-  text: "#F5F5F5",
-  muted: "#A0A0A0",
-  primary: "#16A34A",
-  danger: "#F87171",
-  success: "#34D399",
-  warning: "#FBBF24",
+  background: prana.cream,
+  card: prana.card,
+  border: prana.inputBorder,
+  text: prana.ink,
+  muted: "#8A9B8B",
+  primary: prana.teal,
+  danger: "#9E4B3D",
+  success: "#2E7767",
+  warning: "#A06A1B",
 };
 
 const EMAIL_STATUS_BADGE: Record<AuthEmailState["status"], { text: string; color: string }> = {
@@ -64,6 +67,8 @@ export default function EditProfileScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ mode?: string }>();
   const registerMode = params.mode === "register";
+  const { width: windowWidth } = useWindowDimensions();
+  const isDesktop = windowWidth >= 1024;
   const [lockedPhone, setLockedPhone] = useState(false);
   const [lockedEmail, setLockedEmail] = useState(false);
   const { t } = useTranslation();
@@ -388,39 +393,14 @@ export default function EditProfileScreen() {
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.safeArea}>
+      <View style={styles.safeArea}>
         <View style={styles.loading}><ActivityIndicator color={colors.primary} /></View>
-      </SafeAreaView>
+      </View>
     );
   }
 
-  return (
-    <SafeAreaView style={styles.safeArea}>
-      <View style={styles.header}>
-        <Pressable onPress={leaveScreen} style={styles.backButton} accessibilityRole="button" accessibilityLabel="Go back">
-          <Feather name="arrow-left" size={20} color={colors.text} />
-        </Pressable>
-        <Text style={styles.title}>{registerMode ? "Create your Ask Prana account" : "Edit profile"}</Text>
-        <View style={styles.backButton} />
-      </View>
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        {registerMode ? null : (
-          <View style={styles.photoBlock}>
-            <UserAvatar
-              name={name}
-              avatarUrl={avatarUrl}
-              avatarUpdatedAt={avatarUpdatedAt}
-              size={88}
-              variant="solid"
-              showEditBadge
-              loading={photoBusy}
-              onPress={() => void changePhoto()}
-            />
-            {photoError ? <Text style={styles.photoError}>{photoError}</Text> : null}
-          </View>
-        )}
-        <Text style={styles.caption}>{registerMode ? "This code is verified. Add your details to finish." : "Your account details"}</Text>
-        <Field label="Full name" value={name} onChangeText={setName} autoCapitalize="words" />
+  const emailField = (
+    <>
         <Field
           label="Email"
           badge={emailState ? EMAIL_STATUS_BADGE[emailState.status] : null}
@@ -466,12 +446,66 @@ export default function EditProfileScreen() {
             <Text style={styles.resendLinkText}>Resend verification email</Text>
           </Pressable>
         ) : null}
-        <Field label="Phone number" value={phone} onChangeText={setPhone} keyboardType="phone-pad" editable={!lockedPhone} />
-        <Field label="State" value={state} onChangeText={setState} autoCapitalize="words" />
-        <Field label="District" value={district} onChangeText={setDistrict} autoCapitalize="words" />
-        <Field label="Language" value={language} onChangeText={setLanguage} autoCapitalize="words" />
-        <Pressable onPress={() => void save()} disabled={saving} style={[styles.saveButton, saving && styles.saveButtonDisabled]} accessibilityRole="button">
-          {saving ? <ActivityIndicator color={colors.text} /> : <Text style={styles.saveText}>{registerMode ? "Create account" : "Save changes"}</Text>}
+    </>
+  );
+
+  return (
+    <View style={styles.safeArea}>
+      {isDesktop ? (
+        <PranaHeader
+          variant="light"
+          left={<PranaHeaderButton icon="arrow-left" tone="light" onPress={leaveScreen} label="Go back" />}
+        />
+      ) : (
+        <PranaHeader
+          variant="wave"
+          left={<PranaHeaderButton icon="message-square" onPress={leaveScreen} label="Go back" />}
+          right={<View style={{ width: 42 }} />}
+        />
+      )}
+      <ScrollView
+        contentContainerStyle={[styles.content, isDesktop && styles.contentDesktop]}
+        keyboardShouldPersistTaps="handled"
+      >
+        <View style={[styles.inner, isDesktop && styles.card]}>
+        <Pressable onPress={leaveScreen} style={styles.backLink} accessibilityRole="button" accessibilityLabel="Go back">
+          <Feather name="arrow-left" size={13} color="#217C73" />
+          <Text style={styles.backLinkText}>Chat</Text>
+        </Pressable>
+        <Text style={styles.kicker}>{registerMode ? "CREATE ACCOUNT" : "ACCOUNT"}</Text>
+        <Text style={styles.title}>{registerMode ? "Create your Ask Prana account" : "Your profile"}</Text>
+        <Text style={styles.caption}>{registerMode ? "This code is verified. Add your details to finish." : "Keep your account details up to date."}</Text>
+        {registerMode ? null : (
+          <View style={styles.photoBlock}>
+            <UserAvatar
+              name={name}
+              avatarUrl={avatarUrl}
+              avatarUpdatedAt={avatarUpdatedAt}
+              size={66}
+              variant="solid"
+              loading={photoBusy}
+              onPress={() => void changePhoto()}
+            />
+            <Pressable onPress={() => void changePhoto()} disabled={photoBusy} accessibilityRole="button" style={styles.changePhoto}>
+              <Text style={styles.changePhotoText}>Change photo</Text>
+            </Pressable>
+          </View>
+        )}
+        {photoError ? <Text style={styles.photoError}>{photoError}</Text> : null}
+        <Field label="Full name" value={name} onChangeText={setName} autoCapitalize="words" />
+        <Field label="Mobile number" value={phone} onChangeText={setPhone} keyboardType="phone-pad" editable={!lockedPhone} />
+        {emailField}
+        <View style={styles.grid}>
+          <View style={styles.gridCell}>
+            <Field label="State" value={state} onChangeText={setState} autoCapitalize="words" />
+          </View>
+          <View style={styles.gridCell}>
+            <Field label="District" value={district} onChangeText={setDistrict} autoCapitalize="words" />
+          </View>
+        </View>
+        <Field label="Preferred language" value={language} onChangeText={setLanguage} autoCapitalize="words" />
+        <Pressable onPress={() => void save()} disabled={saving} style={[styles.saveButton, pranaGradientStyle, saving && styles.saveButtonDisabled]} accessibilityRole="button">
+          {saving ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.saveText}>{registerMode ? "Create account" : "Save changes"}</Text>}
         </Pressable>
         {saveNotice ? <Text style={styles.saveNotice} accessibilityLiveRegion="polite">{saveNotice}</Text> : null}
         {saveError ? <Text style={styles.saveError} accessibilityLiveRegion="polite">{saveError}</Text> : null}
@@ -491,13 +525,19 @@ export default function EditProfileScreen() {
             accessibilityRole="button"
             accessibilityLabel={t("profile.logout")}
           >
-            <Feather name="log-out" size={17} color={colors.danger} />
-            <Text style={styles.logoutText}>{t("profile.logout")}</Text>
+            <Text style={styles.logoutText}>Sign out</Text>
           </Pressable>
         )}
+        </View>
       </ScrollView>
       <Modal visible={logoutConfirmOpen} transparent animationType="fade" onRequestClose={() => !loggingOut && setLogoutConfirmOpen(false)}>
         <View style={styles.logoutScreen}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => !loggingOut && setLogoutConfirmOpen(false)}
+            accessibilityLabel="Cancel"
+          />
+          <View style={styles.logoutCard}>
           <Text style={styles.logoutTitle}>Log out of Ask Prana?</Text>
           <View style={styles.logoutAccount}>
             <UserAvatar name={name} avatarUrl={avatarUrl} avatarUpdatedAt={avatarUpdatedAt} size={36} variant="solid" />
@@ -509,14 +549,15 @@ export default function EditProfileScreen() {
           <Text style={styles.logoutHint}>You'll need to log in again to access your chats.</Text>
           {logoutError ? <Text style={styles.dialogError}>{logoutError}</Text> : null}
           <Pressable onPress={() => void confirmLogout()} disabled={loggingOut} style={[styles.logoutConfirm, loggingOut && styles.saveButtonDisabled]} accessibilityRole="button">
-            {loggingOut ? <ActivityIndicator color="#171717" /> : <Text style={styles.logoutConfirmText}>Log out</Text>}
+            {loggingOut ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.logoutConfirmText}>Log out</Text>}
           </Pressable>
           <Pressable onPress={() => setLogoutConfirmOpen(false)} disabled={loggingOut} style={styles.logoutCancel} accessibilityRole="button">
             <Text style={styles.logoutCancelText}>Cancel</Text>
           </Pressable>
+          </View>
         </View>
       </Modal>
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -524,47 +565,92 @@ function Field({ label, editable = true, error, hint, badge, ...inputProps }: Re
   return <View style={styles.field}><View style={styles.labelRow}><Text style={styles.label}>{label}</Text>{badge ? <Text style={[styles.badge, { color: badge.color, borderColor: badge.color }]}>{badge.text}</Text> : null}</View><TextInput {...inputProps} editable={editable} style={[styles.input, !editable && styles.inputDisabled, error ? styles.inputError : null]} placeholderTextColor={colors.muted} />{error ? <Text style={styles.errorText} accessibilityLiveRegion="polite">{error}</Text> : hint ? <Text style={styles.hintText}>{hint}</Text> : null}</View>;
 }
 
+const F = PRANA_FONT;
+
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: colors.background },
+  safeArea: { flex: 1, backgroundColor: prana.cream },
   loading: { flex: 1, alignItems: "center", justifyContent: "center" },
-  header: { height: 58, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: colors.border },
-  backButton: { width: 40, height: 40, alignItems: "center", justifyContent: "center", borderRadius: 20 },
-  title: { color: colors.text, fontSize: 18, lineHeight: 23, fontWeight: "600" },
-  content: { width: "100%", maxWidth: 520, alignSelf: "center", padding: 20, gap: 16 },
-  caption: { color: colors.muted, fontSize: 14, lineHeight: 20, fontWeight: "400", marginBottom: 4 },
-  photoBlock: { alignItems: "center", gap: 8 },
-  photoError: { color: colors.danger, fontSize: 13, lineHeight: 18, fontWeight: "500", textAlign: "center" },
-  field: { gap: 7 },
-  label: { color: colors.text, fontSize: 14, lineHeight: 20, fontWeight: "500" },
-  input: { minHeight: 46, color: colors.text, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border, borderRadius: 8, paddingHorizontal: 12, fontSize: 15, lineHeight: 21, fontWeight: "400" },
-  inputDisabled: { color: colors.muted, opacity: 0.8 },
+  content: { flexGrow: 1, paddingBottom: 32 },
+  contentDesktop: { alignItems: "center", paddingTop: 32 },
+  inner: { width: "100%", maxWidth: 540, alignSelf: "center", paddingHorizontal: 24, paddingTop: 10 },
+  card: {
+    maxWidth: 560,
+    paddingHorizontal: 36,
+    paddingVertical: 28,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: prana.line,
+    shadowColor: "#1D4B36",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.08,
+    shadowRadius: 30,
+  },
+  backLink: { flexDirection: "row", alignItems: "center", gap: 5, alignSelf: "flex-start", minHeight: 40, paddingRight: 8, marginBottom: 6 },
+  backLinkText: { color: "#217C73", fontFamily: F, fontSize: 12, lineHeight: 16, fontWeight: "700" },
+  kicker: { color: prana.tealText, fontFamily: F, fontSize: 10, lineHeight: 13, fontWeight: "800", letterSpacing: 1.1, marginBottom: 8 },
+  title: { color: prana.ink, fontFamily: F, fontSize: 29, lineHeight: 34, fontWeight: "800", marginBottom: 12 },
+  caption: { color: prana.muted, fontFamily: F, fontSize: 13, lineHeight: 21, marginBottom: 24 },
+  photoBlock: { flexDirection: "row", alignItems: "center", gap: 16, marginBottom: 26 },
+  changePhoto: { minHeight: 31, justifyContent: "center" },
+  changePhotoText: { color: "#217C73", fontFamily: F, fontSize: 12, lineHeight: 16, fontWeight: "700" },
+  photoError: { color: colors.danger, fontFamily: F, fontSize: 12, lineHeight: 18, marginTop: -16, marginBottom: 12 },
+  field: { gap: 9, marginBottom: 17 },
+  grid: { flexDirection: "row", gap: 11 },
+  gridCell: { flex: 1, minWidth: 0 },
+  label: { color: prana.ink, fontFamily: F, fontSize: 12, lineHeight: 16, fontWeight: "700" },
+  input: {
+    minHeight: 51,
+    color: prana.ink,
+    backgroundColor: prana.card,
+    borderWidth: 1.4,
+    borderColor: prana.inputBorder,
+    borderRadius: 11,
+    paddingHorizontal: 12,
+    fontFamily: F,
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: "400",
+    ...(Platform.OS === "web" ? ({ outlineStyle: "none", outlineWidth: 0 } as object) : null),
+  },
+  inputDisabled: { color: "#6E8476", backgroundColor: "#F2F2DE" },
   inputError: { borderColor: colors.danger },
-  errorText: { color: colors.danger, fontSize: 13, lineHeight: 18, fontWeight: "500" },
+  errorText: { color: colors.danger, fontFamily: F, fontSize: 12, lineHeight: 17 },
   labelRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
-  badge: { fontSize: 12, lineHeight: 16, fontWeight: "600", borderWidth: 1, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2, overflow: "hidden" },
-  resendLink: { flexDirection: "row", alignItems: "center", gap: 8, alignSelf: "flex-start", marginTop: -8, paddingVertical: 4 },
+  badge: { fontFamily: F, fontSize: 10, lineHeight: 14, fontWeight: "700", borderWidth: 1, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2, overflow: "hidden" },
+  resendLink: { flexDirection: "row", alignItems: "center", gap: 8, alignSelf: "flex-start", marginTop: -8, marginBottom: 12, paddingVertical: 4 },
   resendLinkPressed: { opacity: 0.6 },
-  resendLinkText: { color: colors.primary, fontSize: 13, lineHeight: 18, fontWeight: "600" },
-  hintText: { color: colors.muted, fontSize: 13, lineHeight: 18, fontWeight: "400" },
-  saveButton: { minHeight: 46, marginTop: 8, borderRadius: 8, alignItems: "center", justifyContent: "center", backgroundColor: "#0F766E" },
+  resendLinkText: { color: "#217C73", fontFamily: F, fontSize: 12, lineHeight: 17, fontWeight: "700" },
+  hintText: { color: prana.muted, fontFamily: F, fontSize: 11, lineHeight: 17 },
+  saveButton: {
+    minHeight: 54,
+    marginTop: 8,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#24665A",
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.1,
+    shadowRadius: 14,
+  },
   saveButtonDisabled: { opacity: 0.6 },
-  saveText: { color: colors.text, fontSize: 14, lineHeight: 20, fontWeight: "600" },
-  saveNotice: { color: colors.success, fontSize: 15, lineHeight: 21, fontWeight: "600", textAlign: "center" },
-  saveError: { color: colors.danger, fontSize: 14, lineHeight: 20, fontWeight: "600", textAlign: "center" },
-  logoutButton: { minHeight: 46, flexDirection: "row", gap: 8, borderRadius: 8, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: colors.border, backgroundColor: colors.card },
-  logoutButtonHovered: { borderColor: colors.danger },
+  saveText: { color: "#FFFFFF", fontFamily: F, fontSize: 14, lineHeight: 20, fontWeight: "800" },
+  saveNotice: { color: colors.success, fontFamily: F, fontSize: 13, lineHeight: 19, fontWeight: "700", textAlign: "center", marginTop: 12 },
+  saveError: { color: colors.danger, fontFamily: F, fontSize: 13, lineHeight: 19, fontWeight: "700", textAlign: "center", marginTop: 12 },
+  logoutButton: { minHeight: 44, marginTop: 16, borderRadius: 10, alignItems: "center", justifyContent: "center" },
+  logoutButtonHovered: { backgroundColor: "rgba(158,75,61,0.08)" },
   logoutButtonPressed: { opacity: 0.7 },
-  logoutText: { color: colors.danger, fontSize: 14, lineHeight: 20, fontWeight: "600" },
-  dialogError: { color: colors.danger, fontSize: 13, lineHeight: 19, fontWeight: "500", textAlign: "center" },
-  logoutScreen: { flex: 1, backgroundColor: "#000000", alignItems: "center", justifyContent: "center", paddingHorizontal: 24, gap: 16 },
-  logoutTitle: { color: "#FFFFFF", fontSize: 28, lineHeight: 34, fontWeight: "600", textAlign: "center", marginBottom: 8 },
-  logoutAccount: { width: "100%", maxWidth: 360, minHeight: 64, borderRadius: 16, borderWidth: 1, borderColor: "#3A3A3A", paddingHorizontal: 14, flexDirection: "row", alignItems: "center", gap: 12 },
+  logoutText: { color: colors.danger, fontFamily: F, fontSize: 12, lineHeight: 16, fontWeight: "700" },
+  dialogError: { color: colors.danger, fontFamily: F, fontSize: 13, lineHeight: 19, textAlign: "center" },
+  logoutScreen: { flex: 1, backgroundColor: "rgba(21,57,58,0.6)", alignItems: "center", justifyContent: "center", paddingHorizontal: 20 },
+  logoutTitle: { color: prana.ink, fontFamily: F, fontSize: 22, lineHeight: 28, fontWeight: "800", textAlign: "center", marginBottom: 4 },
+  logoutAccount: { width: "100%", minHeight: 64, borderRadius: 12, borderWidth: 1, borderColor: prana.line, backgroundColor: "#FFFFFF", paddingHorizontal: 14, flexDirection: "row", alignItems: "center", gap: 12 },
+  logoutCard: { width: "100%", maxWidth: 380, padding: 22, gap: 14, borderRadius: 20, backgroundColor: prana.cream, borderWidth: 1, borderColor: prana.line, shadowColor: "#15393A", shadowOffset: { width: 0, height: 12 }, shadowOpacity: 0.2, shadowRadius: 40 },
   logoutAccountCopy: { flex: 1, minWidth: 0 },
-  logoutName: { color: "#FFFFFF", fontSize: 15, lineHeight: 20, fontWeight: "600" },
-  logoutEmail: { color: "#A3A3A3", fontSize: 13, lineHeight: 18 },
-  logoutHint: { color: "#D4D4D4", fontSize: 14, lineHeight: 20, textAlign: "center" },
-  logoutConfirm: { width: "100%", maxWidth: 360, minHeight: 48, borderRadius: 24, backgroundColor: "#FFFFFF", alignItems: "center", justifyContent: "center" },
-  logoutConfirmText: { color: "#171717", fontSize: 16, lineHeight: 22, fontWeight: "600" },
-  logoutCancel: { width: "100%", maxWidth: 360, minHeight: 48, borderRadius: 24, borderWidth: 1, borderColor: "#5A5A5A", alignItems: "center", justifyContent: "center" },
-  logoutCancelText: { color: "#FFFFFF", fontSize: 16, lineHeight: 22, fontWeight: "500" },
+  logoutName: { color: prana.ink, fontFamily: F, fontSize: 14, lineHeight: 20, fontWeight: "700" },
+  logoutEmail: { color: prana.muted, fontFamily: F, fontSize: 12, lineHeight: 17 },
+  logoutHint: { color: prana.muted, fontFamily: F, fontSize: 13, lineHeight: 19, textAlign: "center" },
+  logoutConfirm: { width: "100%", minHeight: 50, borderRadius: 12, backgroundColor: "#9E4B3D", alignItems: "center", justifyContent: "center", marginTop: 4 },
+  logoutConfirmText: { color: "#FFFFFF", fontFamily: F, fontSize: 14, lineHeight: 20, fontWeight: "800" },
+  logoutCancel: { width: "100%", minHeight: 50, borderRadius: 12, borderWidth: 1, borderColor: "#B9CEBC", backgroundColor: "transparent", alignItems: "center", justifyContent: "center" },
+  logoutCancelText: { color: "#286C62", fontFamily: F, fontSize: 14, lineHeight: 20, fontWeight: "700" },
 });

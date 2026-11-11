@@ -4,19 +4,19 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   StatusBar,
   StyleSheet,
   Text,
   TextInput,
   View,
+  useWindowDimensions,
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Feather from "@expo/vector-icons/Feather";
-import {
-  AUTH_DARK_BACKGROUND,
-  PhoneLoginBackground,
-} from "../components/phone-login-background";
+import { PranaHeader, PranaHeaderButton } from "../components/prana-header";
+import { PRANA_FONT, prana, pranaGradientStyle } from "../constants/prana-theme";
 import { PrimaryCtaGradientFill } from "../components/primary-cta-gradient";
 import { PRIMARY_CTA_START } from "../constants/primary-cta";
 import { useProfile } from "../context/profile-context";
@@ -38,19 +38,19 @@ import {
   verifyEmailLoginCode,
 } from "../services/profile";
 
-// Same dark Ask Prana theme as the phone login / OTP screens.
+// AskPrana cream / teal theme.
 const colors = {
-  teal: "#2DD4BF",
-  background: AUTH_DARK_BACKGROUND,
-  text: "#F5F5F5",
-  mutedText: "#C9D1D0",
-  mutedSoft: "#A0A0A0",
-  border: "#363636",
-  card: "#212121",
-  danger: "#F87171",
-  success: "#34D399",
-  ctaDisabled: "#26302F",
-  ctaDisabledText: "#7C8886",
+  teal: prana.teal,
+  background: prana.cream,
+  text: prana.ink,
+  mutedText: prana.muted,
+  mutedSoft: "#7FA79B",
+  border: prana.inputBorder,
+  card: prana.card,
+  danger: prana.error,
+  success: "#2E7767",
+  ctaDisabled: "#9FC0B6",
+  ctaDisabledText: "#FFFFFF",
 };
 
 /** Supabase's default minimum interval between emails to the same address. */
@@ -291,39 +291,43 @@ export default function VerifyEmailScreen() {
     setResendSeconds(RESEND_SECONDS);
   };
 
+  const { width: windowWidth } = useWindowDimensions();
+  const isDesktop = windowWidth >= 1024;
+  const goBack = () => {
+    // Email login is normally opened with push, but retain a
+    // fallback for a directly opened verification URL.
+    if (router.canGoBack()) router.back();
+    else router.replace("/phone-login" as never);
+  };
+
   const canVerify = code.length >= codeLength && !verifying && !sending && !verified;
 
   return (
     <View style={styles.root}>
-      <StatusBar barStyle="light-content" backgroundColor={colors.background} />
-      <PhoneLoginBackground waveProfile="tall" appearance="dark">
+      <StatusBar
+        barStyle={isDesktop ? "dark-content" : "light-content"}
+        backgroundColor={isDesktop ? prana.desktopHeader : prana.headerDark}
+      />
+      {isDesktop ? (
+        <PranaHeader
+          variant="light"
+          left={<PranaHeaderButton icon="arrow-left" tone="light" onPress={goBack} label="Change email or mobile number" />}
+        />
+      ) : (
+        <PranaHeader
+          variant="wave"
+          left={<PranaHeaderButton icon="arrow-left" onPress={goBack} label="Change email or mobile number" />}
+          right={<View style={{ width: 42 }} />}
+        />
+      )}
         <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === "ios" ? "padding" : undefined}>
-          <SafeAreaView style={styles.flex} edges={["top", "bottom"]}>
-            <View style={styles.content}>
-              <View style={styles.backRow}>
-                <Pressable
-                  onPress={() => {
-                    // Email login is normally opened with push, but retain a
-                    // fallback for a directly opened verification URL.
-                    if (router.canGoBack()) router.back();
-                    else router.replace("/phone-login" as never);
-                  }}
-                  onHoverIn={() => setBackButtonHovered(true)}
-                  onHoverOut={() => setBackButtonHovered(false)}
-                  onFocus={() => setBackButtonFocused(true)}
-                  onBlur={() => setBackButtonFocused(false)}
-                  style={[
-                    styles.backButton,
-                    backButtonHovered && styles.backButtonHovered,
-                    backButtonFocused && styles.backButtonFocused,
-                  ]}
-                  accessibilityRole="button"
-                  accessibilityLabel="Change email or mobile number"
-                  hitSlop={8}
-                >
-                  <Feather name="arrow-left" size={20} color={colors.text} />
-                </Pressable>
-              </View>
+          <SafeAreaView style={styles.flex} edges={["bottom"]}>
+            <ScrollView
+              contentContainerStyle={[styles.scroll, isDesktop && styles.scrollDesktop]}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+            <View style={[styles.content, isDesktop && styles.card]}>
               <Text style={styles.eyebrow}>{loginMode ? "SECURE VERIFICATION" : "EMAIL VERIFICATION"}</Text>
               <Text style={styles.heading}>Verify your email</Text>
 
@@ -333,7 +337,7 @@ export default function VerifyEmailScreen() {
                     Email verified successfully.
                   </Text>
                   <Text style={styles.sentTo}>{maskEmail(requestedEmail)} is now linked to your account.</Text>
-                  <PrimaryButton label="CONTINUE →" onPress={finish} />
+                  <PrimaryButton label="Continue →" onPress={finish} />
                 </>
               ) : (
                 <>
@@ -372,7 +376,7 @@ export default function VerifyEmailScreen() {
                   ) : null}
 
                   <PrimaryButton
-                    label={sending ? "SENDING OTP..." : verifying ? "VERIFYING..." : "VERIFY EMAIL"}
+                    label={sending ? "Sending code…" : verifying ? "Verifying…" : "Verify & continue →"}
                     onPress={() => void verify(code)}
                     disabled={!canVerify}
                     loading={sending || verifying}
@@ -402,9 +406,9 @@ export default function VerifyEmailScreen() {
                 </>
               )}
             </View>
+            </ScrollView>
           </SafeAreaView>
         </KeyboardAvoidingView>
-      </PhoneLoginBackground>
     </View>
   );
 }
@@ -426,13 +430,13 @@ function PrimaryButton({
       disabled={disabled}
       style={({ pressed }) => [
         styles.button,
-        { backgroundColor: disabled ? colors.ctaDisabled : PRIMARY_CTA_START },
+        pranaGradientStyle,
+        disabled && { opacity: 0.48 },
         pressed && !disabled && styles.buttonPressed,
       ]}
       accessibilityRole="button"
       accessibilityState={{ disabled }}
     >
-      {!disabled ? <PrimaryCtaGradientFill /> : null}
       <View style={styles.buttonContent}>
         {loading ? <ActivityIndicator size="small" color={colors.ctaDisabledText} /> : null}
         <Text style={[styles.buttonText, disabled && styles.buttonTextDisabled]}>{label}</Text>
@@ -441,61 +445,69 @@ function PrimaryButton({
   );
 }
 
+const F = PRANA_FONT;
+
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.background, overflow: "hidden" },
+  root: { flex: 1, backgroundColor: prana.cream, overflow: "hidden" },
   flex: { flex: 1 },
-  backRow: { alignSelf: "flex-start", marginBottom: 12 },
-  backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: colors.card,
+  scroll: { flexGrow: 1, paddingBottom: 28 },
+  scrollDesktop: { alignItems: "center", justifyContent: "center", paddingVertical: 40 },
+  content: { width: "100%", maxWidth: 540, alignSelf: "center", paddingHorizontal: 24, paddingTop: 14, gap: 12 },
+  card: {
+    maxWidth: 440,
+    paddingHorizontal: 32,
+    paddingVertical: 30,
+    borderRadius: 20,
     borderWidth: 1,
-    borderColor: colors.border,
-    alignItems: "center",
-    justifyContent: "center",
+    borderColor: prana.line,
+    shadowColor: "#1D4B36",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.08,
+    shadowRadius: 30,
   },
-  backButtonHovered: { backgroundColor: "#173B39", borderColor: colors.teal },
-  backButtonFocused: { borderColor: colors.teal, borderWidth: 2 },
-  content: { width: "100%", maxWidth: 520, alignSelf: "center", paddingHorizontal: 20, paddingTop: 24, gap: 12 },
-  eyebrow: { color: colors.teal, fontSize: 14, lineHeight: 18, fontWeight: "800", letterSpacing: 1.2 },
-  heading: { color: colors.text, fontSize: 30, lineHeight: 36, fontWeight: "800" },
-  sentTo: { color: colors.mutedText, fontSize: 16, lineHeight: 24, fontWeight: "600", marginBottom: 12 },
-  emailText: { color: colors.text, fontWeight: "700" },
-  label: { color: colors.text, fontSize: 14, lineHeight: 18, fontWeight: "700" },
+  eyebrow: { color: prana.tealText, fontFamily: F, fontSize: 10, lineHeight: 13, fontWeight: "800", letterSpacing: 1.1 },
+  heading: { color: prana.ink, fontFamily: F, fontSize: 29, lineHeight: 34, fontWeight: "800" },
+  sentTo: { color: prana.muted, fontFamily: F, fontSize: 13, lineHeight: 21, marginBottom: 12 },
+  emailText: { color: prana.ink, fontSize: 15, fontWeight: "800" },
+  label: { color: prana.ink, fontFamily: F, fontSize: 12, lineHeight: 16, fontWeight: "700" },
   codeInput: {
-    height: 58,
+    height: 56,
     borderRadius: 12,
     borderWidth: 1.5,
-    borderColor: colors.teal,
-    backgroundColor: colors.card,
-    color: colors.text,
-    fontSize: 26,
+    borderColor: "#C4D0BE",
+    backgroundColor: prana.card,
+    color: prana.ink,
+    fontFamily: F,
+    fontSize: 23,
     fontWeight: "800",
     letterSpacing: 8,
     textAlign: "center",
-    ...(Platform.OS === "web" ? ({ outlineStyle: "none", outlineWidth: 0 } as object) : null),
+    ...(Platform.OS === "web" ? ({ outlineStyle: "none", outlineWidth: 0, caretColor: "#008081" } as object) : null),
   },
   codeInputError: { borderColor: colors.danger },
-  errorText: { color: colors.danger, fontSize: 14, lineHeight: 20, fontWeight: "600" },
-  noticeText: { color: colors.mutedText, fontSize: 14, lineHeight: 20, fontWeight: "500" },
-  successText: { color: colors.success, fontSize: 17, lineHeight: 24, fontWeight: "700" },
+  errorText: { color: colors.danger, fontFamily: F, fontSize: 12, lineHeight: 18 },
+  noticeText: { color: prana.muted, fontFamily: F, fontSize: 12, lineHeight: 18 },
+  successText: { color: colors.success, fontFamily: F, fontSize: 15, lineHeight: 22, fontWeight: "700" },
   button: {
-    height: 54,
+    minHeight: 54,
     marginTop: 8,
     borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
+    shadowColor: "#24665A",
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.1,
+    shadowRadius: 14,
   },
-  buttonPressed: { opacity: 0.92 },
+  buttonPressed: { opacity: 0.9 },
   buttonContent: { flexDirection: "row", alignItems: "center", gap: 8 },
-  buttonText: { color: "#FFFFFF", fontSize: 15, lineHeight: 20, fontWeight: "700", letterSpacing: 0.4 },
-  buttonTextDisabled: { color: colors.ctaDisabledText },
-  resendLine: { marginTop: 12, textAlign: "center", fontSize: 15, lineHeight: 22 },
-  resendPrompt: { color: colors.mutedText, fontWeight: "600" },
-  resendAction: { color: colors.teal, fontWeight: "800" },
-  resendActionDisabled: { color: colors.mutedSoft, fontWeight: "700" },
-  skip: { alignSelf: "center", paddingVertical: 8, paddingHorizontal: 12 },
-  skipText: { color: colors.mutedSoft, fontSize: 14, lineHeight: 18, fontWeight: "600" },
+  buttonText: { color: "#FFFFFF", fontFamily: F, fontSize: 14, lineHeight: 20, fontWeight: "800" },
+  buttonTextDisabled: { color: "#FFFFFF" },
+  resendLine: { marginTop: 4, textAlign: "center", fontFamily: F, fontSize: 11, lineHeight: 16 },
+  resendPrompt: { color: prana.muted },
+  resendAction: { color: "#217C73", fontWeight: "700" },
+  resendActionDisabled: { color: "#7FA79B", fontWeight: "600" },
+  skip: { alignSelf: "center", minHeight: 44, justifyContent: "center", paddingHorizontal: 12 },
+  skipText: { color: "#217C73", fontFamily: F, fontSize: 12, lineHeight: 16, fontWeight: "700" },
 });

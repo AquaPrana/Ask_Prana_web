@@ -137,7 +137,9 @@
     "photoGallery": "గ్యాలరీ నుండి ఎంచుకోండి"
   },
   "askPrana": {
+    "historyTitle": "చాట్ చరిత్ర", "historySubtitle": "మీరు ఆపిన చోట నుండి కొనసాగించండి.", "backToChat": "చాట్", "yourConversations": "మీ సంభాషణలు", "newChatShort": "కొత్త చాట్", "searchConversations": "మీ సంభాషణలు వెతకండి...",
     "title": "Ask Prana",
+    "attachShort": "జోడించు", "dictateShort": "మాట్లాడు", "stopShort": "ఆపు", "sendShort": "పంపు", "voiceChat": "వాయిస్ చాట్", "composerNote": "సందేశం టైప్ చేయండి, ఫైల్ జోడించండి లేదా మైక్ వాడండి.", "messagePlaceholder": "AskPrana కి సందేశం…",
     "pdfDocument": "PDF పత్రం (.pdf)", "excelSpreadsheet": "Excel స్ప్రెడ్‌షీట్ (.xlsx)", "wordDocument": "Microsoft Word పత్రం (.docx)", "downloadUnavailable": "డౌన్‌లోడ్ అందుబాటులో లేదు", "downloadLinkUnavailable": "ఈ ఫైల్ లింక్ తెరవలేకపోయాం. పత్రాన్ని మళ్లీ రూపొందించండి.", "downloadOpenUnavailable": "ఇప్పుడు పత్రాన్ని తెరవలేకపోయాం. మళ్లీ ప్రయత్నించండి.",
     "assistantLabel": "Ask Prana సహాయకుడు",
     "selectPond": "చెరువు ఎంచుకోండి",

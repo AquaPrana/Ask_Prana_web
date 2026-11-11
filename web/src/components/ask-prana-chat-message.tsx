@@ -60,33 +60,31 @@ async function downloadGeneratedFile(url: string, fileName: string) {
   window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
 }
 
+// AskPrana cream / teal theme.
 const colors = {
-  primary: "#16A34A",
-  white: "#F4F7FA",
-  text: "#E6ECF5",
-  textDark: "#EDF2F8",
-  muted: "#9AA4B2",
-  border: "#2A303C",
-  bubble: "#1B2330",
-  shadow: "#0B1017",
-  primarySoft: "#DCFCE7",
-  tableHeader: "#1D2531",
-  tableBorder: "#2D3746",
+  primary: "#008081",
+  white: "#FFFFFF",
+  text: "#15393A",
+  textDark: "#1F4A45",
+  muted: "#6D8779",
+  border: "#D4D9BD",
+  bubble: "#FFFDF0",
+  shadow: "#1D4B36",
+  primarySoft: "#DCEEE1",
+  tableHeader: "#E8EDDA",
+  tableBorder: "#D4DCC5",
   viewerBg: "#0B0F15",
 };
 
-/**
- * Desktop chat table tokens. The Ask Prana chat screen only has a dark theme,
- * so the table follows it: dark surfaces, light text, subtle borders.
- */
+/** Desktop chat table tokens (cream / teal theme). */
 const desktopTableColors = {
-  surface: "#151B24",
-  header: "#F4F7FA",
-  headerBg: "#1D2531",
-  rowLabel: "#EDF2F8",
-  rowLabelBg: "#18202B",
-  text: "#D5DDE8",
-  border: "#2D3746",
+  surface: "#FFFDF0",
+  header: "#15393A",
+  headerBg: "#E8EDDA",
+  rowLabel: "#15393A",
+  rowLabelBg: "#F2F4E6",
+  text: "#2F4F49",
+  border: "#D4DCC5",
 };
 
 const SCREEN = Dimensions.get("window");
@@ -1496,10 +1494,13 @@ const styles = StyleSheet.create({
   assistantTranslating: { color: colors.muted, fontFamily: ASK_PRANA_FONT_FAMILY, fontSize: 12, lineHeight: 16, fontWeight: "500" },
   assistantIdentityName: { color: colors.textDark, fontFamily: ASK_PRANA_FONT_FAMILY, fontSize: 14, lineHeight: 20, fontWeight: "600" },
   assistantBubble: {
-    backgroundColor: "transparent",
+    backgroundColor: "#EEEEDA",
     maxWidth: "100%",
     alignSelf: "stretch",
-    paddingVertical: 2,
+    paddingVertical: 14,
+    paddingHorizontal: 15,
+    borderRadius: 14,
+    borderTopLeftRadius: 3,
   },
   assistantFileCard: {
     backgroundColor: colors.bubble,
@@ -1701,7 +1702,7 @@ const styles = StyleSheet.create({
     fontWeight: "400",
   },
   tableCardTitle: {
-    color: "#EDF2F8",
+    color: "#15393A",
     fontFamily: ASK_PRANA_FONT_FAMILY,
     fontWeight: "600",
     fontSize: 14,
@@ -1776,11 +1777,12 @@ const styles = StyleSheet.create({
   },
   userBubbleWrap: { alignItems: "flex-end", gap: 4 },
   userBubble: {
-    backgroundColor: "#20262C",
+    backgroundColor: "#15393A",
     borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingVertical: 11,
-    maxWidth: "86%",
+    borderTopRightRadius: 3,
+    paddingHorizontal: 15,
+    paddingVertical: 12,
+    maxWidth: "91%",
   },
   userImageBubble: {
     paddingHorizontal: 4,
@@ -1810,9 +1812,9 @@ const styles = StyleSheet.create({
     minHeight: 48,
     maxHeight: 300,
     color: colors.text,
-    backgroundColor: "#171C23",
+    backgroundColor: "#FFFDF0",
     borderWidth: 1,
-    borderColor: "#343D47",
+    borderColor: "#C1D0BC",
     borderRadius: 10,
     paddingHorizontal: 11,
     paddingVertical: 9,
