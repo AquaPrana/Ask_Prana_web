@@ -8,6 +8,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
   type ViewStyle,
 } from "react-native";
@@ -151,6 +152,9 @@ export function AskPranaChatSidebar({
   onConversationDeleted,
 }: Props) {
   const { t } = useTranslation();
+  const { width: windowWidth } = useWindowDimensions();
+  // Same phone cutoff as Edit Profile. Tablets keep the stacked heading.
+  const isMobileHistory = windowWidth < 768;
   const router = useRouter();
   const { displayName, avatarUrl, avatarUpdatedAt } = useProfile();
   const {
@@ -555,18 +559,35 @@ export function AskPranaChatSidebar({
       </View>
       ) : (
       <View style={styles.mobileTop}>
-        <Pressable
-          onPress={onClose}
-          style={styles.backLink}
-          accessibilityRole="button"
-          accessibilityLabel={t("askPrana.closeHistory")}
-        >
-          <Feather name="arrow-left" size={13} color="#217C73" />
-          <Text style={styles.backLinkText}>{t("askPrana.backToChat")}</Text>
-        </Pressable>
-        <Text style={styles.kicker}>ASKPRANA</Text>
-        <Text style={styles.mobileTitle}>{t("askPrana.historyTitle")}</Text>
-        <Text style={styles.mobileSubtitle}>{t("askPrana.historySubtitle")}</Text>
+        {isMobileHistory ? (
+          <View style={styles.mobileHeading}>
+            <Pressable
+              onPress={onClose}
+              style={styles.backLinkInRow}
+              accessibilityRole="button"
+              accessibilityLabel={t("askPrana.closeHistory")}
+            >
+              <Feather name="arrow-left" size={13} color="#217C73" />
+              <Text style={styles.backLinkText}>{t("askPrana.backToChat")}</Text>
+            </Pressable>
+            <Text style={styles.mobileTitleInRow}>{t("askPrana.historyTitle")}</Text>
+          </View>
+        ) : (
+          <>
+            <Pressable
+              onPress={onClose}
+              style={styles.backLink}
+              accessibilityRole="button"
+              accessibilityLabel={t("askPrana.closeHistory")}
+            >
+              <Feather name="arrow-left" size={13} color="#217C73" />
+              <Text style={styles.backLinkText}>{t("askPrana.backToChat")}</Text>
+            </Pressable>
+            <Text style={styles.kicker}>ASKPRANA</Text>
+            <Text style={styles.mobileTitle}>{t("askPrana.historyTitle")}</Text>
+          </>
+        )}
+        <Text style={[styles.mobileSubtitle, isMobileHistory && styles.mobileSubtitleCompact]}>{t("askPrana.historySubtitle")}</Text>
         <View style={[styles.searchBox, styles.searchBoxMobile]}>
           <TextInput
             value={searchText}
@@ -1119,6 +1140,34 @@ const styles = StyleSheet.create({
     marginHorizontal: 9,
   },
   mobileTop: { paddingTop: 8 },
+  mobileHeading: {
+    width: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-start",
+    gap: 14,
+  },
+  mobileTitleInRow: {
+    flexGrow: 0,
+    flexShrink: 1,
+    minWidth: 0,
+    marginBottom: 0,
+    color: prana.ink,
+    fontFamily: PRANA_FONT,
+    fontSize: 23,
+    lineHeight: 28,
+    fontWeight: "800",
+    textAlign: "left",
+  },
+  backLinkInRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexGrow: 0,
+    flexShrink: 0,
+    gap: 5,
+    minHeight: 44,
+  },
+  mobileSubtitleCompact: { marginTop: 8, marginBottom: 14 },
   backLink: { flexDirection: "row", alignItems: "center", gap: 5, alignSelf: "flex-start", minHeight: 40, paddingRight: 8, marginBottom: 6 },
   backLinkText: { color: "#217C73", fontFamily: PRANA_FONT, fontSize: 12, lineHeight: 16, fontWeight: "700" },
   kicker: { color: prana.tealText, fontFamily: PRANA_FONT, fontSize: 10, lineHeight: 13, fontWeight: "800", letterSpacing: 1.1, marginBottom: 8 },
