@@ -283,6 +283,11 @@ export default function AskPranaScreen() {
   const [showScrollToLatest, setShowScrollToLatest] = useState(false);
   const [scrollToLatestFocused, setScrollToLatestFocused] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(false);
+  const [readAloud, setReadAloud] = useState<{
+    messageId: string;
+    state: "preparing" | "playing";
+  } | null>(null);
+  const readAloudEpochRef = useRef(0);
   const composerInputRef = useRef<TextInput>(null);
   const measuredDraftRef = useRef<string | null>(null);
   const composerEnterSubmitLockRef = useRef(false);
@@ -763,6 +768,9 @@ export default function AskPranaScreen() {
     const previous = previousScrollSessionRef.current;
     previousScrollSessionRef.current = activeSessionId;
     if (previous === undefined || previous === activeSessionId) return;
+    readAloudEpochRef.current += 1;
+    setReadAloud(null);
+    void stopAskPranaSpeech();
     const switchedConversation = Boolean(previous) && Boolean(activeSessionId) && previous !== activeSessionId;
     const startedNewChat = Boolean(previous) && !activeSessionId;
     if (!switchedConversation && !startedNewChat) return;
@@ -782,11 +790,18 @@ export default function AskPranaScreen() {
     void sendQuestion(question, requestContext);
   };
 
+  const stopReadAloud = useCallback(() => {
+    readAloudEpochRef.current += 1;
+    setReadAloud(null);
+    void stopAskPranaSpeech();
+  }, []);
+
   const handleStartNewChat = () => {
     setEditingMessageId(null);
     setAttachmentMenuOpen(false);
     setAttachmentPreview(null);
     setDraftEditorOpen(false);
+    stopReadAloud();
     void startNewConversation();
     router.setParams({ sessionId: undefined } as never);
   };
@@ -951,10 +966,30 @@ export default function AskPranaScreen() {
   };
 
   const handleReadAloud = useCallback(
-    (text: string) => {
+    (messageId: string, text: string) => {
+      const playbackEpoch = readAloudEpochRef.current + 1;
+      readAloudEpochRef.current = playbackEpoch;
+      setReadAloud({ messageId, state: "preparing" });
       void (async () => {
-        const result = await speakAskPranaText(text, languageForQuestionText(text) ?? "en");
-        if (!result.spoke && result.reason) {
+        // Cancel the current response first. The speech utility also aborts
+        // cloud TTS and clears queued sentences when this epoch is superseded.
+        await stopAskPranaSpeech();
+        if (readAloudEpochRef.current !== playbackEpoch) return;
+        const result = await speakAskPranaText(
+          text,
+          languageForQuestionText(text) ?? "en",
+          {
+            shouldPlay: () => readAloudEpochRef.current === playbackEpoch,
+            onPlaybackStart: () => {
+              if (readAloudEpochRef.current === playbackEpoch) {
+                setReadAloud({ messageId, state: "playing" });
+              }
+            },
+          },
+        );
+        if (readAloudEpochRef.current !== playbackEpoch) return;
+        setReadAloud(null);
+        if (!result.spoke && result.reason && result.reason !== "interrupted") {
           Alert.alert(t("askPrana.speechUnavailable"), result.reason);
         }
       })();
@@ -989,7 +1024,7 @@ export default function AskPranaScreen() {
     }
     if (voiceModeOpen) {
       setVoiceModeOpen(false);
-      void stopAskPranaSpeech();
+      stopReadAloud();
       void cancelAudioRecording();
       return;
     }
@@ -1029,12 +1064,12 @@ export default function AskPranaScreen() {
   useFocusEffect(
     useCallback(() => {
       return () => {
-        void stopAskPranaSpeech();
+        stopReadAloud();
         // Do NOT cancel dictation here — Expo web remounts/focus flickers cancel
         // mid-recording and leave an empty composer. Pond switch + AppState
         // background + Back already cancel safely.
       };
-    }, []),
+    }, [stopReadAloud]),
   );
 
   useFocusEffect(
@@ -1294,6 +1329,10 @@ export default function AskPranaScreen() {
                   onRegenerateAssistantMessage={handleRegenerateAssistantMessage}
                   regenerateDisabled={generationActive || isRecording || isTranscribing}
                   onReadAloud={handleReadAloud}
+                  onStopReadAloud={stopReadAloud}
+                  readAloudState={
+                    readAloud?.messageId === item.id ? readAloud.state : "idle"
+                  }
                 />
               )}
             />
@@ -1348,7 +1387,7 @@ export default function AskPranaScreen() {
               onClose={() => {
                 setVoiceModeOpen(false);
                 setVoiceMuted(false);
-                void stopAskPranaSpeech();
+                stopReadAloud();
                 void cancelAudioRecording();
               }}
               onStartListening={(language) =>
@@ -1718,6 +1757,7 @@ export default function AskPranaScreen() {
                 <Pressable
                   onPress={() => {
                     if (isRecording || isTranscribing || composerBusy) return;
+                    stopReadAloud();
                     prepareVoiceModeSession();
                     setVoiceModeOpen(true);
                   }}
@@ -1840,6 +1880,7 @@ export default function AskPranaScreen() {
                     <Pressable
                       onPress={() => {
                         if (isRecording || isTranscribing || composerBusy) return;
+                        stopReadAloud();
                         prepareVoiceModeSession();
                         setVoiceModeOpen(true);
                       }}

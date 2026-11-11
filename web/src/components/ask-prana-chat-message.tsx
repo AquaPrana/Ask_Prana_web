@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
+  ActivityIndicator,
   Dimensions,
   Linking,
   Modal,
@@ -885,7 +886,9 @@ function getMessagePlainText(message: ChatMessage): string {
   copyText?: string | null;
   editText?: string | null;
   onEdit?: () => void;
-  onReadAloud?: (text: string) => void;
+  onReadAloud?: () => void;
+  onStopReadAloud?: () => void;
+  readAloudState?: "idle" | "preparing" | "playing";
   /** ChatGPT-style assistant extras */
   showAssistantExtras?: boolean;
   onRegenerate?: () => void;
@@ -898,6 +901,8 @@ function MessageActionRow({
   editText,
   onEdit,
   onReadAloud,
+  onStopReadAloud,
+  readAloudState = "idle",
   showAssistantExtras = false,
   onRegenerate,
   regenerateDisabled = false,
@@ -1014,16 +1019,22 @@ function MessageActionRow({
 
       {canCopy && onReadAloud ? (
         <Pressable
-          onPress={() => onReadAloud(copyText!.trim())}
+          onPress={readAloudState === "idle" ? onReadAloud : onStopReadAloud}
           hitSlop={8}
           style={({ pressed }) => [
             styles.actionButton,
             pressed && styles.actionButtonPressed,
           ]}
           accessibilityRole="button"
-          accessibilityLabel={t("askPrana.readAloud")}
+          accessibilityLabel={readAloudState === "idle" ? t("askPrana.readAloud") : "Stop reading aloud"}
         >
-          <Feather name="volume-2" size={15} color={colors.muted} />
+          {readAloudState === "preparing" ? (
+            <ActivityIndicator size="small" color={colors.muted} />
+          ) : readAloudState === "playing" ? (
+            <Feather name="square" size={14} color={colors.muted} />
+          ) : (
+            <Feather name="volume-2" size={15} color={colors.muted} />
+          )}
         </Pressable>
       ) : null}
 
@@ -1111,6 +1122,8 @@ function AskPranaChatMessageBubbleComponent({
   onRegenerateAssistantMessage,
   regenerateDisabled,
   onReadAloud,
+  onStopReadAloud,
+  readAloudState = "idle",
 }: {
   message: ChatMessage;
   isEditingUserMessage?: boolean;
@@ -1120,7 +1133,9 @@ function AskPranaChatMessageBubbleComponent({
   editDisabled?: boolean;
   onRegenerateAssistantMessage?: (messageId: string) => void;
   regenerateDisabled?: boolean;
-  onReadAloud?: (text: string) => void;
+  onReadAloud?: (messageId: string, text: string) => void;
+  onStopReadAloud?: () => void;
+  readAloudState?: "idle" | "preparing" | "playing";
 }) {
   const { t } = useTranslation();
   const isUser = message.role === "user";
@@ -1299,7 +1314,9 @@ function AskPranaChatMessageBubbleComponent({
     <MessageActionRow
       align="left"
       copyText={plainText}
-      onReadAloud={onReadAloud}
+      onReadAloud={onReadAloud ? () => onReadAloud(message.id, plainText) : undefined}
+      onStopReadAloud={onStopReadAloud}
+      readAloudState={readAloudState}
       showAssistantExtras
       onRegenerate={
         onRegenerateAssistantMessage
