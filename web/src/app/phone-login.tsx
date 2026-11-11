@@ -1,10 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import {
-  Geist_500Medium,
-  Geist_700Bold,
-  Geist_800ExtraBold,
-  useFonts,
-} from "@expo-google-fonts/geist";
 import { sendOTP } from "../services/auth";
 import { finishGoogleSignIn, startGoogleSignIn, takeGoogleReturn } from "../services/google-sign-in";
 import { isValidEmail, normalizeEmail, sendEmailLoginCode } from "../services/profile";
@@ -56,12 +50,6 @@ const colors = {
   ctaGradientStart: PRIMARY_CTA_START,
   shadow: "#1D4B36",
 };
-
-const fonts = {
-  medium: "Geist_500Medium",
-  bold: "Geist_700Bold",
-  extraBold: "Geist_800ExtraBold",
-} as const;
 
 const INDIAN_MOBILE_REGEX = /^[6-9]\d{9}$/;
 
@@ -168,11 +156,6 @@ export default function PhoneLoginScreen() {
   const [errorMessage, setErrorMessage] = useState<string | null>(
     typeof authError === "string" && authError ? authError : null,
   );
-  const [fontsLoaded] = useFonts({
-    Geist_500Medium,
-    Geist_700Bold,
-    Geist_800ExtraBold,
-  });
 
   const canSendEmail = Boolean(identifierInput.trim()) && !isSendingOtp;
   const canSendPhone = Boolean(phoneInput.trim()) && !isSendingOtp;
@@ -267,14 +250,6 @@ export default function PhoneLoginScreen() {
     );
   }
 
-  if (!fontsLoaded) {
-    return (
-      <View style={[styles.root, styles.fontLoading]}>
-        <StatusBar barStyle="light-content" backgroundColor={colors.background} />
-        <ActivityIndicator color={colors.primary} size="large" />
-      </View>
-    );
-  }
 
   const loginForm = (
     <>

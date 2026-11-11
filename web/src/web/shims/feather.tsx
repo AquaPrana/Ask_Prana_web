@@ -6,14 +6,19 @@
 import { PureComponent } from "react";
 import { Text, type TextProps, type TextStyle, type StyleProp } from "react-native";
 import glyphMap from "../fonts/Feather.json";
-import featherFont from "../fonts/Feather.ttf";
 
 const FONT_FAMILY = "feather";
+/**
+ * Served from web/public so index.html can preload the same file before the
+ * app script runs (index.html also declares the @font-face). This fallback
+ * only adds it if that tag is missing.
+ */
+const FEATHER_FONT_URL = "/fonts/Feather.ttf";
 
 if (typeof document !== "undefined" && !document.getElementById("ask-prana-feather-font")) {
   const style = document.createElement("style");
   style.id = "ask-prana-feather-font";
-  style.textContent = `@font-face{font-family:"${FONT_FAMILY}";src:url("${featherFont}") format("truetype");font-display:block;}`;
+  style.textContent = `@font-face{font-family:"${FONT_FAMILY}";src:url("${FEATHER_FONT_URL}") format("truetype");font-display:block;}`;
   document.head.appendChild(style);
 }
 

@@ -6,11 +6,16 @@
     <meta http-equiv="X-UA-Compatible" content="IE=edge" />
     <title>AquaPrana</title>
     <link rel="icon" type="image/png" href="/favicon.png" />
+    <!-- Fetch the icon font and logo together with the app, not after it has started,
+         so phones on slow data don't show empty boxes / black squares first. -->
+    <link rel="preload" href="/fonts/Feather.ttf" as="font" type="font/ttf" crossorigin />
+    <link rel="preload" href="/ask-prana-logo.png" as="image" />
+    <style id="ask-prana-feather-font">@font-face{font-family:"feather";src:url("/fonts/Feather.ttf") format("truetype");font-display:block;}</style>
     <!-- Same reset Expo injects into its web build -->
     <style id="expo-reset">#root,body,html{height:100%}body{overflow:hidden}#root{display:flex}</style>
-    <!-- Dark page background: when the mobile keyboard opens, any area not yet covered by the app shows this instead of white. -->
-    <style>html,body{background-color:#171717}</style>
-    <meta name="theme-color" content="#171717" />
+    <!-- Cream page background (matches the app): shown while loading and behind the mobile keyboard. -->
+    <style>html,body{background-color:#F5F5DF}</style>
+    <meta name="theme-color" content="#2E6859" />
   </head>
   <body>
     <div id="root"></div>

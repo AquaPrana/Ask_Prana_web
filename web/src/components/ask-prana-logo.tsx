@@ -1,7 +1,9 @@
 import { StyleSheet, View, type StyleProp, type ViewStyle } from "react-native";
 import { Image } from "expo-image";
 
-const ASK_PRANA_LOGO = require("../../assets/images/ask-prana-logo.png");
+// 192 × 192 copy (4 KB) in web/public, preloaded by index.html. The original
+// 1024 × 1024 file (246 KB) is far larger than any size the badge is shown at.
+const ASK_PRANA_LOGO = { uri: "/ask-prana-logo.png" };
 
 // The source asset is a square 1024×1024 image on a solid black background,
 // with the "ap" mark filling the middle ~62%. Rather than editing the asset,
