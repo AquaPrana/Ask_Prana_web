@@ -795,7 +795,8 @@ type AskPranaChatContextValue = {
   refreshPonds: (userId?: string | null) => Promise<void>;
   reloadMessages: () => Promise<void>;
   startNewConversation: () => Promise<void>;
-  openConversation: (sessionId: string) => Promise<void>;
+  /** Resolves false when the conversation could not be opened. */
+  openConversation: (sessionId: string) => Promise<boolean>;
   listConversations: () => Promise<AskPranaSessionSummary[]>;
   listConversationPage: (
     cursor?: string | null,
@@ -1629,10 +1630,10 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         );
 
         if (epoch !== pondLoadEpochRef.current) {
-          return;
+          return true;
         }
         if (selectedPondIdRef.current !== requestPondId) {
-          return;
+          return true;
         }
 
         const { messages: storedMessages, hasMore, error } = fetchedMessages;
@@ -1640,13 +1641,19 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
 
         if (error) {
           console.log("[AskPranaChat] open conversation error:", error);
-          Alert.alert(
-            "Unable to open conversation",
-            error.message || "Please try again.",
-          );
+          // A saved link to a chat this account no longer has (deleted, or
+          // left in the browser by another account): start a new chat quietly.
+          const missing = /conversation not found|invalid session_id/i.test(error.message ?? "");
+          if (!missing) {
+            Alert.alert(
+              "Unable to open conversation",
+              error.message || "Please try again.",
+            );
+          }
+          openedConversationCacheRef.current.delete(cacheKey);
           setActiveSessionId(null);
           setMessages([buildWelcomeMessage(farmerName)]);
-          return;
+          return false;
         }
 
         if (storedMessages.length > 0) {
@@ -1664,7 +1671,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         }
         // Don't clobber a turn the farmer started while the cached copy showed.
         if (cachedMessages && messagesRef.current !== initialMessages) {
-          return;
+          return true;
         }
         setDraft("");
         setMessages(
@@ -1672,9 +1679,10 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
             ? storedMessages
             : [buildWelcomeMessage(farmerName)],
         );
+        return true;
       } catch (error) {
         if (epoch !== pondLoadEpochRef.current) {
-          return;
+          return true;
         }
         console.log("[AskPranaChat] open conversation failed:", error);
         Alert.alert(
@@ -1683,6 +1691,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         );
         setActiveSessionId(null);
         setMessages([buildWelcomeMessage(farmerName)]);
+        return false;
       } finally {
         if (epoch === pondLoadEpochRef.current) {
           setIsLoadingMessages(false);

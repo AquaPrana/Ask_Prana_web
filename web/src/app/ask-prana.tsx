@@ -398,8 +398,13 @@ export default function AskPranaScreen() {
     routeOpenSessionIdRef.current = routeSessionId ?? null;
     if (!routeSessionId || routeSessionId === previousRouteSessionId) return;
     if (routeSessionId === activeSessionIdRef.current) return;
-    void openConversation(routeSessionId);
-  }, [isAuthLoading, openConversation, routeSessionId]);
+    void openConversation(routeSessionId).then((opened) => {
+      // Drop a dead chat id from the address so a reload starts cleanly.
+      if (!opened && routeOpenSessionIdRef.current === routeSessionId) {
+        router.setParams({ sessionId: undefined } as never);
+      }
+    });
+  }, [isAuthLoading, openConversation, routeSessionId, router]);
 
   // Keep the active persisted conversation in the route. If a browser tab is
   // discarded/reloaded while Ask Prana is in the background, this lets the
@@ -1677,6 +1682,27 @@ export default function AskPranaScreen() {
               </View>
               {voiceInline ? null : (
                 <Pressable
+                  onPress={() => {
+                    if (isRecording || isTranscribing || composerBusy) return;
+                    prepareVoiceModeSession();
+                    setVoiceModeOpen(true);
+                  }}
+                  disabled={composerBusy || isRecording || isTranscribing}
+                  style={({ pressed }) => [
+                    styles.voiceTile,
+                    isDesktop && styles.voiceTileDesktop,
+                    (composerBusy || isRecording || isTranscribing) && styles.sendButtonDisabled,
+                    pressed && styles.pressed,
+                  ]}
+                  accessibilityRole="button"
+                  accessibilityLabel={t("askPrana.startVoiceConversation")}
+                >
+                  <AskPranaVoiceWaveformIcon size={18} color="#397C6A" />
+                  <Text style={styles.tileLabel} numberOfLines={1}>{t("askPrana.voiceChat")}</Text>
+                </Pressable>
+              )}
+              {voiceInline ? null : (
+                <Pressable
                   onPress={handleComposerAction}
                   disabled={!canSend || isRecording || isTranscribing}
                   style={({ pressed }) => [
@@ -1738,30 +1764,6 @@ export default function AskPranaScreen() {
                 </Pressable>
                 </View>
               ) : null}
-
-            {voiceInline || isRecording || isTranscribing ? null : (
-              <View style={[styles.voiceControls, isDesktop && styles.voiceControlsDesktop]}>
-                <Pressable
-                  onPress={() => {
-                    if (isRecording || isTranscribing || composerBusy) return;
-                    prepareVoiceModeSession();
-                    setVoiceModeOpen(true);
-                  }}
-                  disabled={composerBusy || isRecording || isTranscribing}
-                  style={({ pressed }) => [
-                    styles.voiceChip,
-                    isDesktop && styles.voiceChipDesktop,
-                    (composerBusy || isRecording || isTranscribing) && styles.sendButtonDisabled,
-                    pressed && styles.pressed,
-                  ]}
-                  accessibilityRole="button"
-                  accessibilityLabel={t("askPrana.startVoiceConversation")}
-                >
-                  <AskPranaVoiceWaveformIcon size={16} color="#397C6A" />
-                  <Text style={styles.voiceChipText}>{t("askPrana.voiceChat")}</Text>
-                </Pressable>
-              </View>
-            )}
 
             {isTranscribing ? (
               // Composer dictation shows its loading state in the pill above.
@@ -2725,4 +2727,18 @@ const styles = StyleSheet.create({
     lineHeight: 13,
     marginTop: -2,
   },
+  voiceTile: {
+    width: 50,
+    minHeight: 54,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: prana.chipBorder,
+    backgroundColor: prana.chip,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 3,
+    paddingVertical: 5,
+    paddingHorizontal: 2,
+  },
+  voiceTileDesktop: { width: 58, minHeight: 58, borderColor: "#D3DFC9", backgroundColor: "#F8F9ED" },
 });

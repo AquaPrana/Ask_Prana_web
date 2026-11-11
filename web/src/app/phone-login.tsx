@@ -437,15 +437,13 @@ export default function PhoneLoginScreen() {
             <Text style={styles.dictateLabel}>Dictate</Text>
           </View>
         </View>
+        <View style={[styles.tileVoice, isDesktop && styles.tileVoiceDesktop]}>
+          <AskPranaVoiceWaveformIcon size={18} color="#397C6A" />
+          <Text style={styles.tileLabel} numberOfLines={1}>Voice chat</Text>
+        </View>
         <View style={[styles.tileSend, pranaGradientStyle, isDesktop && styles.tileSendDesktop]}>
           <Feather name="send" size={19} color="#FFFFFF" />
           <Text style={[styles.tileLabel, { color: "#FFFFFF" }]}>Send</Text>
-        </View>
-      </View>
-      <View style={styles.previewChips}>
-        <View style={styles.previewChip}>
-          <AskPranaVoiceWaveformIcon size={16} color="#397C6A" />
-          <Text style={styles.previewChipText}>Voice chat</Text>
         </View>
       </View>
       <Text style={styles.previewNote}>Type a message, attach a file or use the mic.</Text>
@@ -943,6 +941,18 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   tileAttachDesktop: { width: 47, minHeight: 58, borderWidth: 0 },
+  tileVoice: {
+    width: 50,
+    minHeight: 54,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: prana.chipBorder,
+    backgroundColor: prana.chip,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 3,
+  },
+  tileVoiceDesktop: { width: 58, minHeight: 58, borderColor: "#D3DFC9", backgroundColor: "#F8F9ED" },
   tileSend: {
     width: 44,
     minHeight: 54,
