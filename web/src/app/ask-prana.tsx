@@ -376,6 +376,7 @@ export default function AskPranaScreen() {
     discardFailedRecording,
     cancelAudioRecording,
     stopGeneration,
+    startNewConversation,
     openConversation,
   } = useAskPranaChat();
 
@@ -786,6 +787,7 @@ export default function AskPranaScreen() {
     setAttachmentMenuOpen(false);
     setAttachmentPreview(null);
     setDraftEditorOpen(false);
+    void startNewConversation();
     router.setParams({ sessionId: undefined } as never);
   };
 
@@ -1235,7 +1237,7 @@ export default function AskPranaScreen() {
               keyboardShouldPersistTaps="handled"
               keyboardDismissMode="interactive"
               ListHeaderComponent={
-                hasOlderMessages ? (
+                activeSessionId && hasOlderMessages ? (
                   <Pressable
                     onPress={handleLoadOlderMessages}
                     disabled={isLoadingOlder}

@@ -905,7 +905,11 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
   const [userId, setUserId] = useState<string | null>(null);
   useEffect(() => {
     setConversationActivity(null);
+    olderPaginationEpochRef.current += 1;
+    olderPaginationOwnerRef.current = null;
+    olderPaginationCursorRef.current = null;
     setHasOlderMessages(false);
+    setIsLoadingOlder(false);
   }, [userId]);
   /**
    * Recently opened conversations (per user) so reopening one from History
@@ -944,6 +948,10 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
   const messagesRef = useRef<ChatMessage[]>([]);
   const welcomeReadyRef = useRef(false);
   const sessionIdRef = useRef<string | null>(null);
+  /** Pagination is valid only for the session that received the page. */
+  const olderPaginationOwnerRef = useRef<string | null>(null);
+  const olderPaginationCursorRef = useRef<string | null>(null);
+  const olderPaginationEpochRef = useRef(0);
   const sessionCreatePromiseRef = useRef<Promise<string> | null>(null);
   const sessionCreateEpochRef = useRef(0);
   const chatScopeRef = useRef<string>("");
@@ -1203,6 +1211,14 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
     setSessionId(nextSessionId);
   }, []);
 
+  const resetOlderPagination = useCallback(() => {
+    olderPaginationEpochRef.current += 1;
+    olderPaginationOwnerRef.current = null;
+    olderPaginationCursorRef.current = null;
+    setHasOlderMessages(false);
+    setIsLoadingOlder(false);
+  }, []);
+
   const refreshPonds = useCallback(async (nextUserId?: string | null) => {
     setPonds([]);
     setSelectedPondIdState(GENERIC_ASSISTANT_ID);
@@ -1343,6 +1359,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       setGenerationStopped(false);
       setIsLoadingMessages(true);
       setActiveSessionId(null);
+      resetOlderPagination();
 
       const welcome = buildWelcomeMessage(farmerName);
       setMessages([welcome]);
@@ -1356,7 +1373,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         setIsLoadingMessages(false);
       }
     },
-    [farmerName, setActiveSessionId],
+    [farmerName, resetOlderPagination, setActiveSessionId],
   );
 
   useEffect(() => {
@@ -1576,6 +1593,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
     void cancelAudioRecording();
     sessionCreatePromiseRef.current = null;
     setActiveSessionId(null);
+    resetOlderPagination();
     setDraft("");
     setPendingAttachments([]);
     isSendingRef.current = false;
@@ -1594,7 +1612,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         "Please sign in again to start a new conversation.",
       );
     }
-  }, [cancelAudioRecording, farmerName, setActiveSessionId, userId]);
+  }, [cancelAudioRecording, farmerName, resetOlderPagination, setActiveSessionId, userId]);
 
   const openConversation = useCallback(
     async (nextSessionId: string) => {
@@ -1605,6 +1623,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       voiceAbortRef.current?.abort();
       voiceAbortRef.current = null;
       sessionCreateEpochRef.current += 1;
+      resetOlderPagination();
       isSendingRef.current = false;
       setIsSending(false);
       setThinkingKind(null);
@@ -1641,7 +1660,6 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         }
 
         const { messages: storedMessages, hasMore, error } = fetchedMessages;
-        setHasOlderMessages(Boolean(hasMore));
 
         if (error) {
           console.log("[AskPranaChat] open conversation error:", error);
@@ -1656,6 +1674,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
           }
           openedConversationCacheRef.current.delete(cacheKey);
           setActiveSessionId(null);
+          resetOlderPagination();
           setMessages([buildWelcomeMessage(farmerName)]);
           return false;
         }
@@ -1665,6 +1684,16 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
           cache.delete(cacheKey);
           cache.set(cacheKey, storedMessages);
           if (cache.size > 20) cache.delete(cache.keys().next().value as string);
+        }
+        const oldestStoredMessage = storedMessages.find(
+          (message) => message.id !== "welcome" && Boolean(message.createdAt),
+        );
+        // The server is the only source of pagination. A welcome, live
+        // transcript, or optimistic turn must never expose older history.
+        if (sessionIdRef.current === nextSessionId && storedMessages.length > 0) {
+          olderPaginationOwnerRef.current = nextSessionId;
+          olderPaginationCursorRef.current = oldestStoredMessage?.createdAt ?? null;
+          setHasOlderMessages(Boolean(hasMore && olderPaginationCursorRef.current));
         }
         if (__DEV__) {
           console.log("[AskPranaChat] conversation opened", {
@@ -1694,6 +1723,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
           "Please check your connection and try again.",
         );
         setActiveSessionId(null);
+        resetOlderPagination();
         setMessages([buildWelcomeMessage(farmerName)]);
         return false;
       } finally {
@@ -1702,7 +1732,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
         }
       }
     },
-    [farmerName, setActiveSessionId, userId],
+    [farmerName, resetOlderPagination, setActiveSessionId, userId],
   );
 
   const listConversationPage = useCallback(async (cursor?: string | null) => {
@@ -1742,9 +1772,18 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
   }, [listConversationPage]);
 
   const loadOlderMessages = useCallback(async () => {
-    if (!userId || !sessionId || isLoadingOlder || !hasOlderMessages) return;
-    const oldest = messagesRef.current.find((message) => message.createdAt);
-    const before = oldest?.createdAt;
+    const ownerSessionId = sessionIdRef.current;
+    const before = olderPaginationCursorRef.current;
+    if (
+      !userId ||
+      !isValidAskPranaUuid(ownerSessionId) ||
+      ownerSessionId !== sessionId ||
+      olderPaginationOwnerRef.current !== ownerSessionId ||
+      isLoadingOlder ||
+      !hasOlderMessages ||
+      !before
+    ) return;
+    const requestEpoch = ++olderPaginationEpochRef.current;
     if (!before) {
       setHasOlderMessages(false);
       return;
@@ -1752,21 +1791,41 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
     setIsLoadingOlder(true);
     try {
       const { messages: older, hasMore, error } = await fetchAskPranaMessages(
-        sessionId,
+        ownerSessionId,
         userId,
         { before },
       );
-      if (error) return;
-      setHasOlderMessages(hasMore);
+      if (
+        error ||
+        requestEpoch !== olderPaginationEpochRef.current ||
+        sessionIdRef.current !== ownerSessionId ||
+        olderPaginationOwnerRef.current !== ownerSessionId
+      ) return;
+      const oldestLoadedMessage = older.find(
+        (message) => message.id !== "welcome" && Boolean(message.createdAt),
+      );
+      olderPaginationCursorRef.current = oldestLoadedMessage?.createdAt ?? null;
+      setHasOlderMessages(Boolean(hasMore && olderPaginationCursorRef.current));
       if (older.length === 0) return;
       setMessages((current) => {
+        if (
+          requestEpoch !== olderPaginationEpochRef.current ||
+          sessionIdRef.current !== ownerSessionId ||
+          olderPaginationOwnerRef.current !== ownerSessionId
+        ) return current;
         const seen = new Set(current.map((message) => message.id));
         const next = [...older.filter((message) => !seen.has(message.id)), ...current];
         messagesRef.current = next;
         return next;
       });
     } finally {
-      setIsLoadingOlder(false);
+      if (
+        requestEpoch === olderPaginationEpochRef.current &&
+        sessionIdRef.current === ownerSessionId &&
+        olderPaginationOwnerRef.current === ownerSessionId
+      ) {
+        setIsLoadingOlder(false);
+      }
     }
   }, [hasOlderMessages, isLoadingOlder, sessionId, userId]);
 
@@ -2371,6 +2430,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       setIsSending(false);
       setThinkingKind(null);
       setActiveSessionId(null);
+      resetOlderPagination();
       const welcome = buildWelcomeMessage(farmerName);
       setMessages([welcome]);
       messagesRef.current = [welcome];
@@ -2378,7 +2438,7 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       selectedPondIdRef.current = pondId;
       setSelectedPondIdState(pondId);
     },
-    [farmerName, setActiveSessionId],
+    [farmerName, resetOlderPagination, setActiveSessionId],
   );
 
   const sendQuestion = useCallback(
