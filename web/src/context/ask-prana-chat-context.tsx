@@ -58,7 +58,11 @@ import {
 } from "../lib/ask-prana-transcription-language";
 import { stopAskPranaSpeech, warmAskPranaDeviceVoices } from "../lib/ask-prana-speech";
 import { languageForQuestionText, voiceTurnLanguage } from "../lib/ask-prana-voice-language";
-import { logRecordingCapture } from "../lib/ask-prana-recording-capture";
+import {
+  DICTATION_TOO_QUIET_MESSAGE,
+  isUsableQuietDictation,
+  logRecordingCapture,
+} from "../lib/ask-prana-recording-capture";
 import { clearAskPranaDisplayTranslations } from "../lib/ask-prana-display-translation";
 import {
   createAskPranaSession,
@@ -3527,8 +3531,21 @@ export function AskPranaChatProvider({ children }: { children: ReactNode }) {
       const captureReport = audioRecorder.takeCaptureReport();
       await releaseRecordingResources();
 
-      if (captureReport?.quality.action === "reject") {
-        const message = captureReport.quality.message ?? "Your voice is too quiet. Please move the phone closer and try again.";
+      const quietComposerSpeech =
+        captureReport?.quality.action === "reject" &&
+        audioRecordingSourceRef.current === "composer" &&
+        (captureReport.quality.reason === "too-quiet" ||
+          captureReport.quality.reason === "insufficient-speech") &&
+        isUsableQuietDictation(captureReport.quality.summary);
+
+      if (captureReport?.quality.action === "reject" && !quietComposerSpeech) {
+        const composerQuiet =
+          audioRecordingSourceRef.current === "composer" &&
+          (captureReport.quality.reason === "too-quiet" ||
+            captureReport.quality.reason === "insufficient-speech");
+        const message = composerQuiet
+          ? DICTATION_TOO_QUIET_MESSAGE
+          : captureReport.quality.message ?? "Your voice is too quiet. Please move the phone closer and try again.";
         logRecordingCapture({
           recordingId: captureReport.recordingId,
           stage: "rejected-before-transcription",

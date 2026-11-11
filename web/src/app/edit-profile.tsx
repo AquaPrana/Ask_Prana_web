@@ -17,6 +17,8 @@ import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useTranslation } from "react-i18next";
 import { UserAvatar } from "../components/user-avatar";
 import { PranaHeader, PranaHeaderButton } from "../components/prana-header";
+import { PranaSelect } from "../components/prana-select";
+import { INDIA_STATES, findIndiaDistrict, findIndiaState } from "../constants/india-states";
 import { PRANA_FONT, prana, pranaGradientStyle } from "../constants/prana-theme";
 import { useProfile } from "../context/profile-context";
 import {
@@ -39,6 +41,8 @@ import {
   resendEmailChangeVerification,
   updateCurrentUserProfile,
 } from "../services/profile";
+
+const INDIA_STATE_NAMES = INDIA_STATES.map((item) => item.name);
 
 // AskPrana cream / teal theme.
 const colors = {
@@ -93,6 +97,16 @@ export default function EditProfileScreen() {
   const [phone, setPhone] = useState("");
   const [state, setState] = useState("");
   const [district, setDistrict] = useState("");
+  const selectedIndiaState = findIndiaState(state);
+  // Saved values like "ap" or "visakhapatnam" are shown with the list's spelling.
+  useEffect(() => {
+    const match = findIndiaState(state);
+    if (match && match.name !== state) setState(match.name);
+  }, [state]);
+  useEffect(() => {
+    const match = findIndiaDistrict(selectedIndiaState, district);
+    if (match && match !== district) setDistrict(match);
+  }, [district, selectedIndiaState]);
   const [language, setLanguage] = useState("English");
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [avatarUpdatedAt, setAvatarUpdatedAt] = useState<string | null>(null);
@@ -497,10 +511,31 @@ export default function EditProfileScreen() {
         {emailField}
         <View style={styles.grid}>
           <View style={styles.gridCell}>
-            <Field label="State" value={state} onChangeText={setState} autoCapitalize="words" />
+            <PranaSelect
+              label="State"
+              value={state}
+              options={INDIA_STATE_NAMES}
+              placeholder="Select state"
+              searchPlaceholder="Search state"
+              onChange={(next) => {
+                if (next === state) return;
+                setState(next);
+                // A district from the old state no longer applies.
+                if (!findIndiaDistrict(findIndiaState(next), district)) setDistrict("");
+              }}
+            />
           </View>
           <View style={styles.gridCell}>
-            <Field label="District" value={district} onChangeText={setDistrict} autoCapitalize="words" />
+            <PranaSelect
+              label="District"
+              value={district}
+              options={selectedIndiaState?.districts ?? []}
+              placeholder="Select district"
+              searchPlaceholder="Search district"
+              disabled={!selectedIndiaState}
+              disabledHint="Select state first"
+              onChange={setDistrict}
+            />
           </View>
         </View>
         <Field label="Preferred language" value={language} onChangeText={setLanguage} autoCapitalize="words" />

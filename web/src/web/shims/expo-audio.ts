@@ -108,6 +108,7 @@ import { downsamplePcm, encodeWavPcm } from "../../lib/ask-prana-transcription-l
 import {
   createRecordingId,
   decideRecordingQuality,
+  isUsableQuietDictation,
   describeAppliedMicrophoneSettings,
   logRecordingCapture,
   microphoneCaptureConstraints,
@@ -539,7 +540,13 @@ export class AudioRecorder extends Emitter {
       contextState: this.lastReport.contextState,
       settings: this.lastReport.settings,
     });
-    if (samples.length < 160 || quality.action === "reject") return null;
+    // Quiet but real speech is still encoded: chat-box dictation may send it
+    // (see isUsableQuietDictation). Voice Chat still rejects it from the report.
+    const keepQuietSpeech =
+      quality.action === "reject" &&
+      (quality.reason === "too-quiet" || quality.reason === "insufficient-speech") &&
+      isUsableQuietDictation(quality.summary);
+    if (samples.length < 160 || (quality.action === "reject" && !keepQuietSpeech)) return null;
     const targetRate = this.wavSampleRate && this.wavSampleRate < sampleRate
       ? this.wavSampleRate
       : sampleRate;
