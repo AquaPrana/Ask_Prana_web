@@ -111,21 +111,61 @@ function microphoneErrorMessage(error: unknown) {
   return "The microphone could not be started. Please try again.";
 }
 
-/** Joins farmer and assistant transcripts in the order the turns happened. */
+/**
+ * Decides what voice chat saves to the chat history, in the order it happened.
+ *
+ * - Pieces of one spoken question (the farmer paused, and voice chat took each
+ *   part as a turn) are saved as ONE question: the pieces wait until an answer
+ *   completes, then are joined.
+ * - Answers the farmer cut off by speaking (or tapping) are not saved; the
+ *   question then joins the farmer's next words.
+ * - An answer waits briefly for its question's transcript, so the question is
+ *   always shown first; it is never held forever.
+ *
+ * Only the saved text changes; what the farmer hears is not affected.
+ */
 export function createRealtimeTurnOrder(emit: {
   user: (text: string) => void;
   assistant: (text: string) => void;
 }, flushAfterMs = 5000) {
+  /** Spoken turns whose transcript is still on the way. */
   const awaitingUser = new Set<string>();
+  /** Transcribed pieces of the current question, not saved yet. */
+  const pendingUser: string[] = [];
+  /** Answer transcripts by response id, until the response finishes. */
+  const answerText = new Map<string, string>();
+  /** Finished answers waiting for their question's transcript. */
   const heldAssistant: string[] = [];
   let flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const emitPendingUser = () => {
+    if (!pendingUser.length) return;
+    emit.user(pendingUser.splice(0).join(" "));
+  };
 
   const flush = () => {
     if (flushTimer) {
       clearTimeout(flushTimer);
       flushTimer = null;
     }
+    if (!heldAssistant.length) return;
+    emitPendingUser();
     while (heldAssistant.length) emit.assistant(heldAssistant.shift()!);
+  };
+
+  /** A completed answer: save the question (all pieces) and then the answer. */
+  const acceptAnswer = (text: string) => {
+    heldAssistant.push(text);
+    if (!awaitingUser.size) {
+      flush();
+      return;
+    }
+    if (!flushTimer) {
+      flushTimer = setTimeout(() => {
+        awaitingUser.clear();
+        flush();
+      }, flushAfterMs);
+    }
   };
 
   return {
@@ -135,35 +175,53 @@ export function createRealtimeTurnOrder(emit: {
     },
     userTranscript(itemId: string, text: string) {
       awaitingUser.delete(itemId);
-      if (text.trim()) emit.user(text.trim());
+      if (text.trim()) pendingUser.push(text.trim());
       if (!awaitingUser.size) flush();
     },
     userTranscriptFailed(itemId: string) {
       awaitingUser.delete(itemId);
       if (!awaitingUser.size) flush();
     },
+    /** A typed question is its own message; spoken pieces before it are saved first. */
     userTyped(text: string) {
-      if (text.trim()) emit.user(text.trim());
-    },
-    assistantTranscript(text: string) {
       if (!text.trim()) return;
-      if (!awaitingUser.size) {
-        emit.assistant(text.trim());
+      emitPendingUser();
+      emit.user(text.trim());
+    },
+    /** The full transcript of one answer (it may still be cancelled). */
+    assistantTranscript(responseId: string, text: string) {
+      if (!text.trim()) return;
+      // Without a response id it can't be matched to response.done, so it is
+      // treated as final (the earlier behaviour).
+      if (!responseId) {
+        acceptAnswer(text.trim());
         return;
       }
-      // The answer arrived before the question's transcript. Hold it briefly
-      // so the chat shows the question first; never hold it forever.
-      heldAssistant.push(text.trim());
-      if (!flushTimer) {
-        flushTimer = setTimeout(() => {
-          awaitingUser.clear();
-          flush();
-        }, flushAfterMs);
+      answerText.set(responseId, text.trim());
+    },
+    /**
+     * The answer finished. "cancelled" (the farmer spoke over it or tapped
+     * stop) and "failed" answers are dropped; the question stays pending and
+     * is joined with what the farmer says next.
+     */
+    responseDone(responseId: string, status: string) {
+      const text = answerText.get(responseId);
+      answerText.delete(responseId);
+      if (status === "cancelled" || status === "failed") return;
+      if (text) acceptAnswer(text);
+      else if (status === "completed" && !awaitingUser.size && !heldAssistant.length) {
+        // Answered without a transcript: still close the question.
+        emitPendingUser();
       }
     },
+    /** The call ended: save everything still waiting so nothing is lost. */
     dispose() {
       awaitingUser.clear();
+      // Answers whose response never finished were heard before hang-up.
+      for (const text of answerText.values()) heldAssistant.push(text);
+      answerText.clear();
       flush();
+      emitPendingUser();
     },
   };
 }
@@ -171,6 +229,8 @@ export function createRealtimeTurnOrder(emit: {
 type ServerEvent = {
   type?: string;
   item_id?: string;
+  response_id?: string;
+  response?: { id?: string; status?: string };
   transcript?: string;
   error?: { message?: string; code?: string };
 };
@@ -288,9 +348,10 @@ export async function startAskPranaRealtimeVoice(options: {
         setStatus("listening");
         break;
       case "response.output_audio_transcript.done":
-        order.assistantTranscript(event.transcript ?? "");
+        order.assistantTranscript(event.response_id ?? "", event.transcript ?? "");
         break;
       case "response.done":
+        order.responseDone(event.response?.id ?? "", event.response?.status ?? "completed");
         if (!speaking) setStatus("listening");
         break;
       case "error": {

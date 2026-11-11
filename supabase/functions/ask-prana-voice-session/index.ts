@@ -96,6 +96,32 @@ function languageRule(language: VoiceLanguage, fallback: ProfileLanguage) {
   }
 }
 
+/**
+ * Speech-to-text for the chat history.
+ * - Fixed language: gpt-realtime-whisper with that language (unchanged).
+ * - Auto: gpt-transcribe, told the farmer speaks Telugu, Hindi or English and
+ *   given common farm words. gpt-realtime-whisper accepts neither a language
+ *   list nor a hint, and on its own it guessed Turkish or Spanish.
+ */
+const AUTO_TRANSCRIPTION = {
+  model: "gpt-transcribe",
+  languages: ["te", "hi", "en"],
+  keywords: [
+    "రొయ్యలు", "చెరువు", "మేత", "చేపలు", "ఏరేటర్",
+    "झींगा", "तालाब", "दाना", "मछली",
+    "vannamei", "tiger shrimp", "pond", "aerator", "check tray",
+    "DO", "pH", "ammonia", "nitrite", "alkalinity", "salinity",
+    "PL", "FCR", "ABW", "biomass", "probiotics", "white feces", "harvest",
+  ],
+};
+/** The previous Auto settings, used only if OpenAI rejects AUTO_TRANSCRIPTION. */
+const FALLBACK_AUTO_TRANSCRIPTION = { model: "gpt-realtime-whisper", delay: "low" };
+
+function transcriptionFor(language: VoiceLanguage): Record<string, unknown> {
+  if (language === "auto") return AUTO_TRANSCRIPTION;
+  return { model: "gpt-realtime-whisper", delay: "low", language };
+}
+
 type HistoryItem = { role: "user" | "assistant"; text: string };
 
 /** Scripts the farmer can use: Latin, Telugu, Devanagari (plus digits/punctuation). */
@@ -248,18 +274,17 @@ Deno.serve(async (req) => {
       audio: {
         input: {
           noise_reduction: { type: "far_field" },
-          transcription: {
-            model: "gpt-realtime-whisper",
-            delay: "low",
-            // Auto: send no language, so the transcriber detects it itself.
-            // (gpt-realtime-whisper rejects the "languages" list.)
-            ...(language === "auto" ? {} : { language }),
-          },
+          // Only the text saved to chat history; the spoken answer comes from
+          // the voice model, which hears the audio itself.
+          transcription: transcriptionFor(language),
           // Ends the farmer's turn by meaning, not a fixed silence. Speaking
           // over the reply stops it (interrupt_response).
           turn_detection: {
             type: "semantic_vad",
-            eagerness: "auto",
+            // "low" waits longer (up to 8 s) before deciding the farmer has
+            // finished, so a thinking pause mid-question doesn't trigger an
+            // answer to half a question. "auto" (= medium) cut farmers off.
+            eagerness: "low",
             create_response: true,
             interrupt_response: true,
           },
@@ -268,20 +293,35 @@ Deno.serve(async (req) => {
       },
     };
 
-    const response = await fetch(OPENAI_CLIENT_SECRETS_URL, {
+    const safetyIdentifier = await sha256Hex(`ask-prana:${userId}`);
+    const requestSecret = (body: typeof session) => fetch(OPENAI_CLIENT_SECRETS_URL, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
         // Lets OpenAI attribute abuse to one user without receiving the raw id.
-        "OpenAI-Safety-Identifier": await sha256Hex(`ask-prana:${userId}`),
+        "OpenAI-Safety-Identifier": safetyIdentifier,
       },
       body: JSON.stringify({
         expires_after: { anchor: "created_at", seconds: CLIENT_SECRET_TTL_SECONDS },
-        session,
+        session: body,
       }),
     });
-    const raw = await response.text();
+    let response = await requestSecret(session);
+    let raw = await response.text();
+    // Safety net: if OpenAI ever rejects the Auto-mode transcription settings,
+    // start the call with the previous settings rather than failing it.
+    if (!response.ok && response.status === 400 && language === "auto") {
+      console.warn("[ask-prana-voice-session] auto transcription rejected, using fallback", raw.slice(0, 300));
+      response = await requestSecret({
+        ...session,
+        audio: {
+          ...session.audio,
+          input: { ...session.audio.input, transcription: FALLBACK_AUTO_TRANSCRIPTION },
+        },
+      });
+      raw = await response.text();
+    }
     if (!response.ok) {
       console.error("[ask-prana-voice-session] OpenAI client secret failed", response.status, raw.slice(0, 600));
       return json({ error: "Voice chat is unavailable right now. Please try again.", code: "PROVIDER_ERROR" }, 502);
