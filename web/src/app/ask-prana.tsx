@@ -1282,9 +1282,7 @@ export default function AskPranaScreen() {
                   >
                     {isLoadingOlder ? (
                       <ActivityIndicator size="small" color={colors.primary} />
-                    ) : (
-                      <Text style={styles.emptyChatCopy}>{t("askPrana.loadEarlierMessages")}</Text>
-                    )}
+                    ) : null}
                   </Pressable>
                 ) : null
               }
