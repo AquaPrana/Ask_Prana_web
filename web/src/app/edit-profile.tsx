@@ -19,6 +19,7 @@ import { UserAvatar } from "../components/user-avatar";
 import { PranaHeader, PranaHeaderButton } from "../components/prana-header";
 import { PranaSelect } from "../components/prana-select";
 import { INDIA_STATES, findIndiaDistrict, findIndiaState } from "../constants/india-states";
+import { getAskPranaLanguageOption } from "../lib/ask-prana-language";
 import { PRANA_FONT, prana, pranaGradientStyle } from "../constants/prana-theme";
 import { useProfile } from "../context/profile-context";
 import {
@@ -43,6 +44,13 @@ import {
 } from "../services/profile";
 
 const INDIA_STATE_NAMES = INDIA_STATES.map((item) => item.name);
+const PROFILE_LANGUAGES = ["English", "Telugu", "Hindi"] as const;
+
+/** Stored values such as "te" or "తెలుగు" still select one of the three choices. */
+function profileLanguageChoice(value: string | null | undefined) {
+  const label = getAskPranaLanguageOption(value).llmLabel;
+  return PROFILE_LANGUAGES.includes(label as (typeof PROFILE_LANGUAGES)[number]) ? label : "English";
+}
 
 // AskPrana cream / teal theme.
 const colors = {
@@ -73,6 +81,8 @@ export default function EditProfileScreen() {
   const registerMode = params.mode === "register";
   const { width: windowWidth } = useWindowDimensions();
   const isDesktop = windowWidth >= 1024;
+  // Phones only. Tablets keep the stacked heading; desktop keeps the card.
+  const isMobile = windowWidth < 768;
   const [lockedPhone, setLockedPhone] = useState(false);
   const [lockedEmail, setLockedEmail] = useState(false);
   const { t } = useTranslation();
@@ -187,7 +197,7 @@ export default function EditProfileScreen() {
     setPhone(profile?.phone ?? appSession?.user.phone ?? "");
     setState(profile?.state ?? "");
     setDistrict(profile?.district ?? "");
-    setLanguage(profile?.language ?? "English");
+    setLanguage(profileLanguageChoice(profile?.language));
     setAvatarUrl(profile?.avatarUrl ?? null);
     setAvatarUpdatedAt(profile?.avatarUpdatedAt ?? null);
     setLoading(false);
@@ -335,7 +345,7 @@ export default function EditProfileScreen() {
         setPhone(savedProfile.phone ?? "");
         setState(savedProfile.state);
         setDistrict(savedProfile.district);
-        setLanguage(savedProfile.language || "English");
+        setLanguage(profileLanguageChoice(savedProfile.language));
         if (savedProfile.email) setEmail(savedProfile.email);
         setAvatarUrl(savedProfile.avatarUrl ?? null);
         setAvatarUpdatedAt(savedProfile.avatarUpdatedAt ?? null);
@@ -482,13 +492,27 @@ export default function EditProfileScreen() {
         keyboardShouldPersistTaps="handled"
       >
         <View style={[styles.inner, isDesktop && styles.card]}>
-        <Pressable onPress={leaveScreen} style={styles.backLink} accessibilityRole="button" accessibilityLabel="Go back">
-          <Feather name="arrow-left" size={13} color="#217C73" />
-          <Text style={styles.backLinkText}>Chat</Text>
-        </Pressable>
-        <Text style={styles.kicker}>{registerMode ? "CREATE ACCOUNT" : "ACCOUNT"}</Text>
-        <Text style={styles.title}>{registerMode ? "Create your Ask Prana account" : "Your profile"}</Text>
-        <Text style={styles.caption}>{registerMode ? "This code is verified. Add your details to finish." : "Keep your account details up to date."}</Text>
+        {isMobile ? (
+          <View style={styles.mobileHeading}>
+            <Pressable onPress={leaveScreen} style={styles.backLinkInRow} accessibilityRole="button" accessibilityLabel="Go back">
+              <Feather name="arrow-left" size={13} color="#217C73" />
+              <Text style={styles.backLinkText}>Chat</Text>
+            </Pressable>
+            <Text style={[styles.title, styles.titleInRow]}>
+              {registerMode ? "Create your Ask Prana account" : "Your profile"}
+            </Text>
+          </View>
+        ) : (
+          <>
+            <Pressable onPress={leaveScreen} style={styles.backLink} accessibilityRole="button" accessibilityLabel="Go back">
+              <Feather name="arrow-left" size={13} color="#217C73" />
+              <Text style={styles.backLinkText}>Chat</Text>
+            </Pressable>
+            <Text style={styles.kicker}>{registerMode ? "CREATE ACCOUNT" : "ACCOUNT"}</Text>
+            <Text style={styles.title}>{registerMode ? "Create your Ask Prana account" : "Your profile"}</Text>
+          </>
+        )}
+        <Text style={[styles.caption, isMobile && styles.captionMobile]}>{registerMode ? "This code is verified. Add your details to finish." : "Keep your account details up to date."}</Text>
         {registerMode ? null : (
           <View style={styles.photoBlock}>
             <UserAvatar
@@ -538,7 +562,14 @@ export default function EditProfileScreen() {
             />
           </View>
         </View>
-        <Field label="Preferred language" value={language} onChangeText={setLanguage} autoCapitalize="words" />
+        <PranaSelect
+          label="Preferred language"
+          value={language}
+          options={[...PROFILE_LANGUAGES]}
+          placeholder="Select language"
+          searchPlaceholder="Search language"
+          onChange={setLanguage}
+        />
         <Pressable onPress={() => void save()} disabled={saving} style={[styles.saveButton, pranaGradientStyle, saving && styles.saveButtonDisabled]} accessibilityRole="button">
           {saving ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.saveText}>{registerMode ? "Create account" : "Save changes"}</Text>}
         </Pressable>
@@ -621,10 +652,35 @@ const styles = StyleSheet.create({
     shadowRadius: 30,
   },
   backLink: { flexDirection: "row", alignItems: "center", gap: 5, alignSelf: "flex-start", minHeight: 40, paddingRight: 8, marginBottom: 6 },
-  backLinkText: { color: "#217C73", fontFamily: F, fontSize: 12, lineHeight: 16, fontWeight: "700" },
+  mobileHeading: {
+    width: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-start",
+    gap: 14,
+  },
+  titleInRow: {
+    flexGrow: 0,
+    flexShrink: 1,
+    minWidth: 0,
+    marginBottom: 0,
+    fontSize: 23,
+    lineHeight: 28,
+    textAlign: "left",
+  },
+  backLinkInRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexGrow: 0,
+    flexShrink: 0,
+    gap: 5,
+    minHeight: 44,
+  },
+  backLinkText: { flexShrink: 1, color: "#217C73", fontFamily: F, fontSize: 12, lineHeight: 16, fontWeight: "700" },
   kicker: { color: prana.tealText, fontFamily: F, fontSize: 10, lineHeight: 13, fontWeight: "800", letterSpacing: 1.1, marginBottom: 8 },
   title: { color: prana.ink, fontFamily: F, fontSize: 29, lineHeight: 34, fontWeight: "800", marginBottom: 12 },
   caption: { color: prana.muted, fontFamily: F, fontSize: 13, lineHeight: 21, marginBottom: 24 },
+  captionMobile: { marginTop: 8, marginBottom: 14 },
   photoBlock: { flexDirection: "row", alignItems: "center", gap: 16, marginBottom: 26 },
   changePhoto: { minHeight: 31, justifyContent: "center" },
   changePhotoText: { color: "#217C73", fontFamily: F, fontSize: 12, lineHeight: 16, fontWeight: "700" },
