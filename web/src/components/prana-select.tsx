@@ -187,7 +187,8 @@ const styles = StyleSheet.create({
     minWidth: 0,
     color: prana.ink,
     fontFamily: F,
-    fontSize: 14,
+    // 16 px or more: iPhone Safari zooms the page into smaller text boxes.
+    fontSize: 16,
     paddingVertical: 8,
     ...noOutline,
   },

@@ -642,8 +642,9 @@ const styles = StyleSheet.create({
     borderRadius: 11,
     paddingHorizontal: 12,
     fontFamily: F,
-    fontSize: 13,
-    lineHeight: 19,
+    // 16 px or more: iPhone Safari zooms the page into smaller text boxes.
+    fontSize: 16,
+    lineHeight: 21,
     fontWeight: "400",
     ...(Platform.OS === "web" ? ({ outlineStyle: "none", outlineWidth: 0 } as object) : null),
   },

@@ -1819,7 +1819,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 11,
     paddingVertical: 9,
     fontFamily: ASK_PRANA_FONT_FAMILY,
-    fontSize: 14,
+    fontSize: 16, // iPhone Safari zooms into text boxes under 16 px.
     lineHeight: 21,
     fontWeight: "400",
     margin: 0,

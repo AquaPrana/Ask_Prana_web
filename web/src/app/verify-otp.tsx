@@ -499,7 +499,8 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFill,
     color: "transparent",
     backgroundColor: "transparent",
-    fontSize: 1,
+    // Invisible, but 16 px stops iPhone Safari zooming in when it is focused.
+    fontSize: 16,
     letterSpacing: 0,
     opacity: 0.015,
     zIndex: 2,

@@ -1083,7 +1083,7 @@ const styles = StyleSheet.create({
     borderColor: prana.inputBorder,
     backgroundColor: prana.card,
     paddingHorizontal: 12,
-    fontSize: 14,
+    fontSize: 16,
     fontWeight: "400",
   },
   dialogActions: { flexDirection: "row", justifyContent: "flex-end", gap: 8 },
@@ -1105,7 +1105,7 @@ const styles = StyleSheet.create({
     backgroundColor: prana.card,
     borderRadius: 11,
   },
-  searchInputMobile: { color: prana.ink, fontSize: 13 },
+  searchInputMobile: { color: prana.ink, fontSize: 16, lineHeight: 21 },
   sidebarLabel: {
     color: "#94A08A",
     fontFamily: PRANA_FONT,

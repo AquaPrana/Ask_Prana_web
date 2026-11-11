@@ -2447,7 +2447,9 @@ const styles = StyleSheet.create({
   textInputScrollable: Platform.OS === "web"
     ? ({ overflowY: "auto", scrollbarWidth: "thin" } as unknown as TextStyle)
     : { overflow: "scroll" },
+  // iPhone Safari zooms the page into any text box under 16 px.
   textInputMobile: {
+    fontSize: 16,
     lineHeight: 22,
     minHeight: 22,
     paddingTop: 0,
@@ -2588,7 +2590,7 @@ const styles = StyleSheet.create({
     backgroundColor: prana.card,
     color: prana.ink,
     fontFamily: PRANA_FONT,
-    fontSize: 15,
+    fontSize: 16,
     lineHeight: 23,
     fontWeight: "400",
     paddingHorizontal: 14,
