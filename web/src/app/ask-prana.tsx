@@ -159,25 +159,37 @@ function clampComposerInputHeight(height: number, maxHeight: number) {
  * fallback for web and programmatic speech updates, where that event may not
  * fire after a controlled value changes.
  */
+/** Text metrics for the estimate: desktop 14 px text, phones 16 px text. */
+type ComposerTextMetrics = { charWidth: number; lineHeight: number; padding: number };
+const DESKTOP_COMPOSER_METRICS: ComposerTextMetrics = {
+  charWidth: 7,
+  lineHeight: COMPOSER_INPUT_LINE_HEIGHT,
+  padding: 12,
+};
+// Phones use 16 px text (so iPhone Safari doesn't zoom) with 22 px lines and
+// no vertical padding; desktop numbers made long questions lose a line.
+const MOBILE_COMPOSER_METRICS: ComposerTextMetrics = { charWidth: 9, lineHeight: 22, padding: 0 };
+
 function estimateComposerInputHeight(
   text: string,
   availableWidth: number,
   maxHeight: number,
+  metrics: ComposerTextMetrics = DESKTOP_COMPOSER_METRICS,
 ) {
   if (!text) return COMPOSER_INPUT_MIN_HEIGHT;
 
-  // 14 pt medium text averages about 7 px per character. The conservative
-  // estimate only fills a gap until an exact content-size event arrives.
+  // 14 pt medium text averages about 7 px per character (16 px text about 9).
+  // The conservative estimate only fills a gap until an exact measurement.
   const charactersPerLine = Math.max(
     12,
-    Math.floor(Math.max(availableWidth - 4, 0) / 7),
+    Math.floor(Math.max(availableWidth - 4, 0) / metrics.charWidth),
   );
   const visualLines = text.split("\n").reduce(
     (total, line) => total + Math.max(1, Math.ceil(line.length / charactersPerLine)),
     0,
   );
   return clampComposerInputHeight(
-    visualLines * COMPOSER_INPUT_LINE_HEIGHT + 12,
+    visualLines * metrics.lineHeight + metrics.padding,
     maxHeight,
   );
 }
@@ -259,6 +271,9 @@ export default function AskPranaScreen() {
       ? window.innerWidth
       : 0;
   const isDesktop = Platform.OS === "web" && Math.max(width, browserWidth) >= 1024;
+  // Keep the established intermediate/tablet layout intact. The compact,
+  // stacked composer is reserved for phone-width viewports.
+  const isMobileComposer = Math.max(width, browserWidth) < 768;
   const listRef = useRef<FlatList<ChatMessage>>(null);
   const listNearBottomRef = useRef(true);
   const listMetricsRef = useRef({ offsetY: 0, contentHeight: 0, viewportHeight: 0 });
@@ -1067,12 +1082,13 @@ export default function AskPranaScreen() {
             draft,
             composerInputWidth,
             composerInputMaxHeight,
+            isDesktop ? DESKTOP_COMPOSER_METRICS : MOBILE_COMPOSER_METRICS,
           ),
         );
       }
     });
     return () => cancelAnimationFrame(frame);
-  }, [composerInputMaxHeight, composerInputWidth, draft, updateComposerInputHeight]);
+  }, [composerInputMaxHeight, composerInputWidth, draft, isDesktop, updateComposerInputHeight]);
 
   const handleComposerContentSizeChange = useCallback(
     (event: NativeSyntheticEvent<TextInputContentSizeChangeEventData>) => {
@@ -1444,18 +1460,26 @@ export default function AskPranaScreen() {
               </View>
             </View>
             ) : (
-            <View style={[styles.inputRow, voiceInline && styles.inputRowVoice]}>
-              {voiceInline ? null : (
+            <View style={[
+              styles.inputRow,
+              isMobileComposer && !voiceInline && styles.inputRowMobileComposer,
+              voiceInline && styles.inputRowVoice,
+            ]}>
+              {voiceInline || isMobileComposer ? null : (
                 <View
                   ref={attachWrapRef}
                   nativeID="ask-prana-attach-wrap"
-                  style={styles.attachWrap}
+                  style={[
+                    styles.attachWrap,
+                    isMobileComposer && styles.attachWrapMobileComposer,
+                  ]}
                 >
                   <Pressable
                     onPress={() => setAttachmentMenuOpen((open) => !open)}
                     disabled={composerBusy}
                     style={({ pressed }) => [
                       styles.attachButton,
+                      isMobileComposer && styles.attachButtonMobileComposer,
                       isDesktop && styles.attachButtonDesktop,
                       attachmentMenuOpen && styles.attachButtonOpen,
                       composerBusy && styles.sendButtonDisabled,
@@ -1508,7 +1532,12 @@ export default function AskPranaScreen() {
                   ) : null}
                 </View>
               )}
-              <View style={[styles.inputShell, isDesktop && styles.inputShellDesktop, voiceInline && styles.inputShellVoice]}>
+              <View style={[
+                styles.inputShell,
+                isMobileComposer && !voiceInline && styles.inputShellMobileComposer,
+                isDesktop && styles.inputShellDesktop,
+                voiceInline && styles.inputShellVoice,
+              ]}>
                 {pendingAttachments.length > 0 ? (
                   <ScrollView
                     style={styles.pendingScroll}
@@ -1586,6 +1615,7 @@ export default function AskPranaScreen() {
                   style={[
                     styles.textInput,
                     !isDesktop && styles.textInputMobile,
+                    isMobileComposer && !voiceInline && styles.textInputMobileComposer,
                     composerAtMaxHeight
                       ? styles.textInputScrollable
                       : styles.textInputAutoGrowing,
@@ -1607,7 +1637,8 @@ export default function AskPranaScreen() {
                                         line.length /
                                           Math.max(
                                             16,
-                                            Math.floor((composerInputWidth || 220) / 8),
+                                            // ~9 px per character at the 16 px phone font size.
+                                            Math.floor((composerInputWidth || 220) / 9),
                                           ),
                                       ),
                                     ),
@@ -1623,7 +1654,7 @@ export default function AskPranaScreen() {
                   onSelectionChange={handleCompactSelectionChange}
                   editable={!isRecording}
                   multiline
-                  textAlignVertical={isDesktop ? "top" : "center"}
+                  textAlignVertical={isDesktop || isMobileComposer ? "top" : "center"}
                   blurOnSubmit={false}
                   returnKeyType="send"
                   submitBehavior="submit"
@@ -1647,7 +1678,7 @@ export default function AskPranaScreen() {
                   scrollEnabled={composerAtMaxHeight}
                   onContentSizeChange={handleComposerContentSizeChange}
                 />
-                {voiceInline ? null : (
+                {voiceInline || isMobileComposer ? null : (
                 <Pressable
                   onPress={handleMicPress}
                   disabled={
@@ -1658,6 +1689,7 @@ export default function AskPranaScreen() {
                   hitSlop={6}
                   style={({ pressed }) => [
                     styles.micButton,
+                    isMobileComposer && styles.micButtonMobileComposer,
                     isRecording && styles.micButtonActive,
                     pressed && styles.pressed,
                   ]}
@@ -1680,7 +1712,7 @@ export default function AskPranaScreen() {
                 )}
                 </View>
               </View>
-              {voiceInline ? null : (
+              {voiceInline || isMobileComposer ? null : (
                 <Pressable
                   onPress={() => {
                     if (isRecording || isTranscribing || composerBusy) return;
@@ -1690,6 +1722,7 @@ export default function AskPranaScreen() {
                   disabled={composerBusy || isRecording || isTranscribing}
                   style={({ pressed }) => [
                     styles.voiceTile,
+                    isMobileComposer && styles.voiceTileMobileComposer,
                     isDesktop && styles.voiceTileDesktop,
                     (composerBusy || isRecording || isTranscribing) && styles.sendButtonDisabled,
                     pressed && styles.pressed,
@@ -1701,13 +1734,14 @@ export default function AskPranaScreen() {
                   <Text style={styles.tileLabel} numberOfLines={1}>{t("askPrana.voiceChat")}</Text>
                 </Pressable>
               )}
-              {voiceInline ? null : (
+              {voiceInline || isMobileComposer ? null : (
                 <Pressable
                   onPress={handleComposerAction}
                   disabled={!canSend || isRecording || isTranscribing}
                   style={({ pressed }) => [
                     styles.sendButton,
                     pranaGradientStyle,
+                    isMobileComposer && styles.sendButtonMobileComposer,
                     isDesktop && styles.sendButtonDesktop,
                     (!canSend || isRecording || isTranscribing) && styles.sendButtonDisabled,
                     pressed && styles.pressed,
@@ -1725,6 +1759,120 @@ export default function AskPranaScreen() {
                   </Text>
                 </Pressable>
               )}
+              {isMobileComposer && !voiceInline ? (
+                <View style={styles.mobileComposerToolbar}>
+                  <View
+                    ref={attachWrapRef}
+                    nativeID="ask-prana-attach-wrap"
+                    style={styles.attachWrap}
+                  >
+                    <Pressable
+                      onPress={() => setAttachmentMenuOpen((open) => !open)}
+                      disabled={composerBusy}
+                      style={({ pressed }) => [
+                        styles.attachButton,
+                        styles.attachButtonMobileComposer,
+                        attachmentMenuOpen && styles.attachButtonOpen,
+                        composerBusy && styles.sendButtonDisabled,
+                        pressed && styles.pressed,
+                      ]}
+                      accessibilityRole="button"
+                      accessibilityLabel={t("askPrana.attach")}
+                      accessibilityState={{ expanded: attachmentMenuOpen }}
+                    >
+                      <Feather name="paperclip" size={19} color="#397F6E" />
+                      <Text style={styles.tileLabel}>{t("askPrana.attachShort")}</Text>
+                    </Pressable>
+                    {attachmentMenuOpen ? (
+                      <View style={styles.attachMenu}>
+                        <Pressable
+                          onPress={() => {
+                            setAttachmentMenuOpen(false);
+                            void sendImageAttachment(requestContext, "gallery");
+                          }}
+                          style={styles.attachMenuItem}
+                        >
+                          <Feather name="image" size={16} color={colors.textDark} />
+                          <Text style={styles.attachMenuText}>{t("askPrana.addImage")}</Text>
+                        </Pressable>
+                        <Pressable
+                          onPress={() => {
+                            setAttachmentMenuOpen(false);
+                            void sendImageAttachment(requestContext, "camera");
+                          }}
+                          style={styles.attachMenuItem}
+                        >
+                          <Feather name="camera" size={16} color={colors.textDark} />
+                          <Text style={styles.attachMenuText}>{t("askPrana.takePhoto")}</Text>
+                        </Pressable>
+                        <Pressable
+                          onPress={() => {
+                            setAttachmentMenuOpen(false);
+                            void sendDocumentAttachment(requestContext);
+                          }}
+                          style={styles.attachMenuItem}
+                        >
+                          <Feather name="file" size={16} color={colors.textDark} />
+                          <Text style={styles.attachMenuText}>{t("askPrana.addFile")}</Text>
+                        </Pressable>
+                      </View>
+                    ) : null}
+                  </View>
+                  <View style={styles.mobileComposerToolbarActions}>
+                    <Pressable
+                      onPress={handleMicPress}
+                      disabled={voiceModeOpen || isTranscribing || (composerBusy && !isRecording)}
+                      hitSlop={6}
+                      style={({ pressed }) => [
+                        styles.micButton,
+                        styles.micButtonMobileComposer,
+                        isRecording && styles.micButtonActive,
+                        pressed && styles.pressed,
+                      ]}
+                      accessibilityRole="button"
+                      accessibilityLabel={isRecording ? t("askPrana.stopRecording") : t("askPrana.recordAudio")}
+                    >
+                      <Feather name={isRecording ? "square" : "mic"} size={isRecording ? 14 : 17} color={isRecording ? colors.white : "#538478"} />
+                      <Text style={[styles.dictateLabel, isRecording && { color: colors.white }]}>{t("askPrana.dictateShort")}</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => {
+                        if (isRecording || isTranscribing || composerBusy) return;
+                        prepareVoiceModeSession();
+                        setVoiceModeOpen(true);
+                      }}
+                      disabled={composerBusy || isRecording || isTranscribing}
+                      style={({ pressed }) => [
+                        styles.voiceTile,
+                        styles.voiceTileMobileComposer,
+                        (composerBusy || isRecording || isTranscribing) && styles.sendButtonDisabled,
+                        pressed && styles.pressed,
+                      ]}
+                      accessibilityRole="button"
+                      accessibilityLabel={t("askPrana.startVoiceConversation")}
+                    >
+                      <AskPranaVoiceWaveformIcon size={18} color="#397C6A" />
+                      <Text style={styles.tileLabel} numberOfLines={1}>{t("askPrana.voiceChat")}</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={handleComposerAction}
+                      disabled={!canSend || isRecording || isTranscribing}
+                      style={({ pressed }) => [
+                        styles.sendButton,
+                        pranaGradientStyle,
+                        styles.sendButtonMobileComposer,
+                        (!canSend || isRecording || isTranscribing) && styles.sendButtonDisabled,
+                        pressed && styles.pressed,
+                      ]}
+                      accessibilityRole="button"
+                      accessibilityLabel={generationActive ? t("askPrana.stopGenerating") : t("askPrana.send")}
+                    >
+                      {generationActive ? <View style={styles.stopIcon} /> : <Feather name="send" size={19} color={colors.white} />}
+                      <Text style={[styles.tileLabel, styles.tileLabelOnTeal]}>{generationActive ? t("askPrana.stopShort") : t("askPrana.sendShort")}</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              ) : null}
               {voiceInline ? (
                 <>
                   <Pressable
@@ -1836,7 +1984,7 @@ export default function AskPranaScreen() {
                 </Pressable>
               </View>
             ) : null}
-            {voiceInline ? null : (
+            {voiceInline || isMobileComposer ? null : (
               <Text style={styles.composerNote}>{t("askPrana.composerNote")}</Text>
             )}
           </View>
@@ -2337,8 +2485,25 @@ const styles = StyleSheet.create({
     width: "100%",
     maxWidth: 900,
   },
+  // Phone composer: the existing controls remain the same components and
+  // handlers, but are positioned in a compact toolbar under the full-width
+  // textarea. This makes the outer row the single rounded composer surface.
+  inputRowMobileComposer: {
+    position: "relative",
+    flexDirection: "column",
+    alignItems: "stretch",
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "#B9CEBA",
+    backgroundColor: prana.card,
+    paddingHorizontal: 8,
+    paddingTop: 8,
+    paddingBottom: 6,
+    gap: 0,
+  },
   inputRowVoice: { alignItems: "center" },
   attachWrap: { position: "relative", zIndex: 20 },
+  attachWrapMobileComposer: { marginRight: "auto" },
   attachButton: {
     width: 44,
     minHeight: 54,
@@ -2352,6 +2517,15 @@ const styles = StyleSheet.create({
     gap: 2,
     paddingVertical: 5,
     paddingHorizontal: 2,
+  },
+  attachButtonMobileComposer: {
+    width: 44,
+    height: 44,
+    minHeight: 44,
+    borderWidth: 0,
+    borderRadius: 12,
+    backgroundColor: "transparent",
+    paddingVertical: 0,
   },
   attachMenu: {
     position: "absolute",
@@ -2402,6 +2576,36 @@ const styles = StyleSheet.create({
     flexDirection: "column",
     alignItems: "stretch",
     justifyContent: "center",
+    gap: 4,
+  },
+  inputShellMobileComposer: {
+    flexGrow: 0,
+    flexShrink: 0,
+    // "auto", not "100%": in this column layout a 100% basis means the full
+    // height of the composer, which pushed the toolbar out of the bottom.
+    flexBasis: "auto",
+    width: "100%",
+    minHeight: COMPOSER_INPUT_MIN_HEIGHT,
+    borderWidth: 0,
+    borderRadius: 0,
+    backgroundColor: "transparent",
+    paddingHorizontal: 0,
+    paddingTop: 6,
+    paddingBottom: 4,
+    justifyContent: "flex-start",
+  },
+  mobileComposerToolbar: {
+    width: "100%",
+    minWidth: 0,
+    minHeight: 44,
+    marginTop: 4,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  mobileComposerToolbarActions: {
+    flexDirection: "row",
+    alignItems: "center",
     gap: 4,
   },
   composerControls: {
@@ -2455,6 +2659,17 @@ const styles = StyleSheet.create({
     paddingTop: 0,
     paddingBottom: 0,
   },
+  textInputMobileComposer: {
+    width: "100%",
+    flexGrow: 0,
+    flexShrink: 0,
+    flexBasis: "100%",
+    paddingHorizontal: 8,
+    // No vertical padding: the mobile height is calculated as lines × 22 px,
+    // so padding here clipped the text. The spacing sits on the shell instead.
+    paddingTop: 0,
+    paddingBottom: 0,
+  },
   micButton: {
     width: 39,
     minHeight: 44,
@@ -2470,6 +2685,16 @@ const styles = StyleSheet.create({
     zIndex: 2,
   },
   micButtonActive: { backgroundColor: prana.teal },
+  micButtonMobileComposer: {
+    width: 44,
+    height: 44,
+    minHeight: 44,
+    alignSelf: "center",
+    marginLeft: 0,
+    borderLeftWidth: 0,
+    borderRadius: 12,
+    backgroundColor: "transparent",
+  },
   voiceModeButton: {
     width: 32,
     height: 32,
@@ -2489,6 +2714,14 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
   },
   sendButtonDisabled: { opacity: 0.48 },
+  sendButtonMobileComposer: {
+    width: 44,
+    height: 44,
+    minHeight: 44,
+    borderRadius: 12,
+    paddingVertical: 0,
+    marginLeft: 0,
+  },
   expandDraftButton: {
     minHeight: 36,
     paddingHorizontal: 12,
@@ -2741,6 +2974,16 @@ const styles = StyleSheet.create({
     gap: 3,
     paddingVertical: 5,
     paddingHorizontal: 2,
+  },
+  voiceTileMobileComposer: {
+    width: 58, // wide enough for the "Voice chat" label
+    height: 44,
+    minHeight: 44,
+    borderWidth: 0,
+    borderRadius: 12,
+    backgroundColor: "transparent",
+    paddingVertical: 0,
+    marginLeft: 0,
   },
   voiceTileDesktop: { width: 58, minHeight: 58, borderColor: "#D3DFC9", backgroundColor: "#F8F9ED" },
 });
