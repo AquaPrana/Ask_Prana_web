@@ -10,7 +10,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Platform, Pressable, StyleSheet, Text, View, type ViewStyle } from "react-native";
 import Feather from "@expo/vector-icons/Feather";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ASK_PRANA_FONT_FAMILY } from "../constants/ask-prana-typography";
+import { PRANA_FONT, pranaGradientStyle } from "../constants/prana-theme";
+import { pc } from "../constants/prana-theme-mode";
 import { ASK_PRANA_LANGUAGE_OPTIONS } from "../lib/ask-prana-language";
 import { createVoiceScreenWakeLock } from "../lib/ask-prana-screen-wake-lock";
 import {
@@ -21,20 +22,14 @@ import {
   type RealtimeVoiceLanguage,
   type RealtimeVoiceStatus,
 } from "../lib/ask-prana-realtime";
-import { VoiceOrb, type VoiceModeState } from "./ask-prana-voice-mode";
+import { PranaHeader, PranaHeaderButton, PranaLanguageButton } from "./prana-header";
+import { PranaVoiceMark, type PranaVoiceVisualState } from "./prana-voice-mark";
 
 /** A call ends on its own after this long, to keep cost predictable. */
 export const REALTIME_VOICE_MAX_SESSION_MS = 10 * 60 * 1000;
 /** ...or after this long without the farmer speaking or typing. */
 export const REALTIME_VOICE_IDLE_MS = 60 * 1000;
 
-const colors = {
-  primary: "#0F766E",
-  white: "#FFFFFF",
-  muted: "#9DB4B8",
-  text: "#E8F4F2",
-  danger: "#F87171",
-};
 
 type ScreenState = RealtimeVoiceStatus | "muted" | "error" | "idle";
 
@@ -59,12 +54,6 @@ type Props = {
   onRegisterActions?: (actions: VoiceBarActions | null) => void;
 };
 
-function orbStateFor(state: ScreenState): VoiceModeState {
-  if (state === "connecting" || state === "thinking") return "processing";
-  if (state === "hearing") return "listening";
-  if (state === "ended") return "idle";
-  return state;
-}
 
 function statusLabelFor(state: ScreenState, errorText: string | null) {
   switch (state) {
@@ -354,20 +343,25 @@ export function AskPranaRealtimeVoice({
 
   const statusLabel = statusLabelFor(state, errorText);
   const canRetry = state === "error" || state === "ended";
-  const orbLevel = reducedMotion ? 0 : level;
-  const orb = (
+  const visualState = visualStateFor(state);
+  const languageLabel = language === "auto"
+    ? "Auto"
+    : ASK_PRANA_LANGUAGE_OPTIONS.find((option) => option.code === language)?.nativeLabel ?? language;
+  const mark = (
     <Pressable
       onPress={handleOrbPress}
       accessibilityRole="button"
       accessibilityLabel={canRetry ? "Start voice chat again" : "Voice conversation. Tap to interrupt."}
+      style={variant === "overlay" ? styles.markOverlay : styles.markScreen}
     >
-      <View style={{ transform: [{ scale: state === "speaking" || state === "hearing" ? 1 + orbLevel * 0.08 : 1 }] }}>
-        <VoiceOrb
-          size={variant === "overlay" ? 88 : 200}
-          state={orbStateFor(state)}
-          audioLevel={orbLevel}
-          reducedMotion={reducedMotion}
-        />
+      <View
+        style={[
+          styles.markFill,
+          // Grows slightly with the live voice volume, as the old circle did.
+          { transform: [{ scale: !reducedMotion && (state === "speaking" || state === "hearing") ? 1 + level * 0.06 : 1 }] },
+        ]}
+      >
+        <PranaVoiceMark state={visualState} style={styles.markFill} />
       </View>
     </Pressable>
   );
@@ -384,15 +378,25 @@ export function AskPranaRealtimeVoice({
           accessibilityRole="button"
           accessibilityState={{ selected: option.mode === language }}
         >
-          <Text style={styles.languageOptionText}>{option.label}</Text>
+          <Text style={[styles.languageOptionText, option.mode === language && styles.languageOptionTextActive]}>
+            {option.label}
+          </Text>
         </Pressable>
       ))}
     </View>
   );
   const retryButton = canRetry ? (
-    <Pressable onPress={restart} style={styles.retryBtn} accessibilityRole="button" accessibilityLabel="Start voice chat again">
+    <Pressable
+      onPress={restart}
+      style={[styles.retryBtn, pranaGradientStyle]}
+      accessibilityRole="button"
+      accessibilityLabel="Start voice chat again"
+    >
       <Text style={styles.retryText}>{state === "error" ? "Try again" : "Continue"}</Text>
     </Pressable>
+  ) : null;
+  const statusText = statusLabel ? (
+    <Text style={[styles.status, state === "error" && styles.errorText]}>{statusLabel}</Text>
   ) : null;
 
   if (variant === "overlay") {
@@ -400,10 +404,8 @@ export function AskPranaRealtimeVoice({
     // in the conversation. Mute, end and typing use the page's bottom bar.
     return (
       <View style={styles.overlayHost}>
-        {orb}
-        {statusLabel ? (
-          <Text style={[styles.status, state === "error" && styles.errorText]}>{statusLabel}</Text>
-        ) : null}
+        {mark}
+        {statusText}
         {notice ? <Text style={styles.notice}>{notice}</Text> : null}
         {retryButton}
         <Pressable
@@ -412,11 +414,9 @@ export function AskPranaRealtimeVoice({
           accessibilityRole="button"
           accessibilityLabel="Change voice language"
         >
-          <Feather name="globe" size={14} color={colors.muted} />
+          <Feather name="globe" size={14} color={pc.fg("#5C7570")} />
           <Text style={styles.languageToggleText}>
-            {language === "auto"
-              ? "Auto language"
-              : ASK_PRANA_LANGUAGE_OPTIONS.find((option) => option.code === language)?.nativeLabel}
+            {language === "auto" ? "Auto language" : languageLabel}
           </Text>
         </Pressable>
         {languageMenuOpen ? languagePicker : null}
@@ -425,29 +425,36 @@ export function AskPranaRealtimeVoice({
     );
   }
 
+  // Phone: full-screen voice chat, as in the AskPrana prototype.
   const showCaptions = captionsVisible && (state === "thinking" || state === "speaking");
   return (
-    <View style={[styles.root, { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 16 }]}>
-      <View style={styles.header}>
-        <Pressable onPress={onOpenMenu} style={styles.roundBtn} accessibilityRole="button" accessibilityLabel="Open menu">
-          <Feather name="menu" size={18} color={colors.white} />
-        </Pressable>
-        <Pressable
-          onPress={() => setLanguageMenuOpen((open) => !open)}
-          style={styles.roundBtn}
-          accessibilityRole="button"
-          accessibilityLabel="Change voice language"
-        >
-          <Feather name="sliders" size={16} color={colors.white} />
-        </Pressable>
-      </View>
-      {languageMenuOpen ? languagePicker : null}
+    // Bottom space is for the chat page's voice bar (type, mute, end), shown below.
+    <View style={[styles.root, { paddingBottom: Math.max(insets.bottom, 10) + 84 }]}>
+      <PranaHeader
+        variant="teal"
+        left={<PranaHeaderButton icon="menu" onPress={() => onOpenMenu?.()} label="Open menu" />}
+        right={
+          <PranaLanguageButton
+            label={language === "auto" ? "Auto" : language}
+            onPress={() => setLanguageMenuOpen((open) => !open)}
+            accessibilityLabel={`Change voice language: ${languageLabel}`}
+          />
+        }
+      />
+      {languageMenuOpen ? <View style={styles.languageMenuBar}>{languagePicker}</View> : null}
 
       <View style={styles.stage}>
-        {orb}
-        {statusLabel ? (
-          <Text style={[styles.status, state === "error" && styles.errorText]}>{statusLabel}</Text>
-        ) : null}
+        {mark}
+        {statusText}
+        <Pressable
+          onPress={() => setCaptionsVisible((value) => !value)}
+          style={[styles.captionsChip, captionsVisible && styles.captionsChipOn]}
+          accessibilityRole="button"
+          accessibilityLabel={captionsVisible ? "Hide captions" : "Show captions"}
+        >
+          <Feather name="align-left" size={14} color={pc.fg("#397C6A")} />
+          <Text style={styles.captionsChipText}>{captionsVisible ? "Hide captions" : "Captions"}</Text>
+        </Pressable>
         {showCaptions && lastUserText ? (
           <Text style={styles.caption} numberOfLines={3} accessibilityLabel={`You said: ${lastUserText}`}>
             {lastUserText}
@@ -458,38 +465,36 @@ export function AskPranaRealtimeVoice({
             {lastAssistantText}
           </Text>
         ) : null}
-        {notice ? <Text style={styles.notice}>{notice}</Text> : null}
+        {notice ? <Text style={[styles.notice, styles.noticeCard]}>{notice}</Text> : null}
         {retryButton}
         {wakeLockNote ? <Text style={styles.wakeLockNote}>{wakeLockNote}</Text> : null}
       </View>
 
-      <View style={styles.bottomBar}>
-        <View style={styles.bottomSpacer} />
-        <Pressable
-          onPress={() => setCaptionsVisible((value) => !value)}
-          style={styles.roundBtn}
-          accessibilityRole="button"
-          accessibilityLabel={captionsVisible ? "Hide captions" : "Show captions"}
-        >
-          <Feather name="align-left" size={18} color={colors.white} />
-        </Pressable>
-        <Pressable onPress={handleMuteToggle} style={styles.roundBtn} accessibilityRole="button" accessibilityLabel={muted ? "Unmute" : "Mute"}>
-          <Feather name={muted ? "mic" : "mic-off"} size={18} color={colors.white} />
-        </Pressable>
-        <Pressable onPress={handleEnd} style={[styles.roundBtn, styles.closeBtn]} accessibilityRole="button" accessibilityLabel="End">
-          <Feather name="x" size={20} color="#111111" />
-        </Pressable>
-      </View>
     </View>
   );
 }
+
+/** Which motion the voice artwork shows for each call state. */
+function visualStateFor(state: ScreenState): PranaVoiceVisualState {
+  switch (state) {
+    case "listening":
+    case "hearing": return "listening";
+    case "speaking": return "speaking";
+    case "connecting":
+    case "thinking": return "thinking";
+    case "muted": return "muted";
+    case "error": return "error";
+    default: return "ready";
+  }
+}
+
+const F = PRANA_FONT;
 
 const styles = StyleSheet.create({
   root: {
     flex: 1,
     height: "100%",
-    backgroundColor: "#000000",
-    paddingHorizontal: 16,
+    backgroundColor: pc.bg("#F5F5DF"),
     ...(Platform.OS === "web"
       ? ({ position: "fixed", top: 0, right: 0, bottom: 0, left: 0, zIndex: 100 } as unknown as ViewStyle)
       : {}),
@@ -498,33 +503,40 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 8,
-    paddingTop: 36,
+    paddingTop: 20,
     paddingBottom: 10,
-    backgroundColor: "#171717",
+    backgroundColor: "transparent",
     overflow: "hidden",
   },
-  header: {
-    minHeight: 44,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
+  markScreen: { width: "82%", maxWidth: 300, aspectRatio: 1.62 },
+  markOverlay: { width: 240, maxWidth: "80%", aspectRatio: 1.62 },
+  markFill: { width: "100%", height: "100%" },
+  languageMenuBar: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    backgroundColor: pc.bg("#F5F5DF"),
+    borderBottomWidth: 1,
+    borderBottomColor: pc.bd("#D9DDC6"),
   },
   languageMenu: { flexDirection: "row", flexWrap: "wrap", justifyContent: "center", gap: 8 },
   languageOption: {
-    borderColor: colors.muted,
-    borderRadius: 14,
+    minHeight: 34,
+    justifyContent: "center",
+    borderColor: pc.bd("#C6D6BF"),
+    backgroundColor: pc.bg("#F0F3E4"),
+    borderRadius: 12,
     borderWidth: 1,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingHorizontal: 12,
   },
-  languageOptionActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  languageOptionActive: { backgroundColor: "#008081", borderColor: "#008081" },
   languageOptionText: {
-    color: colors.text,
-    fontFamily: ASK_PRANA_FONT_FAMILY,
+    color: pc.fg("#397C6A"),
+    fontFamily: F,
     fontSize: 12,
     lineHeight: 16,
-    fontWeight: "500",
+    fontWeight: "700",
   },
+  languageOptionTextActive: { color: "#FFFFFF" },
   languageToggle: {
     flexDirection: "row",
     alignItems: "center",
@@ -533,8 +545,8 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   languageToggleText: {
-    color: colors.muted,
-    fontFamily: ASK_PRANA_FONT_FAMILY,
+    color: pc.fg("#5C7570"),
+    fontFamily: F,
     fontSize: 12,
     lineHeight: 16,
   },
@@ -542,65 +554,120 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    gap: 24,
+    gap: 16,
+    paddingHorizontal: 24,
   },
   status: {
-    color: colors.text,
-    fontFamily: ASK_PRANA_FONT_FAMILY,
-    fontSize: 14,
-    fontWeight: "500",
+    color: pc.fg("#5C7570"),
+    fontFamily: F,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "600",
     textAlign: "center",
     paddingHorizontal: 16,
   },
-  errorText: { color: colors.danger },
+  errorText: { color: pc.fg("#AD3D31") },
   notice: {
-    color: colors.muted,
-    fontFamily: ASK_PRANA_FONT_FAMILY,
-    fontSize: 13,
+    color: pc.fg("#5C7570"),
+    fontFamily: F,
+    fontSize: 12,
     lineHeight: 18,
     textAlign: "center",
-    paddingHorizontal: 24,
+    paddingHorizontal: 16,
     maxWidth: 420,
   },
+  noticeCard: {
+    alignSelf: "stretch",
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: pc.bg("#FFFDF0"),
+    color: pc.fg("#6D5549"),
+  },
   caption: {
-    color: "#D4D4D4",
-    fontFamily: ASK_PRANA_FONT_FAMILY,
-    fontSize: 16,
-    lineHeight: 24,
+    color: pc.fg("#15393A"),
+    fontFamily: F,
+    fontSize: 15,
+    lineHeight: 23,
     textAlign: "center",
-    paddingHorizontal: 24,
+    paddingHorizontal: 8,
     maxWidth: 560,
   },
   wakeLockNote: {
-    color: colors.muted,
-    fontSize: 12,
+    color: pc.fg("#5C7570"),
+    fontFamily: F,
+    fontSize: 11,
     lineHeight: 16,
     textAlign: "center",
     paddingHorizontal: 24,
   },
   retryBtn: {
-    minHeight: 36,
-    borderRadius: 18,
-    backgroundColor: colors.primary,
-    paddingHorizontal: 16,
+    minHeight: 40,
+    borderRadius: 12,
+    paddingHorizontal: 20,
     alignItems: "center",
     justifyContent: "center",
   },
   retryText: {
-    color: colors.white,
-    fontFamily: ASK_PRANA_FONT_FAMILY,
-    fontSize: 14,
-    fontWeight: "600",
+    color: "#FFFFFF",
+    fontFamily: F,
+    fontSize: 13,
+    fontWeight: "800",
   },
-  bottomBar: { flexDirection: "row", alignItems: "center", gap: 10 },
-  bottomSpacer: { flex: 1 },
-  roundBtn: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: "#2F2F2F",
+  captionsChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    minHeight: 32,
+    paddingHorizontal: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: pc.bd("#C6D6BF"),
+    backgroundColor: pc.bg("#F0F3E4"),
+  },
+  captionsChipOn: { backgroundColor: pc.bg("#D7EEE0"), borderColor: pc.bd("#8EB49E") },
+  captionsChipText: { color: pc.fg("#397C6A"), fontFamily: F, fontSize: 11, lineHeight: 14, fontWeight: "700" },
+  footer: {
+    paddingTop: 12,
+    paddingHorizontal: 14,
+    backgroundColor: pc.bg("#F5F5DF"),
+  },
+  bar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    padding: 8,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: pc.bd("#C7D5BD"),
+    backgroundColor: pc.bg("#FFFDF0"),
+  },
+  barBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
     alignItems: "center",
     justifyContent: "center",
   },
-  closeBtn: { backgroundColor: "#FFFFFF" },
+  barBtnOn: { backgroundColor: pc.bg("#EDF2E2") },
+  bars: { flex: 1, minWidth: 0, height: 26 },
+  micLive: { backgroundColor: pc.bg("#D7EEE0") },
+  micDot: {
+    position: "absolute",
+    top: 7,
+    right: 7,
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: pc.fg("#008081"),
+  },
+  endRow: { height: 34, marginTop: 6, alignItems: "flex-end", justifyContent: "center", paddingRight: 5 },
+  endBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    borderWidth: 1,
+    borderColor: pc.bd("#CDD9C3"),
+    alignItems: "center",
+    justifyContent: "center",
+  },
 });

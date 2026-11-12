@@ -37,6 +37,7 @@ import {
   verifyEmailChangeCode,
   verifyEmailLoginCode,
 } from "../services/profile";
+import { pc } from "../constants/prana-theme-mode";
 
 // AskPrana cream / teal theme.
 const colors = {
@@ -306,7 +307,7 @@ export default function VerifyEmailScreen() {
     <View style={styles.root}>
       <StatusBar
         barStyle={isDesktop ? "dark-content" : "light-content"}
-        backgroundColor={isDesktop ? prana.desktopHeader : prana.headerDark}
+        backgroundColor={isDesktop ? pc.bg(prana.desktopHeader) : pc.bg(prana.headerDark)}
       />
       {isDesktop ? (
         <PranaHeader
@@ -362,7 +363,7 @@ export default function VerifyEmailScreen() {
                     autoComplete="one-time-code"
                     maxLength={codeLength}
                     placeholder={"•".repeat(codeLength)}
-                    placeholderTextColor={colors.mutedSoft}
+                    placeholderTextColor={pc.fg(colors.mutedSoft)}
                     style={[styles.codeInput, error ? styles.codeInputError : null]}
                     accessibilityLabel="Email verification code"
                     returnKeyType="done"
@@ -438,7 +439,7 @@ function PrimaryButton({
       accessibilityState={{ disabled }}
     >
       <View style={styles.buttonContent}>
-        {loading ? <ActivityIndicator size="small" color={colors.ctaDisabledText} /> : null}
+        {loading ? <ActivityIndicator size="small" color={pc.fg(colors.ctaDisabledText)} /> : null}
         <Text style={[styles.buttonText, disabled && styles.buttonTextDisabled]}>{label}</Text>
       </View>
     </Pressable>
@@ -448,7 +449,7 @@ function PrimaryButton({
 const F = PRANA_FONT;
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: prana.cream, overflow: "hidden" },
+  root: { flex: 1, backgroundColor: pc.bg(prana.cream), overflow: "hidden" },
   flex: { flex: 1 },
   scroll: { flexGrow: 1, paddingBottom: 28 },
   scrollDesktop: { alignItems: "center", justifyContent: "center", paddingVertical: 40 },
@@ -459,24 +460,24 @@ const styles = StyleSheet.create({
     paddingVertical: 30,
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: prana.line,
+    borderColor: pc.bd(prana.line),
     shadowColor: "#1D4B36",
     shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.08,
     shadowRadius: 30,
   },
-  eyebrow: { color: prana.tealText, fontFamily: F, fontSize: 10, lineHeight: 13, fontWeight: "800", letterSpacing: 1.1 },
-  heading: { color: prana.ink, fontFamily: F, fontSize: 29, lineHeight: 34, fontWeight: "800" },
-  sentTo: { color: prana.muted, fontFamily: F, fontSize: 13, lineHeight: 21, marginBottom: 12 },
-  emailText: { color: prana.ink, fontSize: 15, fontWeight: "800" },
-  label: { color: prana.ink, fontFamily: F, fontSize: 12, lineHeight: 16, fontWeight: "700" },
+  eyebrow: { color: pc.fg(prana.tealText), fontFamily: F, fontSize: 10, lineHeight: 13, fontWeight: "800", letterSpacing: 1.1 },
+  heading: { color: pc.fg(prana.ink), fontFamily: F, fontSize: 29, lineHeight: 34, fontWeight: "800" },
+  sentTo: { color: pc.fg(prana.muted), fontFamily: F, fontSize: 13, lineHeight: 21, marginBottom: 12 },
+  emailText: { color: pc.fg(prana.ink), fontSize: 15, fontWeight: "800" },
+  label: { color: pc.fg(prana.ink), fontFamily: F, fontSize: 12, lineHeight: 16, fontWeight: "700" },
   codeInput: {
     height: 56,
     borderRadius: 12,
     borderWidth: 1.5,
-    borderColor: "#C4D0BE",
-    backgroundColor: prana.card,
-    color: prana.ink,
+    borderColor: pc.bd("#C4D0BE"),
+    backgroundColor: pc.bg(prana.card),
+    color: pc.fg(prana.ink),
     fontFamily: F,
     fontSize: 23,
     fontWeight: "800",
@@ -484,10 +485,10 @@ const styles = StyleSheet.create({
     textAlign: "center",
     ...(Platform.OS === "web" ? ({ outlineStyle: "none", outlineWidth: 0, caretColor: "#008081" } as object) : null),
   },
-  codeInputError: { borderColor: colors.danger },
-  errorText: { color: colors.danger, fontFamily: F, fontSize: 12, lineHeight: 18 },
-  noticeText: { color: prana.muted, fontFamily: F, fontSize: 12, lineHeight: 18 },
-  successText: { color: colors.success, fontFamily: F, fontSize: 15, lineHeight: 22, fontWeight: "700" },
+  codeInputError: { borderColor: pc.bd(colors.danger) },
+  errorText: { color: pc.fg(colors.danger), fontFamily: F, fontSize: 12, lineHeight: 18 },
+  noticeText: { color: pc.fg(prana.muted), fontFamily: F, fontSize: 12, lineHeight: 18 },
+  successText: { color: pc.fg(colors.success), fontFamily: F, fontSize: 15, lineHeight: 22, fontWeight: "700" },
   button: {
     minHeight: 54,
     marginTop: 8,
@@ -502,12 +503,12 @@ const styles = StyleSheet.create({
   },
   buttonPressed: { opacity: 0.9 },
   buttonContent: { flexDirection: "row", alignItems: "center", gap: 8 },
-  buttonText: { color: "#FFFFFF", fontFamily: F, fontSize: 14, lineHeight: 20, fontWeight: "800" },
-  buttonTextDisabled: { color: "#FFFFFF" },
+  buttonText: { color: pc.fg("#FFFFFF"), fontFamily: F, fontSize: 14, lineHeight: 20, fontWeight: "800" },
+  buttonTextDisabled: { color: pc.fg("#FFFFFF") },
   resendLine: { marginTop: 4, textAlign: "center", fontFamily: F, fontSize: 11, lineHeight: 16 },
-  resendPrompt: { color: prana.muted },
-  resendAction: { color: "#217C73", fontWeight: "700" },
-  resendActionDisabled: { color: "#7FA79B", fontWeight: "600" },
+  resendPrompt: { color: pc.fg(prana.muted) },
+  resendAction: { color: pc.fg("#217C73"), fontWeight: "700" },
+  resendActionDisabled: { color: pc.fg("#7FA79B"), fontWeight: "600" },
   skip: { alignSelf: "center", minHeight: 44, justifyContent: "center", paddingHorizontal: 12 },
-  skipText: { color: "#217C73", fontFamily: F, fontSize: 12, lineHeight: 16, fontWeight: "700" },
+  skipText: { color: pc.fg("#217C73"), fontFamily: F, fontSize: 12, lineHeight: 16, fontWeight: "700" },
 });

@@ -11,6 +11,7 @@ import {
 } from "react-native";
 import Feather from "@expo/vector-icons/Feather";
 import { PRANA_FONT, noOutline, prana } from "../constants/prana-theme";
+import { pc } from "../constants/prana-theme-mode";
 
 type Props = {
   label: string;
@@ -63,7 +64,7 @@ export function PranaSelect({
         <Text style={[styles.triggerText, !value && styles.placeholder]} numberOfLines={1}>
           {value || (disabled && disabledHint ? disabledHint : placeholder)}
         </Text>
-        <Feather name="chevron-down" size={16} color="#538478" />
+        <Feather name="chevron-down" size={16} color={pc.fg("#538478")} />
       </Pressable>
 
       <Modal visible={open} transparent animationType="fade" onRequestClose={close}>
@@ -73,16 +74,16 @@ export function PranaSelect({
             <View style={styles.sheetHead}>
               <Text style={styles.sheetTitle}>{label}</Text>
               <Pressable onPress={close} style={styles.closeButton} accessibilityRole="button" accessibilityLabel="Close">
-                <Feather name="x" size={17} color="#52806B" />
+                <Feather name="x" size={17} color={pc.fg("#52806B")} />
               </Pressable>
             </View>
             <View style={styles.searchBox}>
-              <Feather name="search" size={15} color="#7D927F" />
+              <Feather name="search" size={15} color={pc.fg("#7D927F")} />
               <TextInput
                 value={query}
                 onChangeText={setQuery}
                 placeholder={searchPlaceholder}
-                placeholderTextColor="#8A9B8B"
+                placeholderTextColor={pc.fg("#8A9B8B")}
                 style={styles.searchInput}
                 autoFocus={Platform.OS === "web"}
                 autoCorrect={false}
@@ -107,7 +108,7 @@ export function PranaSelect({
                       accessibilityState={{ selected }}
                     >
                       <Text style={[styles.optionText, selected && styles.optionTextSelected]}>{option}</Text>
-                      {selected ? <Feather name="check" size={16} color={prana.teal} /> : null}
+                      {selected ? <Feather name="check" size={16} color={pc.fg(prana.teal)} /> : null}
                     </Pressable>
                   );
                 })
@@ -124,21 +125,21 @@ const F = PRANA_FONT;
 
 const styles = StyleSheet.create({
   field: { gap: 9, marginBottom: 17 },
-  label: { color: prana.ink, fontFamily: F, fontSize: 12, lineHeight: 16, fontWeight: "700" },
+  label: { color: pc.fg(prana.ink), fontFamily: F, fontSize: 12, lineHeight: 16, fontWeight: "700" },
   trigger: {
     minHeight: 51,
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    backgroundColor: prana.card,
+    backgroundColor: pc.bg(prana.card),
     borderWidth: 1.4,
-    borderColor: prana.inputBorder,
+    borderColor: pc.bd(prana.inputBorder),
     borderRadius: 11,
     paddingHorizontal: 12,
   },
-  triggerDisabled: { backgroundColor: "#F2F2DE" },
-  triggerText: { flex: 1, minWidth: 0, color: prana.ink, fontFamily: F, fontSize: 13, lineHeight: 19 },
-  placeholder: { color: "#8A9B8B" },
+  triggerDisabled: { backgroundColor: pc.bg("#F2F2DE") },
+  triggerText: { flex: 1, minWidth: 0, color: pc.fg(prana.ink), fontFamily: F, fontSize: 13, lineHeight: 19 },
+  placeholder: { color: pc.fg("#8A9B8B") },
   backdrop: {
     flex: 1,
     backgroundColor: "rgba(21,57,58,0.45)",
@@ -150,10 +151,10 @@ const styles = StyleSheet.create({
     width: "100%",
     maxWidth: 420,
     maxHeight: "80%",
-    backgroundColor: prana.cream,
+    backgroundColor: pc.bg(prana.cream),
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: prana.line,
+    borderColor: pc.bd(prana.line),
     padding: 16,
     gap: 12,
     shadowColor: "#15393A",
@@ -162,14 +163,14 @@ const styles = StyleSheet.create({
     shadowRadius: 40,
   },
   sheetHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  sheetTitle: { color: prana.ink, fontFamily: F, fontSize: 18, lineHeight: 24, fontWeight: "800" },
+  sheetTitle: { color: pc.fg(prana.ink), fontFamily: F, fontSize: 18, lineHeight: 24, fontWeight: "800" },
   closeButton: {
     width: 32,
     height: 32,
     borderRadius: 11,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#E6EBD8",
+    backgroundColor: pc.bg("#E6EBD8"),
   },
   searchBox: {
     minHeight: 44,
@@ -177,15 +178,15 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 9,
     borderWidth: 1.4,
-    borderColor: prana.inputBorder,
-    backgroundColor: prana.card,
+    borderColor: pc.bd(prana.inputBorder),
+    backgroundColor: pc.bg(prana.card),
     borderRadius: 11,
     paddingHorizontal: 12,
   },
   searchInput: {
     flex: 1,
     minWidth: 0,
-    color: prana.ink,
+    color: pc.fg(prana.ink),
     fontFamily: F,
     // 16 px or more: iPhone Safari zooms the page into smaller text boxes.
     fontSize: 16,
@@ -193,7 +194,7 @@ const styles = StyleSheet.create({
     ...noOutline,
   },
   list: { flexGrow: 0 },
-  empty: { color: prana.muted, fontFamily: F, fontSize: 13, textAlign: "center", paddingVertical: 20 },
+  empty: { color: pc.fg(prana.muted), fontFamily: F, fontSize: 13, textAlign: "center", paddingVertical: 20 },
   option: {
     minHeight: 44,
     flexDirection: "row",
@@ -202,8 +203,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     borderRadius: 9,
   },
-  optionSelected: { backgroundColor: "#DCEFE2" },
-  optionPressed: { backgroundColor: prana.attachBg },
-  optionText: { color: "#245C50", fontFamily: F, fontSize: 14, lineHeight: 20 },
-  optionTextSelected: { color: "#186558", fontWeight: "700" },
+  optionSelected: { backgroundColor: pc.bg("#DCEFE2") },
+  optionPressed: { backgroundColor: pc.bg(prana.attachBg) },
+  optionText: { color: pc.fg("#245C50"), fontFamily: F, fontSize: 14, lineHeight: 20 },
+  optionTextSelected: { color: pc.fg("#186558"), fontWeight: "700" },
 });

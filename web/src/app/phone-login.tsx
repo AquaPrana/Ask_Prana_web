@@ -10,6 +10,7 @@ import {
   PranaHeaderButton,
   PranaHeaderLogin,
 } from "../components/prana-header";
+import { PranaThemeToggle } from "../components/prana-theme-toggle";
 import { PRANA_FONT, prana, pranaGradientStyle } from "../constants/prana-theme";
 import { PRIMARY_CTA_START } from "../constants/primary-cta";
 import Feather from "@expo/vector-icons/Feather";
@@ -30,6 +31,7 @@ import {
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Svg, { Path } from "react-native-svg";
+import { pc } from "../constants/prana-theme-mode";
 
 // AskPrana cream / teal theme.
 const colors = {
@@ -245,7 +247,7 @@ export default function PhoneLoginScreen() {
   if (googleHandoff) {
     return (
       <View style={styles.root}>
-        <StatusBar barStyle="light-content" backgroundColor={colors.background} />
+        <StatusBar barStyle="light-content" backgroundColor={pc.bg(colors.background)} />
       </View>
     );
   }
@@ -268,7 +270,7 @@ export default function PhoneLoginScreen() {
               }}
               editable={!isSendingOtp}
               placeholder="10-digit mobile number"
-              placeholderTextColor={colors.placeholder}
+              placeholderTextColor={pc.fg(colors.placeholder)}
               keyboardType="phone-pad"
               style={styles.input}
               onFocus={() => setInputFocused(true)}
@@ -317,7 +319,7 @@ export default function PhoneLoginScreen() {
               }}
               editable={!isSendingOtp}
               placeholder="Email address"
-              placeholderTextColor={colors.placeholder}
+              placeholderTextColor={pc.fg(colors.placeholder)}
               keyboardType="email-address"
               autoCapitalize="none"
               autoCorrect={false}
@@ -341,17 +343,17 @@ export default function PhoneLoginScreen() {
         accessibilityRole="button"
       >
         {isSendingOtp ? (
-          <ActivityIndicator color="#FFFFFF" />
+          <ActivityIndicator color={pc.fg("#FFFFFF")} />
         ) : (
           <>
             <Text style={styles.continueText}>Continue</Text>
-            <Feather name="arrow-right" size={18} color="#FFFFFF" />
+            <Feather name="arrow-right" size={18} color={pc.fg("#FFFFFF")} />
           </>
         )}
       </Pressable>
       {phoneStep ? (
         <Pressable onPress={() => { setPhoneStep(false); setErrorMessage(null); }} accessibilityRole="button" style={styles.backLinkWrap}>
-          <Feather name="arrow-left" size={13} color="#217C73" />
+          <Feather name="arrow-left" size={13} color={pc.fg("#217C73")} />
           <Text style={styles.backLink}>Back</Text>
         </Pressable>
       ) : null}
@@ -365,7 +367,7 @@ export default function PhoneLoginScreen() {
       accessibilityRole="button"
       accessibilityLabel="Close"
     >
-      <Feather name="x" size={17} color="#52806B" />
+      <Feather name="x" size={17} color={pc.fg("#52806B")} />
     </Pressable>
   );
 
@@ -373,7 +375,7 @@ export default function PhoneLoginScreen() {
   if (panelOpen && !isDesktop) {
     return (
       <View style={styles.root}>
-        <StatusBar barStyle="light-content" backgroundColor={prana.headerDark} />
+        <StatusBar barStyle="light-content" backgroundColor={pc.bg(prana.headerDark)} />
         <PranaHeader
           variant="wave"
           left={<PranaHeaderButton icon="message-square" onPress={() => setPanelOpen(false)} label="Back to chat" />}
@@ -402,23 +404,23 @@ export default function PhoneLoginScreen() {
     >
       <View style={styles.previewRow}>
         <View style={[styles.tileAttach, isDesktop && styles.tileAttachDesktop]}>
-          <Feather name="paperclip" size={19} color="#397F6E" />
+          <Feather name="paperclip" size={19} color={pc.fg("#397F6E")} />
           <Text style={styles.tileLabel}>Attach</Text>
         </View>
         <View style={[styles.previewBox, isDesktop && styles.previewBoxDesktop]}>
           <Text style={styles.previewComposerText} numberOfLines={1}>Message AskPrana…</Text>
           <View style={styles.previewDictate}>
-            <Feather name="mic" size={17} color="#538478" />
+            <Feather name="mic" size={17} color={pc.fg("#538478")} />
             <Text style={styles.dictateLabel}>Dictate</Text>
           </View>
         </View>
         <View style={[styles.tileVoice, isDesktop && styles.tileVoiceDesktop]}>
-          <AskPranaVoiceWaveformIcon size={18} color="#397C6A" />
+          <AskPranaVoiceWaveformIcon size={18} color={pc.fg("#397C6A")} />
           <Text style={styles.tileLabel} numberOfLines={1}>Voice chat</Text>
         </View>
         <View style={[styles.tileSend, pranaGradientStyle, isDesktop && styles.tileSendDesktop]}>
-          <Feather name="send" size={19} color="#FFFFFF" />
-          <Text style={[styles.tileLabel, { color: "#FFFFFF" }]}>Send</Text>
+          <Feather name="send" size={19} color={pc.fg("#FFFFFF")} />
+          <Text style={[styles.tileLabel, { color: pc.fg("#FFFFFF") }]}>Send</Text>
         </View>
       </View>
       <Text style={styles.previewNote}>Type a message, attach a file or use the mic.</Text>
@@ -429,7 +431,7 @@ export default function PhoneLoginScreen() {
     <View style={styles.root}>
       <StatusBar
         barStyle={isDesktop ? "dark-content" : "light-content"}
-        backgroundColor={isDesktop ? prana.desktopHeader : prana.tealDeep}
+        backgroundColor={isDesktop ? pc.bg(prana.desktopHeader) : pc.bg(prana.tealDeep)}
       />
       <View style={styles.shell}>
         {showSidebar ? (
@@ -440,28 +442,29 @@ export default function PhoneLoginScreen() {
                 <Text style={styles.previewBrandText}>AskPrana</Text>
               </View>
               <Pressable onPress={() => setShellSidebar(false)} style={styles.collapseButton} accessibilityRole="button" accessibilityLabel="Close sidebar">
-                <Feather name={isDesktop ? "sidebar" : "x"} size={18} color="#82927E" />
+                <Feather name={isDesktop ? "sidebar" : "x"} size={18} color={pc.fg("#82927E")} />
               </Pressable>
             </View>
             <Pressable onPress={openLogin} style={styles.previewNewChat} accessibilityRole="button">
-              <Feather name="plus" size={16} color="#235B4B" />
+              <Feather name="plus" size={16} color={pc.fg("#235B4B")} />
               <Text style={styles.previewNewChatText}>New chat</Text>
             </Pressable>
             <Pressable onPress={openLogin} style={styles.previewSearch} accessibilityRole="button">
-              <Feather name="search" size={15} color="#7D927F" />
+              <Feather name="search" size={15} color={pc.fg("#7D927F")} />
               <Text style={styles.previewSearchText}>Search chats</Text>
             </Pressable>
             <Text style={styles.sidebarLabel}>YOUR CONVERSATIONS</Text>
             <Text style={styles.sidebarEmpty}>Your conversations will appear here after you sign in.</Text>
             <View style={{ flex: 1 }} />
             <View style={styles.sidebarBottom}>
+              <PranaThemeToggle />
               <Pressable onPress={openLogin} style={[styles.sidebarLogin, pranaGradientStyle]} accessibilityRole="button">
                 <Text style={styles.sidebarLoginText}>Log in</Text>
               </Pressable>
             </View>
           </View>
         ) : null}
-        <View style={[styles.previewMain, !isDesktop && { backgroundColor: prana.tealDeep, paddingTop: insets.top }]}>
+        <View style={[styles.previewMain, !isDesktop && { backgroundColor: pc.bg(prana.tealDeep), paddingTop: insets.top }]}>
           <PranaHeader
             variant={isDesktop ? "light" : "teal"}
             includeTopInset={false}
@@ -480,7 +483,7 @@ export default function PhoneLoginScreen() {
           <View style={styles.previewBody}>
             <Pressable onPress={openLogin} style={styles.previewEmpty} accessibilityRole="button" accessibilityLabel="Log in to chat">
               <PranaBrand
-                color={prana.ink}
+                color={pc.fg(prana.ink)}
                 iconSize={isDesktop ? 48 : 29}
                 wordSize={isDesktop ? 46 : 29}
                 subtitle={null}
@@ -521,7 +524,7 @@ const F = PRANA_FONT;
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: colors.background,
+    backgroundColor: pc.bg(colors.background),
     overflow: "hidden",
   },
   fontLoading: {
@@ -543,10 +546,10 @@ const styles = StyleSheet.create({
     borderRadius: 11,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#E6EBD8",
+    backgroundColor: pc.bg("#E6EBD8"),
   },
   kicker: {
-    color: prana.tealText,
+    color: pc.fg(prana.tealText),
     fontFamily: F,
     fontSize: 10,
     lineHeight: 13,
@@ -556,7 +559,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   authTitle: {
-    color: prana.ink,
+    color: pc.fg(prana.ink),
     fontFamily: F,
     fontSize: 29,
     lineHeight: 34,
@@ -564,7 +567,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   authSubtitle: {
-    color: prana.muted,
+    color: pc.fg(prana.muted),
     fontFamily: F,
     fontSize: 13,
     lineHeight: 21,
@@ -576,8 +579,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 36,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: "#B7CDB8",
-    backgroundColor: prana.card,
+    borderColor: pc.bd("#B7CDB8"),
+    backgroundColor: pc.bg(prana.card),
     alignItems: "center",
     justifyContent: "center",
   },
@@ -589,7 +592,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   providerText: {
-    color: "#245B4E",
+    color: pc.fg("#245B4E"),
     fontFamily: F,
     fontSize: 12,
     lineHeight: 16,
@@ -597,23 +600,23 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   googleNotice: {
-    color: prana.muted,
+    color: pc.fg(prana.muted),
     fontFamily: F,
     fontSize: 12,
     lineHeight: 16,
     textAlign: "center",
   },
   orRow: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 16 },
-  orLine: { flex: 1, height: 1, backgroundColor: "#D8DFC8" },
+  orLine: { flex: 1, height: 1, backgroundColor: pc.bg("#D8DFC8") },
   orDivider: {
-    color: colors.muted,
+    color: pc.fg(colors.muted),
     fontFamily: F,
     fontSize: 10,
     lineHeight: 13,
   },
   inputGroup: { gap: 0, marginBottom: 0 },
   label: {
-    color: prana.ink,
+    color: pc.fg(prana.ink),
     fontFamily: F,
     fontSize: 12,
     lineHeight: 16,
@@ -623,18 +626,18 @@ const styles = StyleSheet.create({
   inputContainer: {
     height: 51,
     borderWidth: 1.4,
-    borderColor: colors.border,
+    borderColor: pc.bd(colors.border),
     borderRadius: 11,
-    backgroundColor: colors.inputBg,
+    backgroundColor: pc.bg(colors.inputBg),
     overflow: "hidden",
   },
-  inputContainerFocused: { borderColor: prana.teal },
-  inputContainerError: { borderColor: colors.error },
+  inputContainerFocused: { borderColor: pc.bd(prana.teal) },
+  inputContainerError: { borderColor: pc.bd(colors.error) },
   input: {
     flex: 1,
     height: "100%",
     paddingHorizontal: 12,
-    color: prana.ink,
+    color: pc.fg(prana.ink),
     fontFamily: F,
     // 16 px or more: iPhone Safari zooms the page into smaller text boxes.
     fontSize: 16,
@@ -644,7 +647,7 @@ const styles = StyleSheet.create({
       : null),
   },
   errorText: {
-    color: colors.error,
+    color: pc.fg(colors.error),
     fontFamily: F,
     fontSize: 12,
     lineHeight: 16,
@@ -665,7 +668,7 @@ const styles = StyleSheet.create({
   },
   continueDisabled: { opacity: 0.48 },
   continueText: {
-    color: "#FFFFFF",
+    color: pc.fg("#FFFFFF"),
     fontFamily: F,
     fontSize: 14,
     lineHeight: 20,
@@ -680,7 +683,7 @@ const styles = StyleSheet.create({
     marginTop: 6,
   },
   backLink: {
-    color: "#217C73",
+    color: pc.fg("#217C73"),
     fontFamily: F,
     fontSize: 12,
     lineHeight: 16,
@@ -716,8 +719,8 @@ const styles = StyleSheet.create({
     paddingBottom: 28,
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: prana.line,
-    backgroundColor: prana.cream,
+    borderColor: pc.bd(prana.line),
+    backgroundColor: pc.bg(prana.cream),
     shadowColor: "#15393A",
     shadowOffset: { width: 0, height: 12 },
     shadowOpacity: 0.18,
@@ -727,13 +730,13 @@ const styles = StyleSheet.create({
   shell: {
     flex: 1,
     flexDirection: "row",
-    backgroundColor: prana.cream,
+    backgroundColor: pc.bg(prana.cream),
   },
   previewSidebar: {
     width: 264,
     borderRightWidth: 1,
-    borderRightColor: prana.sidebarBorder,
-    backgroundColor: prana.sidebar,
+    borderRightColor: pc.bd(prana.sidebarBorder),
+    backgroundColor: pc.bg(prana.sidebar),
     paddingTop: 29,
     paddingHorizontal: 19,
     paddingBottom: 19,
@@ -760,7 +763,7 @@ const styles = StyleSheet.create({
   },
   previewBrand: { flexDirection: "row", alignItems: "center", gap: 9 },
   previewBrandText: {
-    color: prana.ink,
+    color: pc.fg(prana.ink),
     fontFamily: F,
     fontSize: 24,
     lineHeight: 29,
@@ -773,14 +776,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 15,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: "#8EB49E",
-    backgroundColor: "#DCE9D6",
+    borderColor: pc.bd("#8EB49E"),
+    backgroundColor: pc.bg("#DCE9D6"),
     flexDirection: "row",
     alignItems: "center",
     gap: 11,
   },
   previewNewChatText: {
-    color: "#235B4B",
+    color: pc.fg("#235B4B"),
     fontFamily: F,
     fontSize: 13,
     lineHeight: 18,
@@ -790,8 +793,8 @@ const styles = StyleSheet.create({
     minHeight: 42,
     marginTop: 12,
     borderWidth: 1,
-    borderColor: "#CBD5BF",
-    backgroundColor: "#F8F8E9",
+    borderColor: pc.bd("#CBD5BF"),
+    backgroundColor: pc.bg("#F8F8E9"),
     borderRadius: 10,
     paddingHorizontal: 12,
     flexDirection: "row",
@@ -799,13 +802,13 @@ const styles = StyleSheet.create({
     gap: 9,
   },
   previewSearchText: {
-    color: "#829481",
+    color: pc.fg("#829481"),
     fontFamily: F,
     fontSize: 12,
     lineHeight: 18,
   },
   sidebarLabel: {
-    color: "#94A08A",
+    color: pc.fg("#94A08A"),
     fontFamily: F,
     fontSize: 9,
     lineHeight: 12,
@@ -816,7 +819,7 @@ const styles = StyleSheet.create({
     marginHorizontal: 9,
   },
   sidebarEmpty: {
-    color: "#8C9C85",
+    color: pc.fg("#8C9C85"),
     fontFamily: F,
     fontSize: 11,
     lineHeight: 20,
@@ -825,7 +828,7 @@ const styles = StyleSheet.create({
   },
   sidebarBottom: {
     borderTopWidth: 1,
-    borderTopColor: "#D4DDC5",
+    borderTopColor: pc.bd("#D4DDC5"),
     paddingTop: 4,
   },
   sidebarLogin: {
@@ -836,7 +839,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   sidebarLoginText: {
-    color: "#FFFFFF",
+    color: pc.fg("#FFFFFF"),
     fontFamily: F,
     fontSize: 12,
     lineHeight: 16,
@@ -849,7 +852,7 @@ const styles = StyleSheet.create({
   previewBody: {
     flex: 1,
     minHeight: 0,
-    backgroundColor: prana.cream,
+    backgroundColor: pc.bg(prana.cream),
   },
   previewEmpty: {
     flex: 1,
@@ -858,7 +861,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 29,
   },
   guestSubtitle: {
-    color: "#34766A",
+    color: pc.fg("#34766A"),
     fontFamily: F,
     fontSize: 14,
     lineHeight: 21,
@@ -866,9 +869,9 @@ const styles = StyleSheet.create({
     marginTop: 14,
     textAlign: "center",
   },
-  guestSubtitleDesktop: { fontSize: 17, lineHeight: 24, marginTop: 20, color: "#4F8174" },
+  guestSubtitleDesktop: { fontSize: 17, lineHeight: 24, marginTop: 20, color: pc.fg("#4F8174") },
   guestCopy: {
-    color: "#6A8574",
+    color: pc.fg("#6A8574"),
     fontFamily: F,
     fontSize: 12,
     lineHeight: 21,
@@ -878,9 +881,9 @@ const styles = StyleSheet.create({
   },
   guestCopyDesktop: { fontSize: 14, lineHeight: 24, maxWidth: 580 },
   previewComposer: {
-    backgroundColor: prana.card,
+    backgroundColor: pc.bg(prana.card),
     borderTopWidth: 1,
-    borderTopColor: prana.line,
+    borderTopColor: pc.bd(prana.line),
     paddingTop: 12,
     paddingHorizontal: 14,
     gap: 10,
@@ -898,8 +901,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingBottom: 12,
     borderWidth: 1,
-    borderColor: "#C8D9BF",
-    borderTopColor: "#C8D9BF",
+    borderColor: pc.bd("#C8D9BF"),
+    borderTopColor: pc.bd("#C8D9BF"),
     borderRadius: 18,
     shadowOffset: { width: 0, height: 6 },
     shadowRadius: 25,
@@ -910,8 +913,8 @@ const styles = StyleSheet.create({
     minHeight: 54,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: prana.attachBorder,
-    backgroundColor: prana.attachBg,
+    borderColor: pc.bd(prana.attachBorder),
+    backgroundColor: pc.bg(prana.attachBg),
     alignItems: "center",
     justifyContent: "center",
     gap: 2,
@@ -922,13 +925,13 @@ const styles = StyleSheet.create({
     minHeight: 54,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: prana.chipBorder,
-    backgroundColor: prana.chip,
+    borderColor: pc.bd(prana.chipBorder),
+    backgroundColor: pc.bg(prana.chip),
     alignItems: "center",
     justifyContent: "center",
     gap: 3,
   },
-  tileVoiceDesktop: { width: 58, minHeight: 58, borderColor: "#D3DFC9", backgroundColor: "#F8F9ED" },
+  tileVoiceDesktop: { width: 58, minHeight: 58, borderColor: pc.bd("#D3DFC9"), backgroundColor: pc.bg("#F8F9ED") },
   tileSend: {
     width: 44,
     minHeight: 54,
@@ -939,7 +942,7 @@ const styles = StyleSheet.create({
   },
   tileSendDesktop: { width: 51, minHeight: 58 },
   tileLabel: {
-    color: "#397F6E",
+    color: pc.fg("#397F6E"),
     fontFamily: F,
     fontSize: 8,
     lineHeight: 10,
@@ -951,17 +954,17 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     borderWidth: 1,
-    borderColor: "#B9CEBA",
+    borderColor: pc.bd("#B9CEBA"),
     borderRadius: 13,
-    backgroundColor: prana.card,
+    backgroundColor: pc.bg(prana.card),
     paddingLeft: 10,
     paddingRight: 3,
     paddingVertical: 3,
   },
-  previewBoxDesktop: { borderWidth: 0, backgroundColor: "#F5F6E7", paddingLeft: 17 },
+  previewBoxDesktop: { borderWidth: 0, backgroundColor: pc.bg("#F5F6E7"), paddingLeft: 17 },
   previewComposerText: {
     flex: 1,
-    color: prana.placeholder,
+    color: pc.fg(prana.placeholder),
     fontFamily: F,
     fontSize: 14,
     lineHeight: 20,
@@ -972,13 +975,13 @@ const styles = StyleSheet.create({
     alignSelf: "stretch",
     marginLeft: 5,
     borderLeftWidth: 1,
-    borderLeftColor: "#E1E6D3",
+    borderLeftColor: pc.bd("#E1E6D3"),
     alignItems: "center",
     justifyContent: "center",
     gap: 2,
   },
   dictateLabel: {
-    color: "#538478",
+    color: pc.fg("#538478"),
     fontFamily: F,
     fontSize: 7,
     lineHeight: 9,
@@ -993,11 +996,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: prana.chipBorder,
-    backgroundColor: prana.chip,
+    borderColor: pc.bd(prana.chipBorder),
+    backgroundColor: pc.bg(prana.chip),
   },
   previewChipText: {
-    color: prana.chipText,
+    color: pc.fg(prana.chipText),
     fontFamily: F,
     fontSize: 11,
     lineHeight: 14,
@@ -1005,7 +1008,7 @@ const styles = StyleSheet.create({
   },
   previewNote: {
     textAlign: "center",
-    color: "#75877C",
+    color: pc.fg("#75877C"),
     fontFamily: F,
     fontSize: 9,
     lineHeight: 13,

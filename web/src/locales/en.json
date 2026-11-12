@@ -137,7 +137,7 @@
     "photoGallery": "Choose from Gallery"
   },
   "askPrana": {
-    "historyTitle": "Chat history", "historySubtitle": "Pick up where you left off.", "backToChat": "Chat", "yourConversations": "Your conversations", "newChatShort": "New chat", "searchConversations": "Search your conversations...",
+    "darkTheme": "Dark theme", "historyTitle": "Chat history", "historySubtitle": "Pick up where you left off.", "backToChat": "Chat", "yourConversations": "Your conversations", "newChatShort": "New chat", "searchConversations": "Search your conversations...",
     "title": "Ask Prana",
     "attachShort": "Attach", "dictateShort": "Dictate", "stopShort": "Stop", "sendShort": "Send", "voiceChat": "Voice chat", "composerNote": "Type a message, attach a file or use the mic.", "messagePlaceholder": "Message AskPrana…",
     "pdfDocument": "PDF Document (.pdf)", "excelSpreadsheet": "Excel Spreadsheet (.xlsx)", "wordDocument": "Microsoft Word Document (.docx)", "downloadUnavailable": "Download unavailable", "downloadLinkUnavailable": "This file link could not be opened. Please try generating the document again.", "downloadOpenUnavailable": "Unable to open the document right now. Please try again.",

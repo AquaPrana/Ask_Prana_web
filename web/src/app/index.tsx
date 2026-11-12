@@ -61,7 +61,7 @@ export default function StartupScreen() {
 
   return (
     <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-      <ActivityIndicator size="large" color="#0F766E" />
+      <ActivityIndicator size="large" color="#008081" />
     </View>
   );
 }

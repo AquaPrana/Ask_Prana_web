@@ -50,6 +50,7 @@ import { AskPranaRecordingWaveform } from "../components/ask-prana-recording-wav
 import { AskPranaVoiceModeModal } from "../components/ask-prana-voice-mode";
 import { AskPranaRealtimeVoice } from "../components/ask-prana-realtime-voice";
 import { AskPranaVoiceWaveformIcon } from "../components/ask-prana-voice-waveform-icon";
+import { PranaVoiceBars } from "../components/prana-voice-mark";
 import {
   PranaBrand,
   PranaHeader,
@@ -74,6 +75,7 @@ import {
   selectAskPranaLanguageWhenReady,
   useAskPranaDisplayTranslation,
 } from "../lib/ask-prana-display-translation";
+import { pc } from "../constants/prana-theme-mode";
 /**
  * Voice Chat engine. "realtime" uses the OpenAI Realtime voice chat
  * (gpt-realtime-2.1-mini); anything else keeps the classic Voice Chat.
@@ -1186,7 +1188,7 @@ export default function AskPranaScreen() {
     <SafeAreaView style={[styles.safeArea, !isDesktop && styles.safeAreaMobile]} edges={["top"]}>
       <StatusBar
         barStyle={isDesktop ? "dark-content" : "light-content"}
-        backgroundColor={isDesktop ? prana.desktopHeader : prana.tealDeep}
+        backgroundColor={isDesktop ? pc.bg(prana.desktopHeader) : pc.bg(prana.tealDeep)}
       />
       <KeyboardAvoidingView
         style={styles.keyboardView}
@@ -1243,7 +1245,7 @@ export default function AskPranaScreen() {
           ) : null}
           {isLoadingMessages ? (
             <View style={styles.loadingState}>
-              <ActivityIndicator size="large" color={colors.primary} />
+              <ActivityIndicator size="large" color={pc.fg(colors.primary)} />
             </View>
           ) : (
             <>
@@ -1281,7 +1283,7 @@ export default function AskPranaScreen() {
                     style={styles.loadingState}
                   >
                     {isLoadingOlder ? (
-                      <ActivityIndicator size="small" color={colors.primary} />
+                      <ActivityIndicator size="small" color={pc.fg(colors.primary)} />
                     ) : null}
                   </Pressable>
                 ) : null
@@ -1289,7 +1291,7 @@ export default function AskPranaScreen() {
               ListEmptyComponent={
                 <View style={styles.emptyChat}>
                   <PranaBrand
-                    color={prana.ink}
+                    color={pc.fg(prana.ink)}
                     iconSize={isDesktop ? 48 : 29}
                     wordSize={isDesktop ? 46 : 29}
                     subtitle={null}
@@ -1348,7 +1350,7 @@ export default function AskPranaScreen() {
                     scrollToLatestFocused && styles.scrollToLatestButtonFocused,
                   ]}
                 >
-                  <Feather name="chevron-down" size={22} color={colors.textDark} />
+                  <Feather name="chevron-down" size={22} color={pc.fg(colors.textDark)} />
                 </Pressable>
               </View>
             ) : null}
@@ -1449,12 +1451,12 @@ export default function AskPranaScreen() {
                   accessibilityRole="button"
                   accessibilityLabel={t("askPrana.cancelRecording")}
                 >
-                  <Feather name="x" size={18} color={colors.white} />
+                  <Feather name="x" size={18} color={pc.fg(colors.white)} />
                 </Pressable>
                 <AskPranaRecordingWaveform
                   level={isRecording ? voiceAudioLevel : 0}
                   quietColor="rgba(255,255,255,0.35)"
-                  activeColor={colors.white}
+                  activeColor={pc.fg(colors.white)}
                   frozen={!isRecording}
                 />
                 {isRecording ? (
@@ -1479,7 +1481,7 @@ export default function AskPranaScreen() {
                     accessibilityRole="progressbar"
                     accessibilityLabel={t("askPrana.transcribingHint")}
                   >
-                    <ActivityIndicator size="small" color={colors.white} />
+                    <ActivityIndicator size="small" color={pc.fg(colors.white)} />
                   </View>
                 )}
                 <Pressable
@@ -1494,7 +1496,7 @@ export default function AskPranaScreen() {
                   accessibilityRole="button"
                   accessibilityLabel={t("askPrana.send")}
                 >
-                  <Feather name="arrow-up" size={18} color={colors.white} />
+                  <Feather name="arrow-up" size={18} color={pc.fg(colors.white)} />
                 </Pressable>
               </View>
             </View>
@@ -1528,7 +1530,7 @@ export default function AskPranaScreen() {
                     accessibilityLabel={t("askPrana.attach")}
                     accessibilityState={{ expanded: attachmentMenuOpen }}
                   >
-                    <Feather name="paperclip" size={19} color="#397F6E" />
+                    <Feather name="paperclip" size={19} color={pc.fg("#397F6E")} />
                     <Text style={styles.tileLabel}>{t("askPrana.attachShort")}</Text>
                   </Pressable>
                   {attachmentMenuOpen ? (
@@ -1540,7 +1542,7 @@ export default function AskPranaScreen() {
                         }}
                         style={styles.attachMenuItem}
                       >
-                        <Feather name="image" size={16} color={colors.textDark} />
+                        <Feather name="image" size={16} color={pc.fg(colors.textDark)} />
                         <Text style={styles.attachMenuText}>{t("askPrana.addImage")}</Text>
                       </Pressable>
                       {isDesktop ? null : (
@@ -1553,7 +1555,7 @@ export default function AskPranaScreen() {
                           }}
                           style={styles.attachMenuItem}
                         >
-                          <Feather name="camera" size={16} color={colors.textDark} />
+                          <Feather name="camera" size={16} color={pc.fg(colors.textDark)} />
                           <Text style={styles.attachMenuText}>{t("askPrana.takePhoto")}</Text>
                         </Pressable>
                       )}
@@ -1564,7 +1566,7 @@ export default function AskPranaScreen() {
                         }}
                         style={styles.attachMenuItem}
                       >
-                        <Feather name="file" size={16} color={colors.textDark} />
+                        <Feather name="file" size={16} color={pc.fg(colors.textDark)} />
                         <Text style={styles.attachMenuText}>{t("askPrana.addFile")}</Text>
                       </Pressable>
                     </View>
@@ -1599,11 +1601,11 @@ export default function AskPranaScreen() {
                               accessibilityLabel={`Open selected image ${item.fileName}`}
                             >
                               <Image source={{ uri: previewUri }} style={styles.pendingImage} contentFit="cover" />
-                              {isPreparing ? <View style={styles.pendingLoading}><ActivityIndicator size="small" color={colors.white} /></View> : null}
+                              {isPreparing ? <View style={styles.pendingLoading}><ActivityIndicator size="small" color={pc.fg(colors.white)} /></View> : null}
                             </Pressable>
                           ) : (
                             <View style={styles.pendingFile}>
-                              <Feather name="file-text" size={16} color={colors.primary} />
+                              <Feather name="file-text" size={16} color={pc.fg(colors.primary)} />
                               <View style={styles.pendingFileDetails}>
                                 <View
                                   style={styles.pendingFileNameRow}
@@ -1622,12 +1624,12 @@ export default function AskPranaScreen() {
                                   {(item.mimeType.split("/").pop() ?? "file").toUpperCase()}{item.fileSize ? ` · ${(item.fileSize / 1024).toFixed(item.fileSize >= 1024 * 1024 ? 1 : 0)} ${item.fileSize >= 1024 * 1024 ? "MB" : "KB"}` : ""}
                                 </Text>
                               </View>
-                              {isPreparing ? <ActivityIndicator size="small" color={colors.primary} /> : null}
+                              {isPreparing ? <ActivityIndicator size="small" color={pc.fg(colors.primary)} /> : null}
                             </View>
                           )}
                           {item.status === "failed" ? (
                             <Pressable onPress={() => retryPendingAttachment(item.id)} style={styles.pendingRetry} accessibilityRole="button" accessibilityLabel={`Retry ${item.fileName}`}>
-                              <Feather name="refresh-cw" size={11} color={colors.white} />
+                              <Feather name="refresh-cw" size={11} color={pc.fg(colors.white)} />
                             </Pressable>
                           ) : null}
                           <Pressable
@@ -1636,7 +1638,7 @@ export default function AskPranaScreen() {
                             accessibilityRole="button"
                             accessibilityLabel={`Remove ${item.fileName}`}
                           >
-                            <Feather name="x" size={16} color={colors.white} />
+                            <Feather name="x" size={16} color={pc.fg(colors.white)} />
                           </Pressable>
                           {item.status === "failed" && item.error ? <Text style={styles.pendingItemError} numberOfLines={2}>{item.error}</Text> : null}
                         </View>
@@ -1645,12 +1647,20 @@ export default function AskPranaScreen() {
                   </ScrollView>
                 ) : null}
                 <View style={styles.composerControls}>
+                {voiceInline && !draft ? (
+                  // Voice chat: live waveform in the box (as in the prototype).
+                  // Tapping the box still lets the farmer type a question.
+                  <PranaVoiceBars
+                    state={voiceMuted ? "muted" : "listening"}
+                    style={styles.voiceBarsInBox}
+                  />
+                ) : null}
                 <TextInput
                   ref={composerInputRef}
                   value={draft}
                   onChangeText={setDraft}
-                  placeholder={voiceInline ? "Type" : placeholder}
-                  placeholderTextColor={colors.muted}
+                  placeholder={voiceInline ? "" : placeholder}
+                  placeholderTextColor={pc.fg(colors.muted)}
                   style={[
                     styles.textInput,
                     !isDesktop && styles.textInputMobile,
@@ -1742,9 +1752,9 @@ export default function AskPranaScreen() {
                   <Feather
                     name={isRecording ? "square" : "mic"}
                     size={isRecording ? 14 : 17}
-                    color={isRecording ? colors.white : "#538478"}
+                    color={isRecording ? pc.fg(colors.white) : pc.fg("#538478")}
                   />
-                  <Text style={[styles.dictateLabel, isRecording && { color: colors.white }]}>
+                  <Text style={[styles.dictateLabel, isRecording && { color: pc.fg(colors.white) }]}>
                     {t("askPrana.dictateShort")}
                   </Text>
                 </Pressable>
@@ -1770,7 +1780,7 @@ export default function AskPranaScreen() {
                   accessibilityRole="button"
                   accessibilityLabel={t("askPrana.startVoiceConversation")}
                 >
-                  <AskPranaVoiceWaveformIcon size={18} color="#397C6A" />
+                  <AskPranaVoiceWaveformIcon size={18} color={pc.fg("#397C6A")} />
                   <Text style={styles.tileLabel} numberOfLines={1}>{t("askPrana.voiceChat")}</Text>
                 </Pressable>
               )}
@@ -1792,7 +1802,7 @@ export default function AskPranaScreen() {
                   {generationActive ? (
                     <View style={styles.stopIcon} />
                   ) : (
-                    <Feather name="send" size={19} color={colors.white} />
+                    <Feather name="send" size={19} color={pc.fg(colors.white)} />
                   )}
                   <Text style={[styles.tileLabel, styles.tileLabelOnTeal]}>
                     {generationActive ? t("askPrana.stopShort") : t("askPrana.sendShort")}
@@ -1820,7 +1830,7 @@ export default function AskPranaScreen() {
                       accessibilityLabel={t("askPrana.attach")}
                       accessibilityState={{ expanded: attachmentMenuOpen }}
                     >
-                      <Feather name="paperclip" size={19} color="#397F6E" />
+                      <Feather name="paperclip" size={19} color={pc.fg("#397F6E")} />
                       <Text style={styles.tileLabel}>{t("askPrana.attachShort")}</Text>
                     </Pressable>
                     {attachmentMenuOpen ? (
@@ -1832,7 +1842,7 @@ export default function AskPranaScreen() {
                           }}
                           style={styles.attachMenuItem}
                         >
-                          <Feather name="image" size={16} color={colors.textDark} />
+                          <Feather name="image" size={16} color={pc.fg(colors.textDark)} />
                           <Text style={styles.attachMenuText}>{t("askPrana.addImage")}</Text>
                         </Pressable>
                         <Pressable
@@ -1842,7 +1852,7 @@ export default function AskPranaScreen() {
                           }}
                           style={styles.attachMenuItem}
                         >
-                          <Feather name="camera" size={16} color={colors.textDark} />
+                          <Feather name="camera" size={16} color={pc.fg(colors.textDark)} />
                           <Text style={styles.attachMenuText}>{t("askPrana.takePhoto")}</Text>
                         </Pressable>
                         <Pressable
@@ -1852,7 +1862,7 @@ export default function AskPranaScreen() {
                           }}
                           style={styles.attachMenuItem}
                         >
-                          <Feather name="file" size={16} color={colors.textDark} />
+                          <Feather name="file" size={16} color={pc.fg(colors.textDark)} />
                           <Text style={styles.attachMenuText}>{t("askPrana.addFile")}</Text>
                         </Pressable>
                       </View>
@@ -1872,8 +1882,8 @@ export default function AskPranaScreen() {
                       accessibilityRole="button"
                       accessibilityLabel={isRecording ? t("askPrana.stopRecording") : t("askPrana.recordAudio")}
                     >
-                      <Feather name={isRecording ? "square" : "mic"} size={isRecording ? 14 : 17} color={isRecording ? colors.white : "#538478"} />
-                      <Text style={[styles.dictateLabel, isRecording && { color: colors.white }]}>{t("askPrana.dictateShort")}</Text>
+                      <Feather name={isRecording ? "square" : "mic"} size={isRecording ? 14 : 17} color={isRecording ? pc.fg(colors.white) : pc.fg("#538478")} />
+                      <Text style={[styles.dictateLabel, isRecording && { color: pc.fg(colors.white) }]}>{t("askPrana.dictateShort")}</Text>
                     </Pressable>
                     <Pressable
                       onPress={() => {
@@ -1892,7 +1902,7 @@ export default function AskPranaScreen() {
                       accessibilityRole="button"
                       accessibilityLabel={t("askPrana.startVoiceConversation")}
                     >
-                      <AskPranaVoiceWaveformIcon size={18} color="#397C6A" />
+                      <AskPranaVoiceWaveformIcon size={18} color={pc.fg("#397C6A")} />
                       <Text style={styles.tileLabel} numberOfLines={1}>{t("askPrana.voiceChat")}</Text>
                     </Pressable>
                     <Pressable
@@ -1908,7 +1918,7 @@ export default function AskPranaScreen() {
                       accessibilityRole="button"
                       accessibilityLabel={generationActive ? t("askPrana.stopGenerating") : t("askPrana.send")}
                     >
-                      {generationActive ? <View style={styles.stopIcon} /> : <Feather name="send" size={19} color={colors.white} />}
+                      {generationActive ? <View style={styles.stopIcon} /> : <Feather name="send" size={19} color={pc.fg(colors.white)} />}
                       <Text style={[styles.tileLabel, styles.tileLabelOnTeal]}>{generationActive ? t("askPrana.stopShort") : t("askPrana.sendShort")}</Text>
                     </Pressable>
                   </View>
@@ -1918,11 +1928,16 @@ export default function AskPranaScreen() {
                 <>
                   <Pressable
                     onPress={() => voiceActionsRef.current?.toggleMute()}
-                    style={styles.voiceMuteButton}
+                    style={[styles.voiceMuteButton, !voiceMuted && styles.voiceMuteButtonLive]}
                     accessibilityRole="button"
                     accessibilityLabel={voiceMuted ? "Unmute" : "Mute"}
                   >
-                    <Feather name={voiceMuted ? "mic" : "mic-off"} size={18} color={colors.white} />
+                    <Feather
+                      name={voiceMuted ? "mic-off" : "mic"}
+                      size={19}
+                      color={voiceMuted ? pc.fg("#2E6859") : pc.fg("#006F67")}
+                    />
+                    {voiceMuted ? null : <View style={styles.voiceMicDot} />}
                   </Pressable>
                   <Pressable
                     onPress={() => voiceActionsRef.current?.end()}
@@ -1930,7 +1945,7 @@ export default function AskPranaScreen() {
                     accessibilityRole="button"
                     accessibilityLabel="End voice"
                   >
-                    <Feather name="x" size={20} color="#111111" />
+                    <Feather name="x" size={15} color={pc.fg("#4D6B60")} />
                   </Pressable>
                 </>
               ) : null}
@@ -1948,7 +1963,7 @@ export default function AskPranaScreen() {
                   accessibilityRole="button"
                   accessibilityLabel={t("askPrana.expandMessage")}
                 >
-                  <Feather name="maximize-2" size={16} color={colors.primary} />
+                  <Feather name="maximize-2" size={16} color={pc.fg(colors.primary)} />
                   <Text style={styles.expandDraftText}>{t("askPrana.expandMessage")}</Text>
                 </Pressable>
                 </View>
@@ -2083,7 +2098,7 @@ export default function AskPranaScreen() {
                       </Text>
                     </View>
                     {selected ? (
-                      <Feather name="check" size={18} color={colors.primary} />
+                      <Feather name="check" size={18} color={pc.fg(colors.primary)} />
                     ) : null}
                   </Pressable>
                 );
@@ -2111,7 +2126,7 @@ export default function AskPranaScreen() {
               accessibilityRole="button"
               accessibilityLabel="Collapse message editor"
             >
-              <Feather name="chevron-down" size={24} color={colors.primary} />
+              <Feather name="chevron-down" size={24} color={pc.fg(colors.primary)} />
             </Pressable>
             <Text style={styles.draftEditorTitle}>{t("askPrana.expandMessage")}</Text>
             <View style={styles.draftEditorHeaderSpacer} />
@@ -2122,7 +2137,7 @@ export default function AskPranaScreen() {
             onSelectionChange={handleDraftSelectionChange}
             selection={draftSelection}
             placeholder={placeholder}
-            placeholderTextColor={colors.muted}
+            placeholderTextColor={pc.fg(colors.muted)}
             style={styles.draftEditorInput}
             multiline
             autoFocus
@@ -2153,7 +2168,7 @@ export default function AskPranaScreen() {
               ]}
               accessibilityRole="button"
             >
-              <Feather name="send" size={18} color={colors.white} />
+              <Feather name="send" size={18} color={pc.fg(colors.white)} />
               <Text style={styles.draftEditorSendText}>{t("askPrana.send")}</Text>
             </Pressable>
           </View>
@@ -2173,9 +2188,9 @@ export default function AskPranaScreen() {
 }
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: prana.desktopHeader },
-  keyboardView: { flex: 1, backgroundColor: colors.background },
-  screen: { flex: 1, backgroundColor: colors.background },
+  safeArea: { flex: 1, backgroundColor: pc.bg(prana.desktopHeader) },
+  keyboardView: { flex: 1, backgroundColor: pc.bg(colors.background) },
+  screen: { flex: 1, backgroundColor: pc.bg(colors.background) },
   appLayout: {
     flex: 1,
     width: "100%",
@@ -2190,7 +2205,7 @@ const styles = StyleSheet.create({
     minWidth: 0,
     minHeight: 0,
     position: "relative",
-    backgroundColor: colors.background,
+    backgroundColor: pc.bg(colors.background),
   },
   messageColumn: {
     flex: 1,
@@ -2198,7 +2213,7 @@ const styles = StyleSheet.create({
     position: "relative",
   },
   translationBanner: {
-    color: prana.muted,
+    color: pc.fg(prana.muted),
     fontFamily: PRANA_FONT,
     fontSize: 12,
     lineHeight: 18,
@@ -2212,14 +2227,37 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     zIndex: 30,
-    backgroundColor: "#000000",
+    backgroundColor: pc.bg("#000000"),
   },
+  // Voice chat bar (prototype): one rounded box with the waveform, mic and close.
   inputShellVoice: {
     width: "auto",
+    minHeight: 42,
+    borderWidth: 0,
+    backgroundColor: "transparent",
+    paddingLeft: 6,
   },
-  voiceMuteButton: { width: 44, height: 44, borderRadius: 22, backgroundColor: prana.ink, alignItems: "center", justifyContent: "center" },
-  voiceCloseButton: { width: 44, height: 44, borderRadius: 22, backgroundColor: prana.card, borderWidth: 1, borderColor: prana.chipBorder, alignItems: "center", justifyContent: "center" },
-  chatList: { flex: 1, backgroundColor: colors.background },
+  voiceBarsInBox: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+    justifyContent: "center",
+  },
+  voiceMuteButton: { width: 42, height: 42, borderRadius: 14, backgroundColor: "transparent", alignItems: "center", justifyContent: "center" },
+  voiceMuteButtonLive: { backgroundColor: pc.bg("#D7EEE0") },
+  voiceMicDot: {
+    position: "absolute",
+    top: 7,
+    right: 7,
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: pc.fg("#008081"),
+  },
+  voiceCloseButton: { width: 32, height: 32, borderRadius: 16, backgroundColor: "transparent", borderWidth: 1, borderColor: pc.bd("#CDD9C3"), alignItems: "center", justifyContent: "center", marginLeft: 2 },
+  chatList: { flex: 1, backgroundColor: pc.bg(colors.background) },
   scrollToLatestHost: {
     position: "absolute",
     left: 0,
@@ -2234,15 +2272,15 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: prana.card,
+    backgroundColor: pc.bg(prana.card),
     borderWidth: 1,
-    borderColor: "#C8D5BD",
+    borderColor: pc.bd("#C8D5BD"),
     shadowColor: "#1D4B36",
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.12,
     shadowRadius: 12,
   },
-  scrollToLatestButtonFocused: { borderColor: prana.teal },
+  scrollToLatestButtonFocused: { borderColor: pc.bd(prana.teal) },
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -2250,9 +2288,9 @@ const styles = StyleSheet.create({
     paddingTop: 4,
     paddingBottom: 10,
     gap: 8,
-    backgroundColor: colors.background,
+    backgroundColor: pc.bg(colors.background),
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    borderBottomColor: pc.bd(colors.border),
   },
   iconButton: {
     width: 40,
@@ -2271,7 +2309,7 @@ const styles = StyleSheet.create({
   headerBrand: { flexDirection: "row", alignItems: "center", gap: 10, maxWidth: "100%" },
   headerSpacer: { width: 42, height: 42 },
   assistantTitle: {
-    color: colors.white,
+    color: pc.fg(colors.white),
     fontFamily: ASK_PRANA_FONT_FAMILY,
     fontSize: 20,
     lineHeight: 25,
@@ -2295,13 +2333,13 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 6,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: pc.bd(colors.border),
     backgroundColor: "rgba(255,255,255,0.03)",
   },
   languagePillText: {
     // Fixed width so En / Te / Hi never shift the pill contents.
     width: 20,
-    color: colors.textDark,
+    color: pc.fg(colors.textDark),
     fontFamily: ASK_PRANA_FONT_FAMILY,
     fontSize: 14,
     lineHeight: 18,
@@ -2322,7 +2360,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     paddingBottom: 20,
     gap: 15,
-    backgroundColor: colors.background,
+    backgroundColor: pc.bg(colors.background),
   },
   // Phones cover the conversation with the full-screen voice stage. The extra
   // padding is unused there and is not applied on desktop.
@@ -2346,14 +2384,14 @@ const styles = StyleSheet.create({
   },
   emptyChatLogo: { marginBottom: 8 },
   emptyChatTitle: {
-      color: colors.white,
+      color: pc.fg(colors.white),
       fontFamily: ASK_PRANA_FONT_FAMILY,
       fontSize: 28,
       lineHeight: 34,
       fontWeight: "600",
     },
   emptyChatSubtitle: {
-    color: "#34766A",
+    color: pc.fg("#34766A"),
     fontFamily: PRANA_FONT,
     fontSize: 14,
     lineHeight: 21,
@@ -2362,7 +2400,7 @@ const styles = StyleSheet.create({
     marginTop: 14,
   },
   emptyChatCopy: {
-    color: "#6A8574",
+    color: pc.fg("#6A8574"),
     fontFamily: PRANA_FONT,
     fontSize: 12,
     lineHeight: 21,
@@ -2376,15 +2414,15 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   stoppedStatusBadge: {
-    backgroundColor: prana.chip,
+    backgroundColor: pc.bg(prana.chip),
     borderWidth: 1,
-    borderColor: prana.chipBorder,
+    borderColor: pc.bd(prana.chipBorder),
     borderRadius: 999,
     paddingHorizontal: 12,
     paddingVertical: 6,
   },
   stoppedStatus: {
-    color: prana.chipText,
+    color: pc.fg(prana.chipText),
     fontFamily: PRANA_FONT,
     fontSize: 12,
     lineHeight: 17,
@@ -2393,13 +2431,13 @@ const styles = StyleSheet.create({
   },
   dateBadgeWrap: { alignItems: "center", marginBottom: 8, marginTop: 4 },
   dateBadge: {
-    backgroundColor: colors.suggestion,
+    backgroundColor: pc.bg(colors.suggestion),
     borderRadius: 999,
     paddingHorizontal: 12,
     paddingVertical: 5,
   },
   dateBadgeText: {
-    color: colors.muted,
+    color: pc.fg(colors.muted),
     fontFamily: ASK_PRANA_FONT_FAMILY,
     fontSize: 11,
     lineHeight: 14,
@@ -2409,9 +2447,9 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     paddingBottom: 12,
     paddingHorizontal: 14,
-    backgroundColor: prana.card,
+    backgroundColor: pc.bg(prana.card),
     borderTopWidth: 1,
-    borderTopColor: prana.line,
+    borderTopColor: pc.bd(prana.line),
     gap: 10,
     alignItems: "center",
     shadowColor: "#325B41",
@@ -2439,7 +2477,7 @@ const styles = StyleSheet.create({
     width: 72,
     height: 72,
     borderRadius: 12,
-    backgroundColor: colors.primarySoft,
+    backgroundColor: pc.bg(colors.primarySoft),
   },
   pendingPreviewBadge: {
     position: "absolute",
@@ -2464,8 +2502,8 @@ const styles = StyleSheet.create({
     minHeight: 64,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: "#CBDAC2",
-    backgroundColor: "#EEF4E7",
+    borderColor: pc.bd("#CBDAC2"),
+    backgroundColor: pc.bg("#EEF4E7"),
     paddingHorizontal: 10,
     paddingVertical: 8,
     flexDirection: "row",
@@ -2479,9 +2517,9 @@ const styles = StyleSheet.create({
     minWidth: 0,
     maxWidth: "100%",
   },
-  pendingFileName: { flexShrink: 1, minWidth: 0, color: "#356A56", fontFamily: PRANA_FONT, fontSize: 11, lineHeight: 15, fontWeight: "700" },
-  pendingFileExt: { flexShrink: 0, color: "#356A56", fontFamily: PRANA_FONT, fontSize: 11, lineHeight: 15, fontWeight: "700" },
-  pendingFileMeta: { color: "#7A8E7B", fontFamily: PRANA_FONT, fontSize: 9, lineHeight: 13 },
+  pendingFileName: { flexShrink: 1, minWidth: 0, color: pc.fg("#356A56"), fontFamily: PRANA_FONT, fontSize: 11, lineHeight: 15, fontWeight: "700" },
+  pendingFileExt: { flexShrink: 0, color: pc.fg("#356A56"), fontFamily: PRANA_FONT, fontSize: 11, lineHeight: 15, fontWeight: "700" },
+  pendingFileMeta: { color: pc.fg("#7A8E7B"), fontFamily: PRANA_FONT, fontSize: 9, lineHeight: 13 },
   pendingRemove: {
     position: "absolute",
     top: -4,
@@ -2489,7 +2527,7 @@ const styles = StyleSheet.create({
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: prana.ink,
+    backgroundColor: pc.bg(prana.ink),
     alignItems: "center",
     justifyContent: "center",
     zIndex: 2,
@@ -2502,23 +2540,23 @@ const styles = StyleSheet.create({
     width: 20,
     height: 20,
     borderRadius: 10,
-    backgroundColor: "#B45309",
+    backgroundColor: pc.bg("#B45309"),
     alignItems: "center",
     justifyContent: "center",
   },
-  attachmentError: { color: prana.error, fontFamily: PRANA_FONT, fontSize: 12, lineHeight: 17, paddingHorizontal: 4 },
-  pendingItemError: { width: 150, marginTop: 4, color: prana.error, fontFamily: PRANA_FONT, fontSize: 11, lineHeight: 15 },
+  attachmentError: { color: pc.fg(prana.error), fontFamily: PRANA_FONT, fontSize: 12, lineHeight: 17, paddingHorizontal: 4 },
+  pendingItemError: { width: 150, marginTop: 4, color: pc.fg(prana.error), fontFamily: PRANA_FONT, fontSize: 11, lineHeight: 15 },
   suggestionChip: {
-    backgroundColor: prana.card,
+    backgroundColor: pc.bg(prana.card),
     borderRadius: 12,
     paddingHorizontal: 13,
     paddingVertical: 12,
     minHeight: 45,
     justifyContent: "center",
     borderWidth: 1,
-    borderColor: "#CDD6BD",
+    borderColor: pc.bd("#CDD6BD"),
   },
-  suggestionText: { color: "#205D53", fontFamily: PRANA_FONT, fontSize: 11, lineHeight: 15, fontWeight: "700" },
+  suggestionText: { color: pc.fg("#205D53"), fontFamily: PRANA_FONT, fontSize: 11, lineHeight: 15, fontWeight: "700" },
   inputRow: {
     flexDirection: "row",
     alignItems: "stretch",
@@ -2535,14 +2573,22 @@ const styles = StyleSheet.create({
     alignItems: "stretch",
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: "#B9CEBA",
-    backgroundColor: prana.card,
+    borderColor: pc.bd("#B9CEBA"),
+    backgroundColor: pc.bg(prana.card),
     paddingHorizontal: 8,
     paddingTop: 8,
     paddingBottom: 6,
     gap: 0,
   },
-  inputRowVoice: { alignItems: "center" },
+  inputRowVoice: {
+    alignItems: "center",
+    gap: 5,
+    padding: 8,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: pc.bd("#C7D5BD"),
+    backgroundColor: pc.bg("#FFFDF0"),
+  },
   attachWrap: { position: "relative", zIndex: 20 },
   attachWrapMobileComposer: { marginRight: "auto" },
   attachButton: {
@@ -2551,8 +2597,8 @@ const styles = StyleSheet.create({
     height: "100%",
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: prana.attachBorder,
-    backgroundColor: prana.attachBg,
+    borderColor: pc.bd(prana.attachBorder),
+    backgroundColor: pc.bg(prana.attachBg),
     alignItems: "center",
     justifyContent: "center",
     gap: 2,
@@ -2572,10 +2618,10 @@ const styles = StyleSheet.create({
     position: "absolute",
     left: 0,
     bottom: 62,
-    backgroundColor: prana.card,
+    backgroundColor: pc.bg(prana.card),
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: "#B5CBB3",
+    borderColor: pc.bd("#B5CBB3"),
     padding: 8,
     minWidth: 220,
     shadowColor: "#1D4B36",
@@ -2595,7 +2641,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   attachMenuText: {
-    color: "#225E50",
+    color: pc.fg("#225E50"),
     fontFamily: PRANA_FONT,
     fontSize: 12,
     lineHeight: 18,
@@ -2609,8 +2655,8 @@ const styles = StyleSheet.create({
     minHeight: 54,
     borderRadius: 13,
     borderWidth: 1,
-    borderColor: "#B9CEBA",
-    backgroundColor: prana.card,
+    borderColor: pc.bd("#B9CEBA"),
+    backgroundColor: pc.bg(prana.card),
     paddingLeft: 10,
     paddingRight: 3,
     paddingVertical: 3,
@@ -2658,7 +2704,7 @@ const styles = StyleSheet.create({
   },
   inputShellDesktop: {
     borderWidth: 0,
-    backgroundColor: "#F5F6E7",
+    backgroundColor: pc.bg("#F5F6E7"),
     paddingLeft: 17,
     minHeight: 58,
   },
@@ -2667,7 +2713,7 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     flexBasis: 0,
     minWidth: 0,
-    color: prana.ink,
+    color: pc.fg(prana.ink),
     backgroundColor: "transparent",
     fontFamily: PRANA_FONT,
     fontSize: 14,
@@ -2717,7 +2763,7 @@ const styles = StyleSheet.create({
     alignSelf: "stretch",
     marginLeft: 5,
     borderLeftWidth: 1,
-    borderLeftColor: "#E1E6D3",
+    borderLeftColor: pc.bd("#E1E6D3"),
     borderTopRightRadius: 9,
     borderBottomRightRadius: 9,
     alignItems: "center",
@@ -2725,7 +2771,7 @@ const styles = StyleSheet.create({
     gap: 2,
     zIndex: 2,
   },
-  micButtonActive: { backgroundColor: prana.teal },
+  micButtonActive: { backgroundColor: pc.bg(prana.teal) },
   micButtonMobileComposer: {
     width: 44,
     height: 44,
@@ -2740,7 +2786,7 @@ const styles = StyleSheet.create({
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: "#0F766E",
+    backgroundColor: pc.bg("#0F766E"),
     alignItems: "center",
     justifyContent: "center",
   },
@@ -2748,7 +2794,7 @@ const styles = StyleSheet.create({
     width: 44,
     minHeight: 54,
     borderRadius: 12,
-    backgroundColor: prana.teal,
+    backgroundColor: pc.bg(prana.teal),
     alignItems: "center",
     justifyContent: "center",
     gap: 2,
@@ -2768,8 +2814,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: prana.chipBorder,
-    backgroundColor: prana.chip,
+    borderColor: pc.bd(prana.chipBorder),
+    backgroundColor: pc.bg(prana.chip),
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -2780,8 +2826,8 @@ const styles = StyleSheet.create({
     justifyContent: "flex-end",
     width: "100%",
   },
-  expandDraftText: { color: prana.chipText, fontFamily: PRANA_FONT, fontSize: 12, lineHeight: 16, fontWeight: "600" },
-  stopIcon: { width: 13, height: 13, borderRadius: 2, backgroundColor: colors.white },
+  expandDraftText: { color: pc.fg(prana.chipText), fontFamily: PRANA_FONT, fontSize: 12, lineHeight: 16, fontWeight: "600" },
+  stopIcon: { width: 13, height: 13, borderRadius: 2, backgroundColor: pc.bg(colors.white) },
   recordingShell: {
     flexDirection: "row",
     alignItems: "center",
@@ -2791,11 +2837,11 @@ const styles = StyleSheet.create({
     gap: 10,
     borderWidth: 0,
     borderRadius: 28,
-    backgroundColor: prana.ink,
+    backgroundColor: pc.bg(prana.ink),
   },
   recordingTimer: {
     minWidth: 40,
-    color: colors.white,
+    color: pc.fg(colors.white),
     fontFamily: PRANA_FONT,
     fontSize: 13,
     lineHeight: 18,
@@ -2817,9 +2863,9 @@ const styles = StyleSheet.create({
     width: 13,
     height: 13,
     borderRadius: 3,
-    backgroundColor: colors.white,
+    backgroundColor: pc.bg(colors.white),
   },
-  recordingSendButton: { width: 38, height: 38, minHeight: 38, borderRadius: 19, paddingVertical: 0, backgroundColor: prana.teal },
+  recordingSendButton: { width: 38, height: 38, minHeight: 38, borderRadius: 19, paddingVertical: 0, backgroundColor: pc.bg(prana.teal) },
   failedRecordingRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -2827,21 +2873,21 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     gap: 12,
   },
-  failedRecordingText: { color: prana.muted, fontFamily: PRANA_FONT, fontSize: 12, lineHeight: 16 },
+  failedRecordingText: { color: pc.fg(prana.muted), fontFamily: PRANA_FONT, fontSize: 12, lineHeight: 16 },
   failedRecordingAction: {
     paddingHorizontal: 6,
     paddingVertical: 4,
   },
-  failedRecordingRetryText: { color: prana.teal, fontFamily: PRANA_FONT, fontSize: 12, lineHeight: 16, fontWeight: "700" },
-  failedRecordingDiscardText: { color: prana.muted, fontFamily: PRANA_FONT, fontSize: 12, lineHeight: 16, fontWeight: "500" },
-  recordingHint: { color: prana.teal, fontFamily: PRANA_FONT, fontSize: 12, lineHeight: 16, fontWeight: "600", textAlign: "center" },
-  draftEditorSafeArea: { flex: 1, backgroundColor: prana.cream },
+  failedRecordingRetryText: { color: pc.fg(prana.teal), fontFamily: PRANA_FONT, fontSize: 12, lineHeight: 16, fontWeight: "700" },
+  failedRecordingDiscardText: { color: pc.fg(prana.muted), fontFamily: PRANA_FONT, fontSize: 12, lineHeight: 16, fontWeight: "500" },
+  recordingHint: { color: pc.fg(prana.teal), fontFamily: PRANA_FONT, fontSize: 12, lineHeight: 16, fontWeight: "600", textAlign: "center" },
+  draftEditorSafeArea: { flex: 1, backgroundColor: pc.bg(prana.cream) },
   draftEditorHeader: {
     minHeight: 56,
     paddingHorizontal: 16,
     borderBottomWidth: 1,
-    borderBottomColor: prana.line,
-    backgroundColor: prana.card,
+    borderBottomColor: pc.bd(prana.line),
+    backgroundColor: pc.bg(prana.card),
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
@@ -2854,15 +2900,15 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   draftEditorHeaderSpacer: { width: 40 },
-  draftEditorTitle: { color: prana.ink, fontFamily: PRANA_FONT, fontSize: 16, lineHeight: 22, fontWeight: "700" },
+  draftEditorTitle: { color: pc.fg(prana.ink), fontFamily: PRANA_FONT, fontSize: 16, lineHeight: 22, fontWeight: "700" },
   draftEditorInput: {
     flex: 1,
     margin: 16,
     borderWidth: 1,
-    borderColor: "#B9CEBA",
+    borderColor: pc.bd("#B9CEBA"),
     borderRadius: 13,
-    backgroundColor: prana.card,
-    color: prana.ink,
+    backgroundColor: pc.bg(prana.card),
+    color: pc.fg(prana.ink),
     fontFamily: PRANA_FONT,
     fontSize: 16,
     lineHeight: 23,
@@ -2874,16 +2920,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderTopWidth: 1,
-    borderTopColor: prana.line,
-    backgroundColor: prana.card,
+    borderTopColor: pc.bd(prana.line),
+    backgroundColor: pc.bg(prana.card),
     flexDirection: "row",
     justifyContent: "flex-end",
     gap: 10,
   },
-  draftEditorCollapse: { minHeight: 46, paddingHorizontal: 16, borderRadius: 12, borderWidth: 1, borderColor: "#B9CEBC", alignItems: "center", justifyContent: "center", backgroundColor: "transparent" },
-  draftEditorCollapseText: { color: "#286C62", fontFamily: PRANA_FONT, fontSize: 13, lineHeight: 20, fontWeight: "700" },
-  draftEditorSend: { minHeight: 46, paddingHorizontal: 18, borderRadius: 12, backgroundColor: prana.teal, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
-  draftEditorSendText: { color: colors.white, fontFamily: PRANA_FONT, fontSize: 13, lineHeight: 20, fontWeight: "800" },
+  draftEditorCollapse: { minHeight: 46, paddingHorizontal: 16, borderRadius: 12, borderWidth: 1, borderColor: pc.bd("#B9CEBC"), alignItems: "center", justifyContent: "center", backgroundColor: "transparent" },
+  draftEditorCollapseText: { color: pc.fg("#286C62"), fontFamily: PRANA_FONT, fontSize: 13, lineHeight: 20, fontWeight: "700" },
+  draftEditorSend: { minHeight: 46, paddingHorizontal: 18, borderRadius: 12, backgroundColor: pc.bg(prana.teal), flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
+  draftEditorSendText: { color: pc.fg(colors.white), fontFamily: PRANA_FONT, fontSize: 13, lineHeight: 20, fontWeight: "800" },
   pressed: { opacity: 0.88 },
   modalOverlay: { flex: 1, backgroundColor: "rgba(21, 57, 58, 0.4)", justifyContent: "center", alignItems: "center", paddingHorizontal: 16, paddingVertical: 16 },
   modalCard: {
@@ -2891,9 +2937,9 @@ const styles = StyleSheet.create({
     maxWidth: 440,
     maxHeight: "100%",
     alignSelf: "center",
-    backgroundColor: prana.card,
+    backgroundColor: pc.bg(prana.card),
     borderWidth: 1,
-    borderColor: prana.line,
+    borderColor: pc.bd(prana.line),
     borderRadius: 18,
     padding: 20,
     gap: 4,
@@ -2908,7 +2954,7 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     maxHeight: 320,
   },
-  modalTitle: { color: prana.ink, fontFamily: PRANA_FONT, fontSize: 18, lineHeight: 24, fontWeight: "800", marginBottom: 8 },
+  modalTitle: { color: pc.fg(prana.ink), fontFamily: PRANA_FONT, fontSize: 18, lineHeight: 24, fontWeight: "800", marginBottom: 8 },
   modalOption: {
     minHeight: 54,
     borderRadius: 12,
@@ -2921,15 +2967,15 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "transparent",
   },
-  modalOptionHovered: { backgroundColor: prana.attachBg },
-  modalOptionFocused: { borderColor: "#7FB3A0" },
-  modalOptionSelected: { backgroundColor: "#DCEFE2", borderColor: "#7FB3A0" },
+  modalOptionHovered: { backgroundColor: pc.bg(prana.attachBg) },
+  modalOptionFocused: { borderColor: pc.bd("#7FB3A0") },
+  modalOptionSelected: { backgroundColor: pc.bg("#DCEFE2"), borderColor: pc.bd("#7FB3A0") },
   modalOptionCopy: { flex: 1 },
-  modalOptionText: { color: prana.ink, fontFamily: PRANA_FONT, fontSize: 14, lineHeight: 20, fontWeight: "600" },
-  modalOptionTextSelected: { color: "#186558" },
-  modalOptionMeta: { color: prana.muted, fontFamily: PRANA_FONT, fontSize: 12, lineHeight: 16, marginTop: 2, fontWeight: "400" },
-  safeAreaMobile: { backgroundColor: prana.tealDeep },
-  emptyChatSubtitleDesktop: { fontSize: 17, lineHeight: 24, marginTop: 20, color: "#4F8174" },
+  modalOptionText: { color: pc.fg(prana.ink), fontFamily: PRANA_FONT, fontSize: 14, lineHeight: 20, fontWeight: "600" },
+  modalOptionTextSelected: { color: pc.fg("#186558") },
+  modalOptionMeta: { color: pc.fg(prana.muted), fontFamily: PRANA_FONT, fontSize: 12, lineHeight: 16, marginTop: 2, fontWeight: "400" },
+  safeAreaMobile: { backgroundColor: pc.bg(prana.tealDeep) },
+  emptyChatSubtitleDesktop: { fontSize: 17, lineHeight: 24, marginTop: 20, color: pc.fg("#4F8174") },
   emptyChatCopyDesktop: { fontSize: 14, lineHeight: 24, maxWidth: 580 },
   composerAreaDesktop: {
     width: "100%",
@@ -2941,25 +2987,25 @@ const styles = StyleSheet.create({
     paddingBottom: 12,
     borderWidth: 1,
     borderTopWidth: 1,
-    borderColor: "#C8D9BF",
-    borderTopColor: "#C8D9BF",
+    borderColor: pc.bd("#C8D9BF"),
+    borderTopColor: pc.bd("#C8D9BF"),
     borderRadius: 18,
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.06,
     shadowRadius: 25,
   },
   attachButtonDesktop: { width: 47, minHeight: 58, borderWidth: 0 },
-  attachButtonOpen: { borderColor: prana.teal, backgroundColor: "#DCEEE1" },
+  attachButtonOpen: { borderColor: pc.bd(prana.teal), backgroundColor: pc.bg("#DCEEE1") },
   tileLabel: {
-    color: "#397F6E",
+    color: pc.fg("#397F6E"),
     fontFamily: PRANA_FONT,
     fontSize: 8,
     lineHeight: 10,
     fontWeight: "700",
   },
-  tileLabelOnTeal: { color: "#FFFFFF" },
+  tileLabelOnTeal: { color: pc.fg("#FFFFFF") },
   dictateLabel: {
-    color: "#538478",
+    color: pc.fg("#538478"),
     fontFamily: PRANA_FONT,
     fontSize: 7,
     lineHeight: 9,
@@ -2982,12 +3028,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: prana.chipBorder,
-    backgroundColor: prana.chip,
+    borderColor: pc.bd(prana.chipBorder),
+    backgroundColor: pc.bg(prana.chip),
   },
-  voiceChipDesktop: { minHeight: 36, borderColor: "#D3DFC9", backgroundColor: "#F8F9ED" },
+  voiceChipDesktop: { minHeight: 36, borderColor: pc.bd("#D3DFC9"), backgroundColor: pc.bg("#F8F9ED") },
   voiceChipText: {
-    color: prana.chipText,
+    color: pc.fg(prana.chipText),
     fontFamily: PRANA_FONT,
     fontSize: 11,
     lineHeight: 14,
@@ -2997,7 +3043,7 @@ const styles = StyleSheet.create({
     width: "100%",
     maxWidth: 900,
     textAlign: "center",
-    color: "#75877C",
+    color: pc.fg("#75877C"),
     fontFamily: PRANA_FONT,
     fontSize: 9,
     lineHeight: 13,
@@ -3008,8 +3054,8 @@ const styles = StyleSheet.create({
     minHeight: 54,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: prana.chipBorder,
-    backgroundColor: prana.chip,
+    borderColor: pc.bd(prana.chipBorder),
+    backgroundColor: pc.bg(prana.chip),
     alignItems: "center",
     justifyContent: "center",
     gap: 3,
@@ -3026,5 +3072,5 @@ const styles = StyleSheet.create({
     paddingVertical: 0,
     marginLeft: 0,
   },
-  voiceTileDesktop: { width: 58, minHeight: 58, borderColor: "#D3DFC9", backgroundColor: "#F8F9ED" },
+  voiceTileDesktop: { width: 58, minHeight: 58, borderColor: pc.bd("#D3DFC9"), backgroundColor: pc.bg("#F8F9ED") },
 });

@@ -137,7 +137,7 @@
     "photoGallery": "गैलरी से चुनें"
   },
   "askPrana": {
-    "historyTitle": "चैट इतिहास", "historySubtitle": "जहाँ छोड़ा था वहीं से शुरू करें।", "backToChat": "चैट", "yourConversations": "आपकी बातचीत", "newChatShort": "नई चैट", "searchConversations": "अपनी बातचीत खोजें...",
+    "darkTheme": "डार्क थीम", "historyTitle": "चैट इतिहास", "historySubtitle": "जहाँ छोड़ा था वहीं से शुरू करें।", "backToChat": "चैट", "yourConversations": "आपकी बातचीत", "newChatShort": "नई चैट", "searchConversations": "अपनी बातचीत खोजें...",
     "title": "Ask Prana",
     "attachShort": "जोड़ें", "dictateShort": "बोलें", "stopShort": "रोकें", "sendShort": "भेजें", "voiceChat": "वॉइस चैट", "composerNote": "संदेश लिखें, फ़ाइल जोड़ें या माइक का उपयोग करें।", "messagePlaceholder": "AskPrana को संदेश…",
     "pdfDocument": "PDF दस्तावेज़ (.pdf)", "excelSpreadsheet": "Excel स्प्रेडशीट (.xlsx)", "wordDocument": "Microsoft Word दस्तावेज़ (.docx)", "downloadUnavailable": "डाउनलोड उपलब्ध नहीं है", "downloadLinkUnavailable": "यह फ़ाइल लिंक नहीं खुल सका। कृपया दस्तावेज़ फिर से बनाएँ।", "downloadOpenUnavailable": "दस्तावेज़ अभी नहीं खुल सका। कृपया फिर से कोशिश करें।",

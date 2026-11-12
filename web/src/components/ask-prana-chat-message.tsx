@@ -37,6 +37,7 @@ import type {
 } from "../context/ask-prana-chat-context";
 import { getAskPranaFileUrl } from "../lib/ask-prana-files";
 import { ASK_PRANA_FONT_FAMILY } from "../constants/ask-prana-typography";
+import { pc } from "../constants/prana-theme-mode";
 
 async function downloadGeneratedFile(url: string, fileName: string) {
   if (Platform.OS !== "web" || typeof document === "undefined") {
@@ -699,7 +700,7 @@ export function AskPranaAttachmentViewer({
             accessibilityRole="button"
             accessibilityLabel="Close image"
           >
-            <Feather name="x" size={22} color={colors.white} />
+            <Feather name="x" size={22} color={pc.fg(colors.white)} />
           </Pressable>
         </View>
         {isImage && uri && !imageFailed ? (
@@ -711,7 +712,7 @@ export function AskPranaAttachmentViewer({
           />
         ) : isImage ? <View style={styles.documentViewerContent}>
           <View style={styles.documentViewerIcon}>
-            <Feather name="image" size={34} color={colors.primary} />
+            <Feather name="image" size={34} color={pc.fg(colors.primary)} />
           </View>
           <Text style={styles.documentViewerName}>Unable to load this image</Text>
           <Pressable
@@ -720,12 +721,12 @@ export function AskPranaAttachmentViewer({
             accessibilityRole="button"
             accessibilityLabel="Retry loading image"
           >
-            <Feather name="refresh-cw" size={16} color={colors.white} />
+            <Feather name="refresh-cw" size={16} color={pc.fg(colors.white)} />
             <Text style={styles.documentViewerOpenText}>Retry</Text>
           </Pressable>
         </View> : <View style={styles.documentViewerContent}>
           <View style={styles.documentViewerIcon}>
-            <Feather name="file-text" size={34} color={colors.primary} />
+            <Feather name="file-text" size={34} color={pc.fg(colors.primary)} />
           </View>
           <Text style={styles.documentViewerName} numberOfLines={2}>{title}</Text>
           <Text style={styles.documentViewerMeta}>
@@ -738,7 +739,7 @@ export function AskPranaAttachmentViewer({
             accessibilityRole="button"
             accessibilityLabel={`Open ${title}`}
           >
-            <Feather name="external-link" size={16} color={colors.white} />
+            <Feather name="external-link" size={16} color={pc.fg(colors.white)} />
             <Text style={styles.documentViewerOpenText}>Open document</Text>
           </Pressable>
         </View>}
@@ -778,7 +779,7 @@ function UserAttachmentContent({ message }: { message: ChatMessage }) {
             contentFit="cover"
           />
           <View style={styles.imageExpandBadge} pointerEvents="none">
-            <Feather name="maximize-2" size={14} color={colors.white} />
+            <Feather name="maximize-2" size={14} color={pc.fg(colors.white)} />
           </View>
         </Pressable>
         {message.text?.trim() ? (
@@ -798,7 +799,7 @@ function UserAttachmentContent({ message }: { message: ChatMessage }) {
   if (isImage) {
     return (
       <View style={styles.imagePlaceholder}>
-        <Feather name="image" size={24} color={colors.white} />
+        <Feather name="image" size={24} color={pc.fg(colors.white)} />
         <Text style={styles.imagePlaceholderText}>
           {message.fileName ?? "Image"}
         </Text>
@@ -817,7 +818,7 @@ function UserAttachmentContent({ message }: { message: ChatMessage }) {
           accessibilityLabel={`Preview ${message.fileName ?? t("askPrana.document")}`}
         >
           <View style={styles.documentIcon}>
-            <Feather name="file-text" size={18} color={colors.primary} />
+            <Feather name="file-text" size={18} color={pc.fg(colors.primary)} />
           </View>
           <View style={styles.documentCopy}>
             <Text style={styles.documentName} numberOfLines={2}>
@@ -852,7 +853,7 @@ function UserAttachmentContent({ message }: { message: ChatMessage }) {
     return (
       <View style={styles.audioBubble}>
         <View style={styles.audioIcon}>
-          <Feather name="mic" size={16} color={colors.primary} />
+          <Feather name="mic" size={16} color={pc.fg(colors.primary)} />
         </View>
         <View style={styles.audioCopy}>
           <Text style={styles.audioLabel}>{t("askPrana.voiceNote")}</Text>
@@ -997,7 +998,7 @@ function MessageActionRow({
             <Feather
               name={copied ? "check" : "copy"}
               size={15}
-              color={copied ? colors.primary : colors.muted}
+              color={copied ? pc.fg(colors.primary) : pc.fg(colors.muted)}
             />
           </Pressable>
         ) : null}
@@ -1013,7 +1014,7 @@ function MessageActionRow({
           accessibilityRole="button"
           accessibilityLabel={t("askPrana.edit")}
         >
-          <Feather name="edit-2" size={15} color={colors.muted} />
+          <Feather name="edit-2" size={15} color={pc.fg(colors.muted)} />
         </Pressable>
       ) : null}
 
@@ -1029,11 +1030,11 @@ function MessageActionRow({
           accessibilityLabel={readAloudState === "idle" ? t("askPrana.readAloud") : "Stop reading aloud"}
         >
           {readAloudState === "preparing" ? (
-            <ActivityIndicator size="small" color={colors.muted} />
+            <ActivityIndicator size="small" color={pc.fg(colors.muted)} />
           ) : readAloudState === "playing" ? (
-            <Feather name="square" size={14} color={colors.muted} />
+            <Feather name="square" size={14} color={pc.fg(colors.muted)} />
           ) : (
-            <Feather name="volume-2" size={15} color={colors.muted} />
+            <Feather name="volume-2" size={15} color={pc.fg(colors.muted)} />
           )}
         </Pressable>
       ) : null}
@@ -1055,7 +1056,7 @@ function MessageActionRow({
             <Feather
               name="thumbs-up"
               size={15}
-              color={feedback === "up" ? colors.primary : colors.muted}
+              color={feedback === "up" ? pc.fg(colors.primary) : pc.fg(colors.muted)}
             />
           </Pressable>
           <Pressable
@@ -1073,7 +1074,7 @@ function MessageActionRow({
             <Feather
               name="thumbs-down"
               size={15}
-              color={feedback === "down" ? colors.primary : colors.muted}
+              color={feedback === "down" ? pc.fg(colors.primary) : pc.fg(colors.muted)}
             />
           </Pressable>
           {canRegenerate ? (
@@ -1089,7 +1090,7 @@ function MessageActionRow({
               accessibilityRole="button"
               accessibilityLabel={t("askPrana.regenerate")}
             >
-              <Feather name="refresh-cw" size={15} color={colors.muted} />
+              <Feather name="refresh-cw" size={15} color={pc.fg(colors.muted)} />
             </Pressable>
           ) : null}
           {canCopy ? (
@@ -1103,7 +1104,7 @@ function MessageActionRow({
               accessibilityRole="button"
               accessibilityLabel={t("askPrana.more")}
             >
-              <Feather name="more-horizontal" size={15} color={colors.muted} />
+              <Feather name="more-horizontal" size={15} color={pc.fg(colors.muted)} />
             </Pressable>
           ) : null}
         </>
@@ -1251,7 +1252,7 @@ function AskPranaChatMessageBubbleComponent({
                 { height: editInputHeight, maxHeight: editInputMaxHeight },
               ]}
               placeholder="Edit your message"
-              placeholderTextColor={colors.muted}
+              placeholderTextColor={pc.fg(colors.muted)}
             />
             <View style={styles.userEditActions}>
               <Pressable
@@ -1368,7 +1369,7 @@ function AskPranaChatMessageBubbleComponent({
               <Feather
                 name={isPdf ? "file" : isExcel ? "grid" : "file-text"}
                 size={18}
-                color={colors.primary}
+                color={pc.fg(colors.primary)}
               />
             </View>
             <View style={styles.assistantFileCopy}>
@@ -1414,7 +1415,7 @@ function AskPranaChatMessageBubbleComponent({
             ]}
             disabled={!openUri && !message.filePath}
           >
-            <Feather name="download" size={14} color={colors.white} />
+            <Feather name="download" size={14} color={pc.fg(colors.white)} />
             <Text style={styles.assistantDownloadText}>{downloadLabel}</Text>
           </Pressable>
           {message.text?.trim() ? (
@@ -1430,7 +1431,7 @@ function AskPranaChatMessageBubbleComponent({
     <View style={styles.assistantBlock}>
       <AskPranaAssistantIdentity />
       <View style={styles.assistantBubble}>
-        <AskPranaFormattedText text={message.text} color={colors.textDark} />
+        <AskPranaFormattedText text={message.text} color={pc.fg(colors.textDark)} />
       </View>
       {assistantActions}
     </View>
@@ -1508,10 +1509,10 @@ export function AskPranaThinkingBubble({
 const styles = StyleSheet.create({
   assistantBlock: { width: "100%", gap: 6, alignItems: "flex-start" },
   assistantIdentity: { flexDirection: "row", alignItems: "center", gap: 8 },
-  assistantTranslating: { color: colors.muted, fontFamily: ASK_PRANA_FONT_FAMILY, fontSize: 12, lineHeight: 16, fontWeight: "500" },
-  assistantIdentityName: { color: colors.textDark, fontFamily: ASK_PRANA_FONT_FAMILY, fontSize: 14, lineHeight: 20, fontWeight: "600" },
+  assistantTranslating: { color: pc.fg(colors.muted), fontFamily: ASK_PRANA_FONT_FAMILY, fontSize: 12, lineHeight: 16, fontWeight: "500" },
+  assistantIdentityName: { color: pc.fg(colors.textDark), fontFamily: ASK_PRANA_FONT_FAMILY, fontSize: 14, lineHeight: 20, fontWeight: "600" },
   assistantBubble: {
-    backgroundColor: "#EEEEDA",
+    backgroundColor: pc.bg("#EEEEDA"),
     maxWidth: "100%",
     alignSelf: "stretch",
     paddingVertical: 14,
@@ -1520,10 +1521,10 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 3,
   },
   assistantFileCard: {
-    backgroundColor: colors.bubble,
+    backgroundColor: pc.bg(colors.bubble),
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: pc.bd(colors.border),
     paddingHorizontal: 14,
     paddingVertical: 14,
     maxWidth: "94%",
@@ -1547,24 +1548,24 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   assistantFileIconDocx: {
-    backgroundColor: "#E8F5F3",
+    backgroundColor: pc.bg("#E8F5F3"),
   },
   assistantFileIconExcel: {
-    backgroundColor: "#E8F5EC",
+    backgroundColor: pc.bg("#E8F5EC"),
   },
   assistantFileIconPdf: {
-    backgroundColor: "#F3E8E8",
+    backgroundColor: pc.bg("#F3E8E8"),
   },
   assistantFileCopy: { flex: 1, gap: 2 },
   assistantFileName: {
-    color: colors.textDark,
+    color: pc.fg(colors.textDark),
     fontFamily: ASK_PRANA_FONT_FAMILY,
     fontSize: 14,
     lineHeight: 20,
     fontWeight: "600",
   },
   assistantFileMeta: {
-    color: colors.muted,
+    color: pc.fg(colors.muted),
     fontFamily: ASK_PRANA_FONT_FAMILY,
     fontSize: 12,
     lineHeight: 16,
@@ -1572,7 +1573,7 @@ const styles = StyleSheet.create({
   },
   assistantDownloadButton: {
     alignSelf: "stretch",
-    backgroundColor: colors.primary,
+    backgroundColor: pc.bg(colors.primary),
     borderRadius: 12,
     paddingVertical: 10,
     paddingHorizontal: 14,
@@ -1585,21 +1586,21 @@ const styles = StyleSheet.create({
     opacity: 0.45,
   },
   assistantDownloadText: {
-    color: colors.white,
+    color: pc.fg(colors.white),
     fontFamily: ASK_PRANA_FONT_FAMILY,
     fontSize: 13,
     lineHeight: 18,
     fontWeight: "600",
   },
   assistantFileCaption: {
-    color: colors.muted,
+    color: pc.fg(colors.muted),
     fontFamily: ASK_PRANA_FONT_FAMILY,
     fontSize: 12,
     lineHeight: 18,
     fontWeight: "400",
   },
   assistantBubbleText: {
-    color: colors.textDark,
+    color: pc.fg(colors.textDark),
     fontFamily: ASK_PRANA_FONT_FAMILY,
     fontSize: 15,
     lineHeight: 23,
@@ -1617,7 +1618,7 @@ const styles = StyleSheet.create({
     maxWidth: "100%",
   },
   tableHint: {
-    color: colors.muted,
+    color: pc.fg(colors.muted),
     fontFamily: ASK_PRANA_FONT_FAMILY,
     fontSize: 11,
     lineHeight: 15,
@@ -1630,52 +1631,52 @@ const styles = StyleSheet.create({
   },
   desktopTable: {
     borderWidth: 1,
-    borderColor: desktopTableColors.border,
+    borderColor: pc.bd(desktopTableColors.border),
     borderRadius: 10,
     overflow: "hidden",
-    backgroundColor: desktopTableColors.surface,
+    backgroundColor: pc.bg(desktopTableColors.surface),
   },
   desktopTableRow: {
     flexDirection: "row",
     alignItems: "stretch",
     borderBottomWidth: 1,
-    borderBottomColor: desktopTableColors.border,
+    borderBottomColor: pc.bd(desktopTableColors.border),
   },
   desktopTableRowLast: {
     borderBottomWidth: 0,
   },
   desktopTableHeaderRow: {
-    backgroundColor: desktopTableColors.headerBg,
+    backgroundColor: pc.bg(desktopTableColors.headerBg),
   },
   desktopTableCell: {
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderRightWidth: 1,
-    borderRightColor: desktopTableColors.border,
+    borderRightColor: pc.bd(desktopTableColors.border),
     justifyContent: "flex-start",
   },
   desktopTableCellLast: {
     borderRightWidth: 0,
   },
   desktopTableRowLabelCell: {
-    backgroundColor: desktopTableColors.rowLabelBg,
+    backgroundColor: pc.bg(desktopTableColors.rowLabelBg),
   },
   desktopTableHeaderText: {
-    color: desktopTableColors.header,
+    color: pc.fg(desktopTableColors.header),
     fontFamily: ASK_PRANA_FONT_FAMILY,
     fontSize: 14,
     lineHeight: 20,
     fontWeight: "600",
   },
   desktopTableCellText: {
-    color: desktopTableColors.text,
+    color: pc.fg(desktopTableColors.text),
     fontFamily: ASK_PRANA_FONT_FAMILY,
     fontSize: 14,
     lineHeight: 21,
     fontWeight: "400",
   },
   desktopTableRowLabelText: {
-    color: desktopTableColors.rowLabel,
+    color: pc.fg(desktopTableColors.rowLabel),
     fontWeight: "600",
   },
   tableCardStack: {
@@ -1684,26 +1685,26 @@ const styles = StyleSheet.create({
   },
   tableCard: {
     borderWidth: 1,
-    borderColor: colors.tableBorder,
+    borderColor: pc.bd(colors.tableBorder),
     borderRadius: 12,
-    backgroundColor: colors.white,
+    backgroundColor: pc.bg(colors.white),
     overflow: "hidden",
   },
   tableCardField: {
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.tableBorder,
+    borderBottomColor: pc.bd(colors.tableBorder),
     gap: 2,
   },
   tableCardFieldTitle: {
-    backgroundColor: colors.tableHeader,
+    backgroundColor: pc.bg(colors.tableHeader),
   },
   tableCardFieldLast: {
     borderBottomWidth: 0,
   },
   tableCardLabel: {
-    color: colors.primary,
+    color: pc.fg(colors.primary),
     fontFamily: ASK_PRANA_FONT_FAMILY,
     fontSize: 11,
     lineHeight: 15,
@@ -1712,14 +1713,14 @@ const styles = StyleSheet.create({
     letterSpacing: 0,
   },
   tableCardValue: {
-    color: "#1A2332",
+    color: pc.fg("#1A2332"),
     fontFamily: ASK_PRANA_FONT_FAMILY,
     fontSize: 13,
     lineHeight: 19,
     fontWeight: "400",
   },
   tableCardTitle: {
-    color: "#15393A",
+    color: pc.fg("#15393A"),
     fontFamily: ASK_PRANA_FONT_FAMILY,
     fontWeight: "600",
     fontSize: 14,
@@ -1727,25 +1728,25 @@ const styles = StyleSheet.create({
   },
   table: {
     borderWidth: 1,
-    borderColor: colors.tableBorder,
+    borderColor: pc.bd(colors.tableBorder),
     borderRadius: 10,
     overflow: "hidden",
-    backgroundColor: colors.white,
+    backgroundColor: pc.bg(colors.white),
   },
   tableRow: {
     flexDirection: "row",
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.tableBorder,
+    borderBottomColor: pc.bd(colors.tableBorder),
   },
   tableRowLast: {
     borderBottomWidth: 0,
   },
   tableHeaderRow: {
-    backgroundColor: colors.tableHeader,
+    backgroundColor: pc.bg(colors.tableHeader),
   },
   tableCell: {
     borderRightWidth: StyleSheet.hairlineWidth,
-    borderRightColor: colors.tableBorder,
+    borderRightColor: pc.bd(colors.tableBorder),
     paddingHorizontal: 8,
     paddingVertical: 8,
     justifyContent: "flex-start",
@@ -1754,10 +1755,10 @@ const styles = StyleSheet.create({
     borderRightWidth: 0,
   },
   tableHeaderCell: {
-    backgroundColor: colors.tableHeader,
+    backgroundColor: pc.bg(colors.tableHeader),
   },
   tableCellText: {
-    color: "#1A2332",
+    color: pc.fg("#1A2332"),
     fontFamily: ASK_PRANA_FONT_FAMILY,
     fontSize: 12,
     lineHeight: 18,
@@ -1766,7 +1767,7 @@ const styles = StyleSheet.create({
   tableHeaderText: {
     fontFamily: ASK_PRANA_FONT_FAMILY,
     fontWeight: "600",
-    color: colors.primary,
+    color: pc.fg(colors.primary),
     fontSize: 11,
     lineHeight: 15,
   },
@@ -1794,7 +1795,7 @@ const styles = StyleSheet.create({
   },
   userBubbleWrap: { alignItems: "flex-end", gap: 4 },
   userBubble: {
-    backgroundColor: "#15393A",
+    backgroundColor: pc.bg("#15393A"),
     borderRadius: 14,
     borderTopRightRadius: 3,
     paddingHorizontal: 15,
@@ -1807,7 +1808,7 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   userBubbleText: {
-    color: colors.white,
+    color: pc.fg(colors.white),
     fontFamily: ASK_PRANA_FONT_FAMILY,
     fontSize: 15,
     lineHeight: 23,
@@ -1816,10 +1817,10 @@ const styles = StyleSheet.create({
   userEditCard: {
     width: "86%",
     maxWidth: 620,
-    backgroundColor: colors.bubble,
+    backgroundColor: pc.bg(colors.bubble),
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: pc.bd(colors.border),
     padding: 10,
     gap: 8,
   },
@@ -1828,10 +1829,10 @@ const styles = StyleSheet.create({
     minWidth: 0,
     minHeight: 48,
     maxHeight: 300,
-    color: colors.text,
-    backgroundColor: "#FFFDF0",
+    color: pc.fg(colors.text),
+    backgroundColor: pc.bg("#FFFDF0"),
     borderWidth: 1,
-    borderColor: "#C1D0BC",
+    borderColor: pc.bd("#C1D0BC"),
     borderRadius: 10,
     paddingHorizontal: 11,
     paddingVertical: 9,
@@ -1853,11 +1854,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: pc.bd(colors.border),
     backgroundColor: "transparent",
   },
   userEditCancelText: {
-    color: colors.muted,
+    color: pc.fg(colors.muted),
     fontFamily: ASK_PRANA_FONT_FAMILY,
     fontSize: 13,
     lineHeight: 18,
@@ -1868,13 +1869,13 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingHorizontal: 14,
     borderRadius: 8,
-    backgroundColor: "#0F766E",
+    backgroundColor: pc.bg("#0F766E"),
   },
   userEditSendButtonDisabled: {
     opacity: 0.45,
   },
   userEditSendText: {
-    color: colors.white,
+    color: pc.fg(colors.white),
     fontFamily: ASK_PRANA_FONT_FAMILY,
     fontSize: 14,
     lineHeight: 19,
@@ -1910,7 +1911,7 @@ const styles = StyleSheet.create({
     width: 220,
     height: 160,
     borderRadius: 12,
-    backgroundColor: colors.primarySoft,
+    backgroundColor: pc.bg(colors.primarySoft),
   },
   imageExpandBadge: {
     position: "absolute",
@@ -1925,7 +1926,7 @@ const styles = StyleSheet.create({
   },
   imageViewerRoot: {
     flex: 1,
-    backgroundColor: colors.viewerBg,
+    backgroundColor: pc.bg(colors.viewerBg),
   },
   imageViewerHeader: {
     flexDirection: "row",
@@ -1935,7 +1936,7 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
   },
   imageViewerTitle: {
-    color: colors.white,
+    color: pc.fg(colors.white),
     fontSize: 16,
     fontWeight: "700",
     flex: 1,
@@ -1975,10 +1976,10 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#E6F4F1",
+    backgroundColor: pc.bg("#E6F4F1"),
   },
   documentViewerName: {
-    color: colors.white,
+    color: pc.fg(colors.white),
     fontSize: 18,
     fontWeight: "800",
     textAlign: "center",
@@ -1994,13 +1995,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 8,
     borderRadius: 12,
-    backgroundColor: colors.primary,
+    backgroundColor: pc.bg(colors.primary),
     paddingHorizontal: 16,
     paddingVertical: 12,
     marginTop: 6,
   },
   documentViewerOpenText: {
-    color: colors.white,
+    color: pc.fg(colors.white),
     fontWeight: "800",
     fontSize: 14,
   },
@@ -2022,7 +2023,7 @@ const styles = StyleSheet.create({
     padding: 12,
   },
   imagePlaceholderText: {
-    color: colors.white,
+    color: pc.fg(colors.white),
     fontSize: 12,
     fontWeight: "600",
     textAlign: "center",
@@ -2037,13 +2038,13 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 10,
-    backgroundColor: colors.white,
+    backgroundColor: pc.bg(colors.white),
     alignItems: "center",
     justifyContent: "center",
   },
   documentCopy: { flex: 1, gap: 2 },
   documentName: {
-    color: colors.white,
+    color: pc.fg(colors.white),
     fontSize: 14,
     fontWeight: "800",
   },
@@ -2062,7 +2063,7 @@ const styles = StyleSheet.create({
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: colors.white,
+    backgroundColor: pc.bg(colors.white),
     alignItems: "center",
     justifyContent: "center",
   },
@@ -2080,7 +2081,7 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   thinkingText: {
-    color: colors.muted,
+    color: pc.fg(colors.muted),
     fontSize: 14,
     lineHeight: 20,
     fontWeight: "600",
@@ -2094,9 +2095,9 @@ const styles = StyleSheet.create({
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: "#A8D5CF",
+    backgroundColor: pc.bg("#A8D5CF"),
   },
   thinkingDotActive: {
-    backgroundColor: colors.primary,
+    backgroundColor: pc.bg(colors.primary),
   },
 });

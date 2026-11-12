@@ -25,6 +25,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import Feather from "@expo/vector-icons/Feather";
 import { PranaHeader, PranaHeaderButton } from "../components/prana-header";
 import { PRANA_FONT, prana, pranaGradientStyle } from "../constants/prana-theme";
+import { pc } from "../constants/prana-theme-mode";
 
 const colors = {
   // Dark Ask Prana theme — matches the phone login screen.
@@ -318,7 +319,7 @@ export default function VerifyOtpScreen() {
       </Pressable>
 
       <View style={styles.expiryRow}>
-        <Feather name="clock" size={12} color={prana.muted} />
+        <Feather name="clock" size={12} color={pc.fg(prana.muted)} />
         <Text style={styles.expiryText}>Code expires in 5 minutes</Text>
       </View>
 
@@ -330,13 +331,13 @@ export default function VerifyOtpScreen() {
       >
         {isVerifying ? (
           <>
-            <ActivityIndicator color="#FFFFFF" />
+            <ActivityIndicator color={pc.fg("#FFFFFF")} />
             <Text style={styles.verifyText}>Verifying…</Text>
           </>
         ) : (
           <>
             <Text style={styles.verifyText}>Verify & continue</Text>
-            <Feather name="arrow-right" size={18} color="#FFFFFF" />
+            <Feather name="arrow-right" size={18} color={pc.fg("#FFFFFF")} />
           </>
         )}
       </Pressable>
@@ -360,7 +361,7 @@ export default function VerifyOtpScreen() {
       </View>
 
       <Pressable onPress={goBack} style={styles.backLinkWrap} accessibilityRole="button">
-        <Feather name="arrow-left" size={13} color="#217C73" />
+        <Feather name="arrow-left" size={13} color={pc.fg("#217C73")} />
         <Text style={styles.backLink}>Back to mobile number</Text>
       </Pressable>
     </>
@@ -370,7 +371,7 @@ export default function VerifyOtpScreen() {
     <View style={styles.root}>
       <StatusBar
         barStyle={isDesktop ? "dark-content" : "light-content"}
-        backgroundColor={isDesktop ? prana.desktopHeader : prana.headerDark}
+        backgroundColor={isDesktop ? pc.bg(prana.desktopHeader) : pc.bg(prana.headerDark)}
       />
       {isDesktop ? (
         <PranaHeader
@@ -405,7 +406,7 @@ export default function VerifyOtpScreen() {
 const F = PRANA_FONT;
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: prana.cream, overflow: "hidden" },
+  root: { flex: 1, backgroundColor: pc.bg(prana.cream), overflow: "hidden" },
   keyboardView: { flex: 1, overflow: "hidden" },
   safeArea: { flex: 1, backgroundColor: "transparent" },
   scrollContent: { flexGrow: 1, paddingHorizontal: 24, paddingTop: 14, paddingBottom: 28 },
@@ -417,15 +418,15 @@ const styles = StyleSheet.create({
     paddingVertical: 30,
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: prana.line,
-    backgroundColor: prana.cream,
+    borderColor: pc.bd(prana.line),
+    backgroundColor: pc.bg(prana.cream),
     shadowColor: "#1D4B36",
     shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.08,
     shadowRadius: 30,
   },
   eyebrow: {
-    color: prana.tealText,
+    color: pc.fg(prana.tealText),
     fontFamily: F,
     fontSize: 10,
     lineHeight: 13,
@@ -434,7 +435,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   heading: {
-    color: prana.ink,
+    color: pc.fg(prana.ink),
     fontFamily: F,
     fontSize: 29,
     lineHeight: 34,
@@ -442,7 +443,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   sentTo: {
-    color: prana.muted,
+    color: pc.fg(prana.muted),
     fontFamily: F,
     fontSize: 13,
     lineHeight: 21,
@@ -458,7 +459,7 @@ const styles = StyleSheet.create({
   },
   phoneText: {
     flexShrink: 1,
-    color: prana.ink,
+    color: pc.fg(prana.ink),
     fontFamily: F,
     fontSize: 15,
     lineHeight: 20,
@@ -466,7 +467,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.4,
   },
   changeLink: {
-    color: "#217C73",
+    color: pc.fg("#217C73"),
     fontFamily: F,
     fontSize: 12,
     lineHeight: 16,
@@ -482,14 +483,14 @@ const styles = StyleSheet.create({
     height: 53,
     borderRadius: 11,
     borderWidth: 1.5,
-    borderColor: "#C4D0BE",
-    backgroundColor: prana.card,
+    borderColor: pc.bd("#C4D0BE"),
+    backgroundColor: pc.bg(prana.card),
     alignItems: "center",
     justifyContent: "center",
   },
-  otpBoxFilled: { borderColor: prana.teal },
+  otpBoxFilled: { borderColor: pc.bd(prana.teal) },
   otpDigit: {
-    color: prana.ink,
+    color: pc.fg(prana.ink),
     fontFamily: F,
     fontSize: 23,
     lineHeight: 28,
@@ -513,7 +514,7 @@ const styles = StyleSheet.create({
       : null),
   },
   expiryRow: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 24 },
-  expiryText: { color: prana.muted, fontFamily: F, fontSize: 11, lineHeight: 15 },
+  expiryText: { color: pc.fg(prana.muted), fontFamily: F, fontSize: 11, lineHeight: 15 },
   verifyButton: {
     minHeight: 54,
     borderRadius: 12,
@@ -527,12 +528,12 @@ const styles = StyleSheet.create({
     shadowRadius: 14,
   },
   verifyButtonDisabled: { opacity: 0.48 },
-  verifyText: { color: "#FFFFFF", fontFamily: F, fontSize: 14, lineHeight: 20, fontWeight: "800" },
+  verifyText: { color: pc.fg("#FFFFFF"), fontFamily: F, fontSize: 14, lineHeight: 20, fontWeight: "800" },
   resendContainer: { marginTop: 12, marginBottom: 13, alignItems: "center" },
   resendLine: { textAlign: "center", fontFamily: F, fontSize: 11, lineHeight: 16 },
-  resendPrompt: { color: prana.muted },
-  resendAction: { color: "#217C73", fontWeight: "700" },
-  resendActionDisabled: { color: "#7FA79B", fontWeight: "600" },
+  resendPrompt: { color: pc.fg(prana.muted) },
+  resendAction: { color: pc.fg("#217C73"), fontWeight: "700" },
+  resendActionDisabled: { color: pc.fg("#7FA79B"), fontWeight: "600" },
   backLinkWrap: {
     flexDirection: "row",
     alignItems: "center",
@@ -541,7 +542,7 @@ const styles = StyleSheet.create({
     minHeight: 44,
     paddingBottom: 18,
     borderBottomWidth: 1,
-    borderBottomColor: prana.line,
+    borderBottomColor: pc.bd(prana.line),
   },
-  backLink: { color: "#217C73", fontFamily: F, fontSize: 12, lineHeight: 16, fontWeight: "700" },
+  backLink: { color: pc.fg("#217C73"), fontFamily: F, fontSize: 12, lineHeight: 16, fontWeight: "700" },
 });

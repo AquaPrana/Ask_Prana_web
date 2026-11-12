@@ -20,11 +20,13 @@ import { useTranslation } from "react-i18next";
 import { UserAvatar } from "./user-avatar";
 import { AskPranaLogo } from "./ask-prana-logo";
 import { PranaHeader, PranaHeaderButton } from "./prana-header";
+import { PranaThemeToggle } from "./prana-theme-toggle";
 import { PRANA_FONT, prana } from "../constants/prana-theme";
 import { useProfile } from "../context/profile-context";
 import { useAskPranaChat } from "../context/ask-prana-chat-context";
 import type { AskPranaSessionSummary } from "../services/ask-prana-messages";
 import { useAskPranaDisplayTranslation } from "../lib/ask-prana-display-translation";
+import { pc } from "../constants/prana-theme-mode";
 
 // AskPrana cream / teal theme.
 const colors = {
@@ -111,7 +113,7 @@ function ChatHistoryContextMenu({
         accessibilityRole="button"
         accessibilityLabel={pinned ? t("askPrana.unpinChat") : t("askPrana.pinChat")}
       >
-        <Feather name="bookmark" size={17} color={colors.text} />
+        <Feather name="bookmark" size={17} color={pc.fg(colors.text)} />
         <Text style={styles.menuActionText}>{pinned ? t("askPrana.unpinChat") : t("askPrana.pinChat")}</Text>
       </Pressable>
       <Pressable
@@ -124,7 +126,7 @@ function ChatHistoryContextMenu({
         accessibilityRole="button"
         accessibilityLabel={t("askPrana.edit")}
       >
-        <Feather name="edit-2" size={17} color={colors.text} />
+        <Feather name="edit-2" size={17} color={pc.fg(colors.text)} />
         <Text style={styles.menuActionText}>{t("askPrana.edit")}</Text>
       </Pressable>
       <Pressable
@@ -137,7 +139,7 @@ function ChatHistoryContextMenu({
         accessibilityRole="button"
         accessibilityLabel={t("askPrana.delete")}
       >
-        <Feather name="trash-2" size={17} color={colors.danger} />
+        <Feather name="trash-2" size={17} color={pc.fg(colors.danger)} />
         <Text style={[styles.menuActionText, styles.deleteText]}>{t("askPrana.delete")}</Text>
       </Pressable>
     </View>
@@ -522,7 +524,7 @@ export function AskPranaChatSidebar({
             accessibilityRole="button"
             accessibilityLabel={t("askPrana.collapseSidebar")}
           >
-            <Feather name="sidebar" size={18} color="#82927E" />
+            <Feather name="sidebar" size={18} color={pc.fg("#82927E")} />
           </Pressable>
         </View>
         <Pressable
@@ -530,16 +532,16 @@ export function AskPranaChatSidebar({
           style={({ pressed }) => [styles.newChatButton, pressed && styles.pressed]}
           accessibilityRole="button"
         >
-          <Feather name="plus" size={16} color="#235B4B" />
+          <Feather name="plus" size={16} color={pc.fg("#235B4B")} />
           <Text style={styles.newChatText}>{t("askPrana.newChatShort")}</Text>
         </Pressable>
         <View style={styles.searchBox}>
-          <Feather name="search" size={15} color="#7D927F" />
+          <Feather name="search" size={15} color={pc.fg("#7D927F")} />
           <TextInput
             value={searchText}
             onChangeText={setSearchText}
             placeholder={t("askPrana.searchChats")}
-            placeholderTextColor="#829481"
+            placeholderTextColor={pc.fg("#829481")}
             style={styles.searchInput}
             accessibilityLabel={t("askPrana.searchChats")}
             returnKeyType="search"
@@ -551,7 +553,7 @@ export function AskPranaChatSidebar({
               accessibilityRole="button"
               accessibilityLabel={t("askPrana.clearSearch")}
             >
-              <Feather name="x" size={15} color={colors.muted} />
+              <Feather name="x" size={15} color={pc.fg(colors.muted)} />
             </Pressable>
           ) : null}
         </View>
@@ -567,7 +569,7 @@ export function AskPranaChatSidebar({
               accessibilityRole="button"
               accessibilityLabel={t("askPrana.closeHistory")}
             >
-              <Feather name="arrow-left" size={13} color="#217C73" />
+              <Feather name="arrow-left" size={13} color={pc.fg("#217C73")} />
               <Text style={styles.backLinkText}>{t("askPrana.backToChat")}</Text>
             </Pressable>
             <Text style={styles.mobileTitleInRow}>{t("askPrana.historyTitle")}</Text>
@@ -580,7 +582,7 @@ export function AskPranaChatSidebar({
               accessibilityRole="button"
               accessibilityLabel={t("askPrana.closeHistory")}
             >
-              <Feather name="arrow-left" size={13} color="#217C73" />
+              <Feather name="arrow-left" size={13} color={pc.fg("#217C73")} />
               <Text style={styles.backLinkText}>{t("askPrana.backToChat")}</Text>
             </Pressable>
             <Text style={styles.kicker}>ASKPRANA</Text>
@@ -593,7 +595,7 @@ export function AskPranaChatSidebar({
             value={searchText}
             onChangeText={setSearchText}
             placeholder={t("askPrana.searchConversations")}
-            placeholderTextColor="#8A9B8B"
+            placeholderTextColor={pc.fg("#8A9B8B")}
             style={[styles.searchInput, styles.searchInputMobile]}
             accessibilityLabel={t("askPrana.searchChats")}
             returnKeyType="search"
@@ -605,7 +607,7 @@ export function AskPranaChatSidebar({
               accessibilityRole="button"
               accessibilityLabel={t("askPrana.clearSearch")}
             >
-              <Feather name="x" size={15} color={colors.muted} />
+              <Feather name="x" size={15} color={pc.fg(colors.muted)} />
             </Pressable>
           ) : null}
         </View>
@@ -614,7 +616,7 @@ export function AskPranaChatSidebar({
           style={({ pressed }) => [styles.newChatMobile, pressed && styles.pressed]}
           accessibilityRole="button"
         >
-          <Feather name="plus" size={15} color="#286C62" />
+          <Feather name="plus" size={15} color={pc.fg("#286C62")} />
           <Text style={styles.newChatMobileText}>{t("askPrana.newChatShort")}</Text>
         </Pressable>
       </View>
@@ -628,7 +630,7 @@ export function AskPranaChatSidebar({
       >
         {sessions.length === 0 && (isLoading || !pinsLoaded) ? (
           <View style={styles.loadingState}>
-            <ActivityIndicator size="small" color={colors.accent} />
+            <ActivityIndicator size="small" color={pc.fg(colors.accent)} />
           </View>
         ) : sessions.length === 0 && loadError ? (
           <Pressable onPress={() => void loadHistory()} accessibilityRole="button">
@@ -675,7 +677,7 @@ export function AskPranaChatSidebar({
                 >
                   <View style={styles.itemCopy}>
                     <View style={styles.itemTitleRow}>
-                      <Feather name="bookmark" size={12} color={colors.muted} />
+                      <Feather name="bookmark" size={12} color={pc.fg(colors.muted)} />
                       <Text style={styles.itemTitle} numberOfLines={1}>{displayText(session.title)}</Text>
                     </View>
                     <Text style={styles.itemPreview} numberOfLines={1}>
@@ -701,7 +703,7 @@ export function AskPranaChatSidebar({
                   accessibilityState={{ expanded: menuSessionId === session.id && menuSource === "pinned" }}
                   accessibilityLabel={t("askPrana.conversationOptions", { title: displayText(session.title) })}
                 >
-                  <Feather name="more-horizontal" size={17} color={colors.muted} />
+                  <Feather name="more-horizontal" size={17} color={pc.fg(colors.muted)} />
                 </Pressable>
                 </View>
                 );
@@ -743,7 +745,7 @@ export function AskPranaChatSidebar({
                     <View style={styles.itemCopy}>
                       <View style={styles.itemTitleRow}>
                         {pinnedSessionIds.includes(session.id) ? (
-                          <Feather name="bookmark" size={12} color={colors.muted} />
+                          <Feather name="bookmark" size={12} color={pc.fg(colors.muted)} />
                         ) : null}
                         <Text style={styles.itemTitle} numberOfLines={1}>{displayText(session.title)}</Text>
                       </View>
@@ -770,7 +772,7 @@ export function AskPranaChatSidebar({
                     accessibilityState={{ expanded: menuSessionId === session.id && menuSource === "history" }}
                     accessibilityLabel={t("askPrana.conversationOptions", { title: displayText(session.title) })}
                   >
-                    <Feather name="more-horizontal" size={17} color={colors.muted} />
+                    <Feather name="more-horizontal" size={17} color={pc.fg(colors.muted)} />
                   </Pressable>
                 </View>
                 );
@@ -786,7 +788,7 @@ export function AskPranaChatSidebar({
               accessibilityLabel={t("askPrana.loadMoreHistory")}
             >
               {isLoadingMore ? (
-                <ActivityIndicator size="small" color={colors.accent} />
+                <ActivityIndicator size="small" color={pc.fg(colors.accent)} />
               ) : (
                 <Text style={styles.emptyText}>{t("askPrana.loadMoreHistory")}</Text>
               )}
@@ -796,12 +798,14 @@ export function AskPranaChatSidebar({
         )}
       </ScrollView>
 
+      <PranaThemeToggle label={t("askPrana.darkTheme")} style={styles.themeToggle} />
       <Pressable
         onPress={() => {
           if (!isDesktop) onClose();
           router.push("/edit-profile" as never);
         }}
-        style={({ pressed }) => [styles.profileRow, pressed && styles.pressed]}
+        // The Dark theme row above already draws the dividing line.
+        style={({ pressed }) => [styles.profileRow, { borderTopWidth: 0, paddingTop: 2 }, pressed && styles.pressed]}
         accessibilityRole="button"
         accessibilityLabel={t("profile.title")}
       >
@@ -816,7 +820,7 @@ export function AskPranaChatSidebar({
           <Text style={styles.profileName} numberOfLines={1}>{displayName}</Text>
           <Text style={styles.profileSubtitle}>{t("askPrana.account")}</Text>
         </View>
-        <Feather name="chevron-right" size={16} color={colors.muted} />
+        <Feather name="chevron-right" size={16} color={pc.fg(colors.muted)} />
       </Pressable>
     </View>
   );
@@ -873,7 +877,7 @@ export function AskPranaChatSidebar({
               autoFocus
               maxLength={60}
               placeholder={t("askPrana.conversationTitle")}
-              placeholderTextColor={colors.muted}
+              placeholderTextColor={pc.fg(colors.muted)}
             />
             <View style={styles.dialogActions}>
               <Pressable onPress={() => setRenamingSession(null)} style={styles.secondaryButton}>
@@ -917,7 +921,7 @@ const styles = StyleSheet.create({
     flex: 1,
     width: "100%",
     minWidth: 0,
-    backgroundColor: colors.background,
+    backgroundColor: pc.bg(colors.background),
   },
   desktopSidebar: {
     width: 264,
@@ -928,7 +932,7 @@ const styles = StyleSheet.create({
     flexBasis: 264,
     height: "100%",
     borderRightWidth: 1,
-    borderRightColor: prana.sidebarBorder,
+    borderRightColor: pc.bd(prana.sidebarBorder),
     paddingTop: 29,
     paddingHorizontal: 19,
     paddingBottom: 19,
@@ -942,7 +946,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   brandMark: { flexDirection: "row", alignItems: "center", gap: 9 },
-  brand: { color: prana.ink, fontFamily: PRANA_FONT, fontSize: 24, lineHeight: 29, fontWeight: "800", letterSpacing: -0.4 },
+  brand: { color: pc.fg(prana.ink), fontFamily: PRANA_FONT, fontSize: 24, lineHeight: 29, fontWeight: "800", letterSpacing: -0.4 },
   iconButton: { width: 29, height: 29, borderRadius: 7, alignItems: "center", justifyContent: "center" },
   newChatButton: {
     minHeight: 49,
@@ -951,12 +955,12 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 11,
-    backgroundColor: "#DCE9D6",
+    backgroundColor: pc.bg("#DCE9D6"),
     borderWidth: 1,
-    borderColor: "#8EB49E",
+    borderColor: pc.bd("#8EB49E"),
     borderRadius: 12,
   },
-  newChatText: { color: "#235B4B", fontFamily: PRANA_FONT, fontSize: 13, lineHeight: 18, fontWeight: "700" },
+  newChatText: { color: pc.fg("#235B4B"), fontFamily: PRANA_FONT, fontSize: 13, lineHeight: 18, fontWeight: "700" },
   searchBox: {
     minHeight: 42,
     marginTop: 12,
@@ -964,15 +968,15 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 9,
     borderWidth: 1,
-    borderColor: "#CBD5BF",
-    backgroundColor: "#F8F8E9",
+    borderColor: pc.bd("#CBD5BF"),
+    backgroundColor: pc.bg("#F8F8E9"),
     borderRadius: 10,
     paddingHorizontal: 12,
   },
   searchInput: {
     flex: 1,
     minWidth: 0,
-    color: "#255E50",
+    color: pc.fg("#255E50"),
     fontFamily: PRANA_FONT,
     fontSize: 12,
     lineHeight: 18,
@@ -983,10 +987,10 @@ const styles = StyleSheet.create({
   historyList: { flex: 1, marginTop: 8, overflow: "visible" },
   historyContent: { paddingBottom: 16, gap: 16, overflow: "visible" },
   loadingState: { paddingVertical: 24, alignItems: "center" },
-  emptyText: { color: "#6D8976", fontFamily: PRANA_FONT, fontSize: 11, paddingVertical: 18, paddingHorizontal: 9, lineHeight: 20, fontWeight: "400" },
+  emptyText: { color: pc.fg("#6D8976"), fontFamily: PRANA_FONT, fontSize: 11, paddingVertical: 18, paddingHorizontal: 9, lineHeight: 20, fontWeight: "400" },
   group: { gap: 3, overflow: "visible" },
   groupLabel: {
-    color: "#94A08A",
+    color: pc.fg("#94A08A"),
     fontFamily: PRANA_FONT,
     fontSize: 9,
     lineHeight: 12,
@@ -1010,12 +1014,12 @@ const styles = StyleSheet.create({
       ? ({ transitionProperty: "background-color", transitionDuration: "180ms" } as object)
       : null),
   },
-  activeItem: { backgroundColor: colors.activeConversation },
-  hoveredItem: { backgroundColor: "#E1E8D5" },
+  activeItem: { backgroundColor: pc.bg(colors.activeConversation) },
+  hoveredItem: { backgroundColor: pc.bg("#E1E8D5") },
   itemCopy: { flex: 1, minWidth: 0, gap: 2 },
   itemTitleRow: { flexDirection: "row", alignItems: "center", gap: 5, minWidth: 0 },
-  itemTitle: { color: "#245C50", fontFamily: PRANA_FONT, fontSize: 12, lineHeight: 17, fontWeight: "600", flexShrink: 1 },
-  itemPreview: { color: "#8C9B85", fontFamily: PRANA_FONT, fontSize: 10, lineHeight: 14, fontWeight: "400" },
+  itemTitle: { color: pc.fg("#245C50"), fontFamily: PRANA_FONT, fontSize: 12, lineHeight: 17, fontWeight: "600", flexShrink: 1 },
+  itemPreview: { color: pc.fg("#8C9B85"), fontFamily: PRANA_FONT, fontSize: 10, lineHeight: 14, fontWeight: "400" },
   menuButton: {
     width: 32,
     height: 32,
@@ -1028,7 +1032,7 @@ const styles = StyleSheet.create({
       : null),
   },
   menuButtonHidden: { opacity: 0 },
-  menuButtonHovered: { backgroundColor: "#E1E8D5" },
+  menuButtonHovered: { backgroundColor: pc.bg("#E1E8D5") },
   itemMenu: {
     position: "absolute",
     top: 36,
@@ -1041,8 +1045,8 @@ const styles = StyleSheet.create({
     padding: 6,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: "#B5CBB3",
-    backgroundColor: prana.card,
+    borderColor: pc.bd("#B5CBB3"),
+    backgroundColor: pc.bg(prana.card),
     shadowColor: "#1D4B36",
     shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.13,
@@ -1052,14 +1056,15 @@ const styles = StyleSheet.create({
   },
   itemMenuUpward: { top: undefined, bottom: 36 },
   menuAction: { minHeight: 40, borderRadius: 6, paddingHorizontal: 10, flexDirection: "row", alignItems: "center", gap: 10 },
-  menuActionHovered: { backgroundColor: prana.attachBg },
+  menuActionHovered: { backgroundColor: pc.bg(prana.attachBg) },
   deleteActionHovered: { backgroundColor: "rgba(158, 75, 61, 0.1)" },
-  menuActionText: { color: "#225E50", fontFamily: PRANA_FONT, fontSize: 13, lineHeight: 18, fontWeight: "600" },
-  deleteText: { color: colors.danger },
+  menuActionText: { color: pc.fg("#225E50"), fontFamily: PRANA_FONT, fontSize: 13, lineHeight: 18, fontWeight: "600" },
+  deleteText: { color: pc.fg(colors.danger) },
+  themeToggle: { borderTopWidth: 1, borderTopColor: pc.bd(colors.border), borderRadius: 0, paddingTop: 6, marginTop: 4 },
   profileRow: {
     minHeight: 62,
     borderTopWidth: 1,
-    borderTopColor: colors.border,
+    borderTopColor: pc.bd(colors.border),
     paddingTop: 10,
     paddingHorizontal: 7,
     flexDirection: "row",
@@ -1067,20 +1072,20 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   profileCopy: { flex: 1, minWidth: 0, gap: 2 },
-  profileName: { color: "#2F5D4C", fontFamily: PRANA_FONT, fontSize: 12, lineHeight: 17, fontWeight: "700" },
-  profileSubtitle: { color: "#829480", fontFamily: PRANA_FONT, fontSize: 10, lineHeight: 14, fontWeight: "400" },
+  profileName: { color: pc.fg("#2F5D4C"), fontFamily: PRANA_FONT, fontSize: 12, lineHeight: 17, fontWeight: "700" },
+  profileSubtitle: { color: pc.fg("#829480"), fontFamily: PRANA_FONT, fontSize: 10, lineHeight: 14, fontWeight: "400" },
   pressed: { opacity: 0.78 },
-  drawerRoot: { flex: 1, width: "100%", height: "100%", flexDirection: "row", backgroundColor: prana.cream },
+  drawerRoot: { flex: 1, width: "100%", height: "100%", flexDirection: "row", backgroundColor: pc.bg(prana.cream) },
   backdrop: {
     position: "absolute",
     top: 0,
     right: 0,
     bottom: 0,
     left: 0,
-    backgroundColor: prana.cream,
+    backgroundColor: pc.bg(prana.cream),
     zIndex: 0,
   },
-  mobileDrawer: { width: "100%", height: "100%", zIndex: 1, backgroundColor: prana.cream },
+  mobileDrawer: { width: "100%", height: "100%", zIndex: 1, backgroundColor: pc.bg(prana.cream) },
   dialogBackdrop: { flex: 1, justifyContent: "center", paddingHorizontal: 24, backgroundColor: "rgba(21,57,58,0.4)" },
   dialog: {
     width: "100%",
@@ -1090,31 +1095,31 @@ const styles = StyleSheet.create({
     gap: 14,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: prana.line,
-    backgroundColor: prana.card,
+    borderColor: pc.bd(prana.line),
+    backgroundColor: pc.bg(prana.card),
   },
-  dialogTitle: { color: prana.ink, fontFamily: PRANA_FONT, fontSize: 17, lineHeight: 22, fontWeight: "800" },
-  dialogBody: { color: prana.muted, fontFamily: PRANA_FONT, fontSize: 14, lineHeight: 21, fontWeight: "400" },
+  dialogTitle: { color: pc.fg(prana.ink), fontFamily: PRANA_FONT, fontSize: 17, lineHeight: 22, fontWeight: "800" },
+  dialogBody: { color: pc.fg(prana.muted), fontFamily: PRANA_FONT, fontSize: 14, lineHeight: 21, fontWeight: "400" },
   renameInput: {
     minHeight: 46,
-    color: prana.ink,
+    color: pc.fg(prana.ink),
     fontFamily: PRANA_FONT,
     borderRadius: 11,
     borderWidth: 1.4,
-    borderColor: prana.inputBorder,
-    backgroundColor: prana.card,
+    borderColor: pc.bd(prana.inputBorder),
+    backgroundColor: pc.bg(prana.card),
     paddingHorizontal: 12,
     fontSize: 16,
     fontWeight: "400",
   },
   dialogActions: { flexDirection: "row", justifyContent: "flex-end", gap: 8 },
-  secondaryButton: { minHeight: 40, justifyContent: "center", paddingHorizontal: 14, borderRadius: 10, borderWidth: 1, borderColor: "#B9CEBC" },
-  secondaryButtonText: { color: "#286C62", fontFamily: PRANA_FONT, fontSize: 13, lineHeight: 18, fontWeight: "700" },
-  primaryButton: { minHeight: 40, justifyContent: "center", paddingHorizontal: 16, borderRadius: 10, backgroundColor: prana.teal },
-  deleteButton: { minHeight: 40, justifyContent: "center", paddingHorizontal: 16, borderRadius: 10, backgroundColor: "#9E4B3D" },
-  primaryButtonText: { color: colors.white, fontFamily: PRANA_FONT, fontSize: 13, lineHeight: 18, fontWeight: "800" },
+  secondaryButton: { minHeight: 40, justifyContent: "center", paddingHorizontal: 14, borderRadius: 10, borderWidth: 1, borderColor: pc.bd("#B9CEBC") },
+  secondaryButtonText: { color: pc.fg("#286C62"), fontFamily: PRANA_FONT, fontSize: 13, lineHeight: 18, fontWeight: "700" },
+  primaryButton: { minHeight: 40, justifyContent: "center", paddingHorizontal: 16, borderRadius: 10, backgroundColor: pc.bg(prana.teal) },
+  deleteButton: { minHeight: 40, justifyContent: "center", paddingHorizontal: 16, borderRadius: 10, backgroundColor: pc.bg("#9E4B3D") },
+  primaryButtonText: { color: pc.fg(colors.white), fontFamily: PRANA_FONT, fontSize: 13, lineHeight: 18, fontWeight: "800" },
   mobileSidebar: {
-    backgroundColor: prana.cream,
+    backgroundColor: pc.bg(prana.cream),
     paddingHorizontal: 24,
     paddingBottom: 12,
   },
@@ -1122,13 +1127,13 @@ const styles = StyleSheet.create({
     minHeight: 51,
     marginTop: 0,
     borderWidth: 1.4,
-    borderColor: prana.inputBorder,
-    backgroundColor: prana.card,
+    borderColor: pc.bd(prana.inputBorder),
+    backgroundColor: pc.bg(prana.card),
     borderRadius: 11,
   },
-  searchInputMobile: { color: prana.ink, fontSize: 16, lineHeight: 21 },
+  searchInputMobile: { color: pc.fg(prana.ink), fontSize: 16, lineHeight: 21 },
   sidebarLabel: {
-    color: "#94A08A",
+    color: pc.fg("#94A08A"),
     fontFamily: PRANA_FONT,
     fontSize: 9,
     lineHeight: 12,
@@ -1152,7 +1157,7 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     minWidth: 0,
     marginBottom: 0,
-    color: prana.ink,
+    color: pc.fg(prana.ink),
     fontFamily: PRANA_FONT,
     fontSize: 23,
     lineHeight: 28,
@@ -1169,21 +1174,21 @@ const styles = StyleSheet.create({
   },
   mobileSubtitleCompact: { marginTop: 8, marginBottom: 14 },
   backLink: { flexDirection: "row", alignItems: "center", gap: 5, alignSelf: "flex-start", minHeight: 40, paddingRight: 8, marginBottom: 6 },
-  backLinkText: { color: "#217C73", fontFamily: PRANA_FONT, fontSize: 12, lineHeight: 16, fontWeight: "700" },
-  kicker: { color: prana.tealText, fontFamily: PRANA_FONT, fontSize: 10, lineHeight: 13, fontWeight: "800", letterSpacing: 1.1, marginBottom: 8 },
-  mobileTitle: { color: prana.ink, fontFamily: PRANA_FONT, fontSize: 29, lineHeight: 34, fontWeight: "800", marginBottom: 12 },
-  mobileSubtitle: { color: prana.muted, fontFamily: PRANA_FONT, fontSize: 13, lineHeight: 21, marginBottom: 27 },
+  backLinkText: { color: pc.fg("#217C73"), fontFamily: PRANA_FONT, fontSize: 12, lineHeight: 16, fontWeight: "700" },
+  kicker: { color: pc.fg(prana.tealText), fontFamily: PRANA_FONT, fontSize: 10, lineHeight: 13, fontWeight: "800", letterSpacing: 1.1, marginBottom: 8 },
+  mobileTitle: { color: pc.fg(prana.ink), fontFamily: PRANA_FONT, fontSize: 29, lineHeight: 34, fontWeight: "800", marginBottom: 12 },
+  mobileSubtitle: { color: pc.fg(prana.muted), fontFamily: PRANA_FONT, fontSize: 13, lineHeight: 21, marginBottom: 27 },
   newChatMobile: {
     minHeight: 48,
     marginTop: 13,
     marginBottom: 5,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: "#B9CEBC",
+    borderColor: pc.bd("#B9CEBC"),
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 6,
   },
-  newChatMobileText: { color: "#286C62", fontFamily: PRANA_FONT, fontSize: 12, lineHeight: 16, fontWeight: "700" },
+  newChatMobileText: { color: pc.fg("#286C62"), fontFamily: PRANA_FONT, fontSize: 12, lineHeight: 16, fontWeight: "700" },
 });

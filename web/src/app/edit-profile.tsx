@@ -18,6 +18,7 @@ import { useTranslation } from "react-i18next";
 import { UserAvatar } from "../components/user-avatar";
 import { PranaHeader, PranaHeaderButton } from "../components/prana-header";
 import { PranaSelect } from "../components/prana-select";
+import { PranaThemeToggle } from "../components/prana-theme-toggle";
 import { INDIA_STATES, findIndiaDistrict, findIndiaState } from "../constants/india-states";
 import { getAskPranaLanguageOption } from "../lib/ask-prana-language";
 import { PRANA_FONT, prana, pranaGradientStyle } from "../constants/prana-theme";
@@ -42,6 +43,7 @@ import {
   resendEmailChangeVerification,
   updateCurrentUserProfile,
 } from "../services/profile";
+import { pc } from "../constants/prana-theme-mode";
 
 const INDIA_STATE_NAMES = INDIA_STATES.map((item) => item.name);
 const PROFILE_LANGUAGES = ["English", "Telugu", "Hindi"] as const;
@@ -66,10 +68,10 @@ const colors = {
 };
 
 const EMAIL_STATUS_BADGE: Record<AuthEmailState["status"], { text: string; color: string }> = {
-  none: { text: "Email not added", color: colors.muted },
-  verified: { text: "Verified", color: colors.success },
-  unverified: { text: "Not verified", color: colors.warning },
-  pending: { text: "Verification pending", color: colors.warning },
+  none: { text: "Email not added", color: pc.fg(colors.muted) },
+  verified: { text: "Verified", color: pc.fg(colors.success) },
+  unverified: { text: "Not verified", color: pc.fg(colors.warning) },
+  pending: { text: "Verification pending", color: pc.fg(colors.warning) },
 };
 
 const VERIFICATION_SENT_MESSAGE =
@@ -418,7 +420,7 @@ export default function EditProfileScreen() {
   if (loading) {
     return (
       <View style={styles.safeArea}>
-        <View style={styles.loading}><ActivityIndicator color={colors.primary} /></View>
+        <View style={styles.loading}><ActivityIndicator color={pc.fg(colors.primary)} /></View>
       </View>
     );
   }
@@ -466,7 +468,7 @@ export default function EditProfileScreen() {
             style={({ pressed }) => [styles.resendLink, (pressed || resending) && styles.resendLinkPressed]}
             accessibilityRole="button"
           >
-            {resending ? <ActivityIndicator size="small" color={colors.primary} /> : null}
+            {resending ? <ActivityIndicator size="small" color={pc.fg(colors.primary)} /> : null}
             <Text style={styles.resendLinkText}>Resend verification email</Text>
           </Pressable>
         ) : null}
@@ -495,7 +497,7 @@ export default function EditProfileScreen() {
         {isMobile ? (
           <View style={styles.mobileHeading}>
             <Pressable onPress={leaveScreen} style={styles.backLinkInRow} accessibilityRole="button" accessibilityLabel="Go back">
-              <Feather name="arrow-left" size={13} color="#217C73" />
+              <Feather name="arrow-left" size={13} color={pc.fg("#217C73")} />
               <Text style={styles.backLinkText}>Chat</Text>
             </Pressable>
             <Text style={[styles.title, styles.titleInRow]}>
@@ -505,7 +507,7 @@ export default function EditProfileScreen() {
         ) : (
           <>
             <Pressable onPress={leaveScreen} style={styles.backLink} accessibilityRole="button" accessibilityLabel="Go back">
-              <Feather name="arrow-left" size={13} color="#217C73" />
+              <Feather name="arrow-left" size={13} color={pc.fg("#217C73")} />
               <Text style={styles.backLinkText}>Chat</Text>
             </Pressable>
             <Text style={styles.kicker}>{registerMode ? "CREATE ACCOUNT" : "ACCOUNT"}</Text>
@@ -570,8 +572,13 @@ export default function EditProfileScreen() {
           searchPlaceholder="Search language"
           onChange={setLanguage}
         />
+        {/* Applies straight away on this device; not part of Save. */}
+        <View style={styles.field}>
+          <Text style={styles.label}>Appearance</Text>
+          <PranaThemeToggle style={styles.appearanceBox} />
+        </View>
         <Pressable onPress={() => void save()} disabled={saving} style={[styles.saveButton, pranaGradientStyle, saving && styles.saveButtonDisabled]} accessibilityRole="button">
-          {saving ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.saveText}>{registerMode ? "Create account" : "Save changes"}</Text>}
+          {saving ? <ActivityIndicator color={pc.fg("#FFFFFF")} /> : <Text style={styles.saveText}>{registerMode ? "Create account" : "Save changes"}</Text>}
         </Pressable>
         {saveNotice ? <Text style={styles.saveNotice} accessibilityLiveRegion="polite">{saveNotice}</Text> : null}
         {saveError ? <Text style={styles.saveError} accessibilityLiveRegion="polite">{saveError}</Text> : null}
@@ -615,7 +622,7 @@ export default function EditProfileScreen() {
           <Text style={styles.logoutHint}>You'll need to log in again to access your chats.</Text>
           {logoutError ? <Text style={styles.dialogError}>{logoutError}</Text> : null}
           <Pressable onPress={() => void confirmLogout()} disabled={loggingOut} style={[styles.logoutConfirm, loggingOut && styles.saveButtonDisabled]} accessibilityRole="button">
-            {loggingOut ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.logoutConfirmText}>Log out</Text>}
+            {loggingOut ? <ActivityIndicator color={pc.fg("#FFFFFF")} /> : <Text style={styles.logoutConfirmText}>Log out</Text>}
           </Pressable>
           <Pressable onPress={() => setLogoutConfirmOpen(false)} disabled={loggingOut} style={styles.logoutCancel} accessibilityRole="button">
             <Text style={styles.logoutCancelText}>Cancel</Text>
@@ -628,13 +635,13 @@ export default function EditProfileScreen() {
 }
 
 function Field({ label, editable = true, error, hint, badge, ...inputProps }: React.ComponentProps<typeof TextInput> & { label: string; error?: string | null; hint?: string | null; badge?: { text: string; color: string } | null }) {
-  return <View style={styles.field}><View style={styles.labelRow}><Text style={styles.label}>{label}</Text>{badge ? <Text style={[styles.badge, { color: badge.color, borderColor: badge.color }]}>{badge.text}</Text> : null}</View><TextInput {...inputProps} editable={editable} style={[styles.input, !editable && styles.inputDisabled, error ? styles.inputError : null]} placeholderTextColor={colors.muted} />{error ? <Text style={styles.errorText} accessibilityLiveRegion="polite">{error}</Text> : hint ? <Text style={styles.hintText}>{hint}</Text> : null}</View>;
+  return <View style={styles.field}><View style={styles.labelRow}><Text style={styles.label}>{label}</Text>{badge ? <Text style={[styles.badge, { color: badge.color, borderColor: badge.color }]}>{badge.text}</Text> : null}</View><TextInput {...inputProps} editable={editable} style={[styles.input, !editable && styles.inputDisabled, error ? styles.inputError : null]} placeholderTextColor={pc.fg(colors.muted)} />{error ? <Text style={styles.errorText} accessibilityLiveRegion="polite">{error}</Text> : hint ? <Text style={styles.hintText}>{hint}</Text> : null}</View>;
 }
 
 const F = PRANA_FONT;
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: prana.cream },
+  safeArea: { flex: 1, backgroundColor: pc.bg(prana.cream) },
   loading: { flex: 1, alignItems: "center", justifyContent: "center" },
   content: { flexGrow: 1, paddingBottom: 32 },
   contentDesktop: { alignItems: "center", paddingTop: 32 },
@@ -645,7 +652,7 @@ const styles = StyleSheet.create({
     paddingVertical: 28,
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: prana.line,
+    borderColor: pc.bd(prana.line),
     shadowColor: "#1D4B36",
     shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.08,
@@ -676,25 +683,25 @@ const styles = StyleSheet.create({
     gap: 5,
     minHeight: 44,
   },
-  backLinkText: { flexShrink: 1, color: "#217C73", fontFamily: F, fontSize: 12, lineHeight: 16, fontWeight: "700" },
-  kicker: { color: prana.tealText, fontFamily: F, fontSize: 10, lineHeight: 13, fontWeight: "800", letterSpacing: 1.1, marginBottom: 8 },
-  title: { color: prana.ink, fontFamily: F, fontSize: 29, lineHeight: 34, fontWeight: "800", marginBottom: 12 },
-  caption: { color: prana.muted, fontFamily: F, fontSize: 13, lineHeight: 21, marginBottom: 24 },
+  backLinkText: { flexShrink: 1, color: pc.fg("#217C73"), fontFamily: F, fontSize: 12, lineHeight: 16, fontWeight: "700" },
+  kicker: { color: pc.fg(prana.tealText), fontFamily: F, fontSize: 10, lineHeight: 13, fontWeight: "800", letterSpacing: 1.1, marginBottom: 8 },
+  title: { color: pc.fg(prana.ink), fontFamily: F, fontSize: 29, lineHeight: 34, fontWeight: "800", marginBottom: 12 },
+  caption: { color: pc.fg(prana.muted), fontFamily: F, fontSize: 13, lineHeight: 21, marginBottom: 24 },
   captionMobile: { marginTop: 8, marginBottom: 14 },
   photoBlock: { flexDirection: "row", alignItems: "center", gap: 16, marginBottom: 26 },
   changePhoto: { minHeight: 31, justifyContent: "center" },
-  changePhotoText: { color: "#217C73", fontFamily: F, fontSize: 12, lineHeight: 16, fontWeight: "700" },
-  photoError: { color: colors.danger, fontFamily: F, fontSize: 12, lineHeight: 18, marginTop: -16, marginBottom: 12 },
+  changePhotoText: { color: pc.fg("#217C73"), fontFamily: F, fontSize: 12, lineHeight: 16, fontWeight: "700" },
+  photoError: { color: pc.fg(colors.danger), fontFamily: F, fontSize: 12, lineHeight: 18, marginTop: -16, marginBottom: 12 },
   field: { gap: 9, marginBottom: 17 },
   grid: { flexDirection: "row", gap: 11 },
   gridCell: { flex: 1, minWidth: 0 },
-  label: { color: prana.ink, fontFamily: F, fontSize: 12, lineHeight: 16, fontWeight: "700" },
+  label: { color: pc.fg(prana.ink), fontFamily: F, fontSize: 12, lineHeight: 16, fontWeight: "700" },
   input: {
     minHeight: 51,
-    color: prana.ink,
-    backgroundColor: prana.card,
+    color: pc.fg(prana.ink),
+    backgroundColor: pc.bg(prana.card),
     borderWidth: 1.4,
-    borderColor: prana.inputBorder,
+    borderColor: pc.bd(prana.inputBorder),
     borderRadius: 11,
     paddingHorizontal: 12,
     fontFamily: F,
@@ -704,15 +711,23 @@ const styles = StyleSheet.create({
     fontWeight: "400",
     ...(Platform.OS === "web" ? ({ outlineStyle: "none", outlineWidth: 0 } as object) : null),
   },
-  inputDisabled: { color: "#6E8476", backgroundColor: "#F2F2DE" },
-  inputError: { borderColor: colors.danger },
-  errorText: { color: colors.danger, fontFamily: F, fontSize: 12, lineHeight: 17 },
+  inputDisabled: { color: pc.fg("#6E8476"), backgroundColor: pc.bg("#F2F2DE") },
+  inputError: { borderColor: pc.bd(colors.danger) },
+  errorText: { color: pc.fg(colors.danger), fontFamily: F, fontSize: 12, lineHeight: 17 },
   labelRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
   badge: { fontFamily: F, fontSize: 10, lineHeight: 14, fontWeight: "700", borderWidth: 1, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2, overflow: "hidden" },
   resendLink: { flexDirection: "row", alignItems: "center", gap: 8, alignSelf: "flex-start", marginTop: -8, marginBottom: 12, paddingVertical: 4 },
   resendLinkPressed: { opacity: 0.6 },
-  resendLinkText: { color: "#217C73", fontFamily: F, fontSize: 12, lineHeight: 17, fontWeight: "700" },
-  hintText: { color: prana.muted, fontFamily: F, fontSize: 11, lineHeight: 17 },
+  resendLinkText: { color: pc.fg("#217C73"), fontFamily: F, fontSize: 12, lineHeight: 17, fontWeight: "700" },
+  hintText: { color: pc.fg(prana.muted), fontFamily: F, fontSize: 11, lineHeight: 17 },
+  appearanceBox: {
+    minHeight: 51,
+    paddingHorizontal: 12,
+    borderRadius: 11,
+    borderWidth: 1.4,
+    borderColor: pc.bd(prana.inputBorder),
+    backgroundColor: pc.bg(prana.card),
+  },
   saveButton: {
     minHeight: 54,
     marginTop: 8,
@@ -725,24 +740,24 @@ const styles = StyleSheet.create({
     shadowRadius: 14,
   },
   saveButtonDisabled: { opacity: 0.6 },
-  saveText: { color: "#FFFFFF", fontFamily: F, fontSize: 14, lineHeight: 20, fontWeight: "800" },
-  saveNotice: { color: colors.success, fontFamily: F, fontSize: 13, lineHeight: 19, fontWeight: "700", textAlign: "center", marginTop: 12 },
-  saveError: { color: colors.danger, fontFamily: F, fontSize: 13, lineHeight: 19, fontWeight: "700", textAlign: "center", marginTop: 12 },
+  saveText: { color: pc.fg("#FFFFFF"), fontFamily: F, fontSize: 14, lineHeight: 20, fontWeight: "800" },
+  saveNotice: { color: pc.fg(colors.success), fontFamily: F, fontSize: 13, lineHeight: 19, fontWeight: "700", textAlign: "center", marginTop: 12 },
+  saveError: { color: pc.fg(colors.danger), fontFamily: F, fontSize: 13, lineHeight: 19, fontWeight: "700", textAlign: "center", marginTop: 12 },
   logoutButton: { minHeight: 44, marginTop: 16, borderRadius: 10, alignItems: "center", justifyContent: "center" },
   logoutButtonHovered: { backgroundColor: "rgba(158,75,61,0.08)" },
   logoutButtonPressed: { opacity: 0.7 },
-  logoutText: { color: colors.danger, fontFamily: F, fontSize: 12, lineHeight: 16, fontWeight: "700" },
-  dialogError: { color: colors.danger, fontFamily: F, fontSize: 13, lineHeight: 19, textAlign: "center" },
+  logoutText: { color: pc.fg(colors.danger), fontFamily: F, fontSize: 12, lineHeight: 16, fontWeight: "700" },
+  dialogError: { color: pc.fg(colors.danger), fontFamily: F, fontSize: 13, lineHeight: 19, textAlign: "center" },
   logoutScreen: { flex: 1, backgroundColor: "rgba(21,57,58,0.6)", alignItems: "center", justifyContent: "center", paddingHorizontal: 20 },
-  logoutTitle: { color: prana.ink, fontFamily: F, fontSize: 22, lineHeight: 28, fontWeight: "800", textAlign: "center", marginBottom: 4 },
-  logoutAccount: { width: "100%", minHeight: 64, borderRadius: 12, borderWidth: 1, borderColor: prana.line, backgroundColor: "#FFFFFF", paddingHorizontal: 14, flexDirection: "row", alignItems: "center", gap: 12 },
-  logoutCard: { width: "100%", maxWidth: 380, padding: 22, gap: 14, borderRadius: 20, backgroundColor: prana.cream, borderWidth: 1, borderColor: prana.line, shadowColor: "#15393A", shadowOffset: { width: 0, height: 12 }, shadowOpacity: 0.2, shadowRadius: 40 },
+  logoutTitle: { color: pc.fg(prana.ink), fontFamily: F, fontSize: 22, lineHeight: 28, fontWeight: "800", textAlign: "center", marginBottom: 4 },
+  logoutAccount: { width: "100%", minHeight: 64, borderRadius: 12, borderWidth: 1, borderColor: pc.bd(prana.line), backgroundColor: pc.bg("#FFFFFF"), paddingHorizontal: 14, flexDirection: "row", alignItems: "center", gap: 12 },
+  logoutCard: { width: "100%", maxWidth: 380, padding: 22, gap: 14, borderRadius: 20, backgroundColor: pc.bg(prana.cream), borderWidth: 1, borderColor: pc.bd(prana.line), shadowColor: "#15393A", shadowOffset: { width: 0, height: 12 }, shadowOpacity: 0.2, shadowRadius: 40 },
   logoutAccountCopy: { flex: 1, minWidth: 0 },
-  logoutName: { color: prana.ink, fontFamily: F, fontSize: 14, lineHeight: 20, fontWeight: "700" },
-  logoutEmail: { color: prana.muted, fontFamily: F, fontSize: 12, lineHeight: 17 },
-  logoutHint: { color: prana.muted, fontFamily: F, fontSize: 13, lineHeight: 19, textAlign: "center" },
-  logoutConfirm: { width: "100%", minHeight: 50, borderRadius: 12, backgroundColor: "#9E4B3D", alignItems: "center", justifyContent: "center", marginTop: 4 },
-  logoutConfirmText: { color: "#FFFFFF", fontFamily: F, fontSize: 14, lineHeight: 20, fontWeight: "800" },
-  logoutCancel: { width: "100%", minHeight: 50, borderRadius: 12, borderWidth: 1, borderColor: "#B9CEBC", backgroundColor: "transparent", alignItems: "center", justifyContent: "center" },
-  logoutCancelText: { color: "#286C62", fontFamily: F, fontSize: 14, lineHeight: 20, fontWeight: "700" },
+  logoutName: { color: pc.fg(prana.ink), fontFamily: F, fontSize: 14, lineHeight: 20, fontWeight: "700" },
+  logoutEmail: { color: pc.fg(prana.muted), fontFamily: F, fontSize: 12, lineHeight: 17 },
+  logoutHint: { color: pc.fg(prana.muted), fontFamily: F, fontSize: 13, lineHeight: 19, textAlign: "center" },
+  logoutConfirm: { width: "100%", minHeight: 50, borderRadius: 12, backgroundColor: pc.bg("#9E4B3D"), alignItems: "center", justifyContent: "center", marginTop: 4 },
+  logoutConfirmText: { color: pc.fg("#FFFFFF"), fontFamily: F, fontSize: 14, lineHeight: 20, fontWeight: "800" },
+  logoutCancel: { width: "100%", minHeight: 50, borderRadius: 12, borderWidth: 1, borderColor: pc.bd("#B9CEBC"), backgroundColor: "transparent", alignItems: "center", justifyContent: "center" },
+  logoutCancelText: { color: pc.fg("#286C62"), fontFamily: F, fontSize: 14, lineHeight: 20, fontWeight: "700" },
 });

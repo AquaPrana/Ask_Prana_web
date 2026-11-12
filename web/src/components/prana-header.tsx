@@ -14,6 +14,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AskPranaLogo } from "./ask-prana-logo";
 import { APP_SCREEN_WAVE } from "./phone-login-background";
 import { PRANA_FONT, prana, pranaGradientStyle } from "../constants/prana-theme";
+import { pc } from "../constants/prana-theme-mode";
 
 const WAVE_W = 649;
 const WAVE_H = 513;
@@ -33,7 +34,7 @@ type BrandProps = {
 
 /** Logo badge + "AskPrana" word mark, with the optional tagline under it. */
 export function PranaBrand({
-  color = "#FFFFFF",
+  color = pc.fg("#FFFFFF"),
   iconSize = 27,
   wordSize = 21,
   subtitle = "Your aquaculture assistant",
@@ -87,7 +88,7 @@ export function PranaHeaderButton({ icon, onPress, label, tone = "dark" }: Heade
       accessibilityRole="button"
       accessibilityLabel={label}
     >
-      <Feather name={icon} size={21} color={tone === "light" ? "#7E957F" : "#FFFFFF"} />
+      <Feather name={icon} size={21} color={tone === "light" ? pc.fg("#7E957F") : pc.fg("#FFFFFF")} />
     </Pressable>
   );
 }
@@ -109,8 +110,8 @@ export function PranaLanguageButton({ label, onPress, accessibilityLabel, tone =
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel ?? label}
     >
-      <Text style={[styles.langText, light && { color: "#577E5F" }]}>{label.toUpperCase()}</Text>
-      <Feather name="chevron-down" size={12} color={light ? "#577E5F" : "#FFFFFF"} />
+      <Text style={[styles.langText, light && { color: pc.fg("#577E5F") }]}>{label.toUpperCase()}</Text>
+      <Feather name="chevron-down" size={12} color={light ? pc.fg("#577E5F") : pc.fg("#FFFFFF")} />
     </Pressable>
   );
 }
@@ -123,7 +124,7 @@ export function PranaHeaderLogin({ onPress, label = "Log in", tone = "dark" }: {
       style={({ pressed }) => [styles.loginButton, tone === "light" && styles.loginButtonLight, pressed && { opacity: 0.85 }]}
       accessibilityRole="button"
     >
-      <Text style={[styles.loginText, tone === "light" && { color: "#4C7654", fontSize: 12 }]}>{label}</Text>
+      <Text style={[styles.loginText, tone === "light" && { color: pc.fg("#4C7654"), fontSize: 12 }]}>{label}</Text>
     </Pressable>
   );
 }
@@ -154,7 +155,7 @@ export function PranaHeader({ variant, left, right, includeTopInset = true, subt
         <View style={styles.lightSide}>{left}</View>
         <View style={{ flex: 1, minWidth: 0 }}>
           <PranaBrand
-            color={prana.ink}
+            color={pc.fg(prana.ink)}
             wordSize={23}
             align="left"
             subtitle={subtitle === undefined ? "Your aquaculture assistant" : subtitle}
@@ -239,14 +240,14 @@ const styles = StyleSheet.create({
   waveWrap: {
     position: "relative",
     overflow: "hidden",
-    backgroundColor: prana.cream,
+    backgroundColor: pc.bg(prana.cream),
   },
   waveTopFill: {
     position: "absolute",
     left: 0,
     right: 0,
     top: 0,
-    backgroundColor: prana.headerDark,
+    backgroundColor: pc.bg(prana.headerDark),
   },
   headerButton: {
     width: 42,
@@ -275,11 +276,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 9,
   },
   langButtonLight: {
-    backgroundColor: "#F2F5E5",
-    borderColor: "#C5D6BD",
+    backgroundColor: pc.bg("#F2F5E5"),
+    borderColor: pc.bd("#C5D6BD"),
   },
   langText: {
-    color: "#FFFFFF",
+    color: pc.fg("#FFFFFF"),
     fontFamily: PRANA_FONT,
     fontSize: 11,
     lineHeight: 14,
@@ -295,9 +296,9 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   loginButtonLight: {
-    backgroundColor: "#EDF2E2",
+    backgroundColor: pc.bg("#EDF2E2"),
     borderWidth: 1,
-    borderColor: "#BFD1B6",
+    borderColor: pc.bd("#BFD1B6"),
     paddingHorizontal: 16,
   },
   loginText: {
@@ -313,9 +314,9 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 15,
-    backgroundColor: prana.desktopHeader,
+    backgroundColor: pc.bg(prana.desktopHeader),
     borderBottomWidth: 1,
-    borderBottomColor: prana.desktopHeaderBorder,
+    borderBottomColor: pc.bd(prana.desktopHeaderBorder),
   },
   lightSide: { minWidth: 0 },
 });

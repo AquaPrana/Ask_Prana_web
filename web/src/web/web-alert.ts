@@ -10,6 +10,7 @@
  *   dialog; each button runs its own onPress, exactly like on the phone app.
  */
 import { Alert } from "react-native";
+import { pc } from "../constants/prana-theme-mode";
 
 type AlertButton = {
   text?: string;
@@ -56,14 +57,15 @@ function showToast(title: string, message?: string) {
   // The same message repeated quickly (e.g. while listening) shows once.
   if (activeToasts.has(key)) return;
   const toast = el("div", {
-    background: "#262626",
-    color: "#F5F5F5",
-    border: "1px solid #3A3A3A",
-    borderLeft: "4px solid #F87171",
+    // Cream / teal theme (light) or dark green (dark), via the theme variables.
+    background: pc.bg("#FFFDF0"),
+    color: pc.fg("#15393A"),
+    border: `1px solid ${pc.bd("#D9DDC6")}`,
+    borderLeft: `4px solid ${pc.fg("#AD3D31")}`,
     borderRadius: "12px",
     padding: "12px 14px",
-    boxShadow: "0 8px 24px rgba(0,0,0,.45)",
-    fontFamily: "inherit",
+    boxShadow: "0 8px 24px rgba(21,57,58,.18)",
+    fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
     fontSize: "14px",
     lineHeight: "20px",
     pointerEvents: "auto",
@@ -73,7 +75,7 @@ function showToast(title: string, message?: string) {
   });
   toast.setAttribute("role", "alert");
   if (title) toast.appendChild(el("div", { fontWeight: "600", marginBottom: message ? "2px" : "0" }, title));
-  if (message) toast.appendChild(el("div", { color: "#D4D4D4" }, message));
+  if (message) toast.appendChild(el("div", { color: pc.fg("#5C7570") }, message));
   const remove = () => {
     if (!activeToasts.has(key)) return;
     activeToasts.delete(key);
@@ -92,26 +94,26 @@ function showDialog(title: string, message: string | undefined, buttons: AlertBu
     position: "fixed",
     inset: "0",
     zIndex: Z_INDEX,
-    background: "rgba(0,0,0,.6)",
+    background: "rgba(21,57,58,.45)",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
     padding: "16px",
   });
   const card = el("div", {
-    background: "#212121",
-    color: "#F5F5F5",
-    border: "1px solid #3A3A3A",
+    background: pc.bg("#F5F5DF"),
+    color: pc.fg("#15393A"),
+    border: `1px solid ${pc.bd("#D9DDC6")}`,
     borderRadius: "16px",
     padding: "20px",
     width: "min(100%, 380px)",
-    boxShadow: "0 16px 40px rgba(0,0,0,.5)",
-    fontFamily: "inherit",
+    boxShadow: "0 16px 40px rgba(21,57,58,.22)",
+    fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
   });
   card.setAttribute("role", "alertdialog");
   card.setAttribute("aria-modal", "true");
   if (title) card.appendChild(el("div", { fontSize: "17px", fontWeight: "600", marginBottom: "8px" }, title));
-  if (message) card.appendChild(el("div", { fontSize: "14px", lineHeight: "20px", color: "#D4D4D4", whiteSpace: "pre-line" }, message));
+  if (message) card.appendChild(el("div", { fontSize: "14px", lineHeight: "20px", color: pc.fg("#5C7570"), whiteSpace: "pre-line" }, message));
   const row = el("div", { display: "flex", flexWrap: "wrap", justifyContent: "flex-end", gap: "8px", marginTop: "18px" });
 
   let closed = false;
@@ -131,17 +133,17 @@ function showDialog(title: string, message: string | undefined, buttons: AlertBu
 
   buttons.forEach((button, index) => {
     const primary = index === buttons.length - 1 && button.style !== "cancel";
-    const color = button.style === "destructive" ? "#F87171" : primary ? "#FFFFFF" : "#D4D4D4";
+    const color = button.style === "destructive" ? pc.fg("#9E4B3D") : primary ? "#FFFFFF" : pc.fg("#286C62");
     const node = el("button", {
-      background: primary && button.style !== "destructive" ? "#0F766E" : "transparent",
+      background: primary && button.style !== "destructive" ? "#008081" : "transparent",
       color,
-      border: button.style === "destructive" ? "1px solid #F87171" : "1px solid #3A3A3A",
+      border: button.style === "destructive" ? `1px solid ${pc.bd("#9E4B3D")}` : `1px solid ${pc.bd("#B9CEBC")}`,
       borderRadius: "10px",
       padding: "9px 16px",
       fontSize: "14px",
       fontWeight: "600",
       cursor: "pointer",
-      fontFamily: "inherit",
+      fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
     }, button.text || "OK");
     node.type = "button";
     node.addEventListener("click", () => {

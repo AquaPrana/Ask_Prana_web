@@ -14,8 +14,17 @@
     <!-- Same reset Expo injects into its web build -->
     <style id="expo-reset">#root,body,html{height:100%}body{overflow:hidden}#root{display:flex}</style>
     <!-- Cream page background (matches the app): shown while loading and behind the mobile keyboard. -->
-    <style>html,body{background-color:#F5F5DF}</style>
+    <style>html,body{background-color:#F5F5DF}html[data-theme="dark"],html[data-theme="dark"] body{background-color:#101010}</style>
     <meta name="theme-color" content="#2E6859" />
+    <!-- Light / dark theme: apply the saved choice before the app loads (no flash). -->
+    <script>
+      try {
+        if (localStorage.getItem("askprana-theme") === "dark") {
+          document.documentElement.dataset.theme = "dark";
+          document.querySelector('meta[name="theme-color"]')?.setAttribute("content", "#0E3537");
+        }
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>
