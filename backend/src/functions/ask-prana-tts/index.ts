@@ -1,0 +1,172 @@
+// @ts-nocheck
+// Node port of supabase/functions/ask-prana-tts/index.ts (same logic; database = MySQL,
+// files = server disk, see src/edge). Keep in step with the original.
+import { Deno } from "../../edge/deno-env.js";
+import { createClient } from "../../edge/supabase-mysql.js";
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+
+const OPENAI_TTS_URL = "https://api.openai.com/v1/audio/speech";
+const OPENAI_TTS_MODEL = "gpt-4o-mini-tts";
+const OPENAI_TTS_VOICE = "alloy";
+const MAX_CHARS = 3500;
+
+function jsonResponse(body: Record<string, unknown>, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
+function bytesToBase64(bytes: Uint8Array) {
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+/**
+ * Same check as ask-prana-transcribe: Ask Prana issues opaque `ap_` session
+ * tokens (stored hashed in user_sessions), so supabase.auth.getUser() alone
+ * rejected every signed-in user and no reply was ever spoken by this service.
+ */
+async function authenticate(req: Request): Promise<string | null> {
+  const authorization = req.headers.get("Authorization");
+  if (!authorization?.startsWith("Bearer ")) return null;
+  const supabaseUrl = Deno.env.get("SUPABASE_URL");
+  const serviceKey =
+    Deno.env.get("SERVICE_ROLE_KEY") ??
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if (!supabaseUrl || !serviceKey) {
+    console.error("[ask-prana-tts] Missing SUPABASE_URL or service role key");
+    return null;
+  }
+  const supabase = createClient(supabaseUrl, serviceKey);
+  const accessToken = authorization.replace(/^Bearer\s+/i, "").trim();
+
+  if (accessToken.startsWith("ap_")) {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(accessToken));
+    const tokenHash = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+    const { data: appSession } = await supabase
+      .from("user_sessions")
+      .select("user_id, expires_at, revoked_at")
+      .eq("token_hash", tokenHash)
+      .maybeSingle();
+    const expiresAt = appSession?.expires_at ? new Date(String(appSession.expires_at)).getTime() : 0;
+    if (!appSession || appSession.revoked_at || expiresAt <= Date.now()) return null;
+    return String(appSession.user_id);
+  }
+
+  const { data: { user }, error } = await supabase.auth.getUser(accessToken);
+  if (error || !user) {
+    console.error("[ask-prana-tts] JWT validation failed:", error?.message);
+    return null;
+  }
+  return user.id;
+}
+
+export const handler = (async (req: Request): Promise<Response> => {
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
+  }
+
+  try {
+    const authHeader = req.headers.get("Authorization") ?? "";
+    if (!authHeader.toLowerCase().startsWith("bearer ")) {
+      return jsonResponse({ error: "Unauthorized" }, 401);
+    }
+
+    const userId = await authenticate(req);
+    if (!userId) {
+      return jsonResponse({ error: "Unauthorized" }, 401);
+    }
+
+    const body = await req.json().catch(() => null) as {
+      text?: string;
+      language?: string;
+      languageCode?: string;
+      /** "audio" returns the MP3 bytes directly. Omitted keeps the JSON body. */
+      delivery?: string;
+    } | null;
+
+    const text = typeof body?.text === "string" ? body.text.trim() : "";
+    if (!text) {
+      return jsonResponse({ error: "Text is required for speech." }, 400);
+    }
+
+    const clipped = text.slice(0, MAX_CHARS);
+    const apiKey = Deno.env.get("OPENAI_API_KEY");
+    if (!apiKey) {
+      return jsonResponse(
+        { error: "Speech service is not configured (OPENAI_API_KEY missing)." },
+        500,
+      );
+    }
+
+    const instructions =
+      `Speak clearly as Ask Prana, a friendly aquaculture assistant. ` +
+      `Use natural pacing. Language preference: ${body?.language || body?.languageCode || "English"}.`;
+
+    const openaiResponse = await fetch(OPENAI_TTS_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: OPENAI_TTS_MODEL,
+        voice: OPENAI_TTS_VOICE,
+        input: clipped,
+        instructions,
+        response_format: "mp3",
+      }),
+    });
+
+    if (!openaiResponse.ok) {
+      const errText = await openaiResponse.text();
+      console.error("[ask-prana-tts] OpenAI error", openaiResponse.status, errText);
+      return jsonResponse(
+        { error: "Unable to generate speech right now." },
+        502,
+      );
+    }
+
+    if (!openaiResponse.body) {
+      return jsonResponse({ error: "Empty speech audio returned." }, 502);
+    }
+
+    // Sentence-sized callers start playback from the first audio bytes.
+    // The full reply is never buffered and re-encoded as Base64 for that path.
+    if (body?.delivery === "audio") {
+      return new Response(openaiResponse.body, {
+        status: 200,
+        headers: {
+          ...corsHeaders,
+          "Content-Type": "audio/mpeg",
+          "Cache-Control": "no-store",
+        },
+      });
+    }
+
+    const audio = new Uint8Array(await openaiResponse.arrayBuffer());
+    if (!audio.byteLength) {
+      return jsonResponse({ error: "Empty speech audio returned." }, 502);
+    }
+
+    return jsonResponse({
+      mimeType: "audio/mpeg",
+      audioBase64: bytesToBase64(audio),
+      byteSize: audio.byteLength,
+    });
+  } catch (error) {
+    console.error("[ask-prana-tts] failed:", error);
+    return jsonResponse({ error: "Speech generation failed." }, 500);
+  }
+});

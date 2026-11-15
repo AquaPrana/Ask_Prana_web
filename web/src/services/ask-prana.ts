@@ -1,5 +1,5 @@
 import { Platform } from "react-native";
-import {
+import { getSupabaseAnonKey,
   ensureValidSession,
   getSupabasePublicConfig,
   supabase,
@@ -493,7 +493,7 @@ async function askPranaVoice(
   handlers?: AskPranaVoiceHandlers,
 ): Promise<AskPranaReply> {
   const config = getSupabasePublicConfig();
-  const anonKey = (process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? "").trim();
+  const anonKey = getSupabaseAnonKey();
   if (!config.url || !anonKey) {
     throw new Error(
       "Missing Environment Variable: EXPO_PUBLIC_SUPABASE_URL or EXPO_PUBLIC_SUPABASE_ANON_KEY",
@@ -975,7 +975,7 @@ export async function transcribeAskPranaAudioOnce(input: TranscribeInput): Promi
 }> {
   const auth = await requireAskPranaAuth();
   const config = getSupabasePublicConfig();
-  const anonKey = (process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? "").trim();
+  const anonKey = getSupabaseAnonKey();
 
   if (!config.url || !anonKey) {
     throw classifyTranscribeError(

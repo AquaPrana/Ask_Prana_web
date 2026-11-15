@@ -8,6 +8,7 @@ import {
 import Constants from "expo-constants";
 import { AppState, Platform } from "react-native";
 import { isAppSessionToken, loadAppSession } from "../services/app-session";
+import { nodeApiUrl } from "./backend-mode";
 
 type ExpoExtra = {
   supabaseUrl?: string | null;
@@ -16,16 +17,34 @@ type ExpoExtra = {
 
 const extra = (Constants.expoConfig?.extra ?? {}) as ExpoExtra;
 
+/**
+ * Node backend (EXPO_PUBLIC_BACKEND=node): the same client and the same
+ * requests (/functions/v1/..., /storage/v1/...) go to the Node/Express/MySQL
+ * server at EXPO_PUBLIC_API_URL instead of Supabase. Nothing else changes.
+ */
+const nodeBackendUrl = nodeApiUrl();
+const NODE_BACKEND_KEY = "ask-prana-node-backend";
+
 /** Prefer EXPO_PUBLIC_* (inlined at EAS build); fall back to app.config.js extra for APK. */
 const supabaseUrl = (
+  nodeBackendUrl ??
   process.env.EXPO_PUBLIC_SUPABASE_URL ??
   extra.supabaseUrl ??
   ""
 ).trim();
-const supabaseAnonKey = (process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? "").trim();
+const supabaseAnonKey = nodeBackendUrl
+  ? NODE_BACKEND_KEY
+  : (process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? "").trim();
+
+/** Public key sent as `apikey` (a fixed placeholder for the Node backend). */
+export function getSupabaseAnonKey(): string {
+  return supabaseAnonKey;
+}
 
 function isInvalidSupabaseUrl(url: string): boolean {
   if (!url) return true;
+  // The Node backend runs on localhost during development.
+  if (nodeBackendUrl) return !/^https?:\/\//i.test(url);
   try {
     const parsed = new URL(url);
     const host = parsed.hostname.toLowerCase();

@@ -1,7 +1,7 @@
 import type { User } from "@supabase/supabase-js";
-import { supabase, waitForAuthReady, withTimeout, acceptAuthenticatedSession } from "../lib/supabase";
+import { supabase, waitForAuthReady, withTimeout, acceptAuthenticatedSession, clearPublishedSession } from "../lib/supabase";
 import { completeVerifiedLogin, isAuthSessionMissing, readFunctionError } from "./auth";
-import { loadAppSession, loadPendingRegistration, saveAppSession } from "./app-session";
+import { clearAppSession, loadAppSession, loadPendingRegistration, saveAppSession } from "./app-session";
 import { getFarmerProfile } from "./local-profile";
 import { sendMsg91EmailOtp } from "./msg91";
 
@@ -64,6 +64,13 @@ async function fetchCurrentUserProfile(): Promise<CurrentUserProfileResult> {
         headers: { Authorization: `Bearer ${session.access_token}` },
       });
       if (error || data?.success !== true || !data.user) {
+        // The server no longer knows this login (logged out elsewhere, expired,
+        // or saved from another server): clear it so the login page opens.
+        if ((error as { context?: { status?: number } } | null)?.context?.status === 401) {
+          await clearAppSession();
+          clearPublishedSession();
+          return { profile: null, error: null };
+        }
         return {
           profile: null,
           error: new Error(await readFunctionError(error, data?.error ?? "Unable to load profile right now.")),

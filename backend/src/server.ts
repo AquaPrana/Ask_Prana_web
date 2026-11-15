@@ -1,0 +1,2 @@
+import { mkdir } from "node:fs/promises"; import { app } from "./app.js"; import { env, requireServerSecrets } from "./config.js"; import { pool } from "./db.js";
+requireServerSecrets(); await mkdir(env.UPLOAD_DIR,{recursive:true}); const server=app.listen(env.PORT,"0.0.0.0",()=>console.log(`Ask Prana backend listening on :${env.PORT}`)); const stop=async()=>{server.close();await pool.end();}; process.on("SIGINT",stop);process.on("SIGTERM",stop);

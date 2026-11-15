@@ -1,7 +1,7 @@
 import { Platform } from "react-native";
 import * as Speech from "expo-speech";
 import { createAudioPlayer, setAudioModeAsync } from "expo-audio";
-import {
+import { getSupabaseAnonKey,
   ensureValidSession,
   getSupabasePublicConfig,
 } from "./supabase";
@@ -378,7 +378,7 @@ async function fetchCloudSpeechAudio(
   const accessToken = auth?.access_token;
   if (!accessToken || controller.signal.aborted) return controller.signal.aborted ? "interrupted" : null;
   const config = getSupabasePublicConfig();
-  const anonKey = (process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? "").trim();
+  const anonKey = getSupabaseAnonKey();
   if (!config.url || !anonKey) return null;
   ttsAbortControllers.add(controller);
   try {
