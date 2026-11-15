@@ -9,7 +9,7 @@
  * The OpenAI key never reaches the browser: `ask-prana-voice-session` checks
  * the Ask Prana login and returns a short-lived client secret.
  */
-import { ensureValidSession, getSupabasePublicConfig } from "./supabase";
+import { getSupabaseAnonKey, ensureValidSession, getSupabasePublicConfig } from "./supabase";
 
 export const ASK_PRANA_REALTIME_CALLS_URL = "https://api.openai.com/v1/realtime/calls";
 
@@ -82,7 +82,7 @@ function defaultDeps(): RealtimeVoiceDeps {
     },
     getAccessToken: async () => (await ensureValidSession())?.access_token ?? null,
     supabaseUrl: () => getSupabasePublicConfig().url,
-    anonKey: () => (process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? "").trim(),
+    anonKey: () => getSupabaseAnonKey(),
   };
 }
 

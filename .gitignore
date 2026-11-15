@@ -1,6 +1,10 @@
 node_modules
 dist
 .env.local
+backend/.env
+backend/uploads/
+backend/dist/
+*.sql.gz
 supabase/.env
 supabase/.temp
 supabase/.branches

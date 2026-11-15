@@ -1,0 +1,12 @@
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import type { NextFunction, Request, Response } from "express";
+import { pool } from "./db.js";
+export type Account = { id: string; phone: string | null; pendingPhone?: string | null; email: string | null; name: string; state: string; district: string; language: string };
+export const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+export const token = () => `ap_${randomBytes(32).toString("base64url")}`;
+export const canonicalPhone = (raw: string) => { const d = raw.replace(/\D/g, ""); if (/^[6-9]\d{9}$/.test(d)) return `+91${d}`; if (/^91[6-9]\d{9}$/.test(d)) return `+${d}`; if (/^0[6-9]\d{9}$/.test(d)) return `+91${d.slice(1)}`; return /^\+[1-9]\d{7,14}$/.test(raw.trim()) ? raw.trim() : null; };
+export const normalizeEmail = (value: string) => value.trim().toLowerCase();
+export async function createSession(user: Account) { const value = token(); const expiresAt = new Date(Date.now() + 30 * 86400_000); await pool.execute("INSERT INTO user_sessions (id,user_id,token_hash,expires_at) VALUES (?,?,?,?)", [randomUUID(), user.id, hash(value), expiresAt]); return { token: value, expiresAt: expiresAt.toISOString(), user }; }
+export type AuthedRequest = Request & { account?: Account; requestId?: string };
+export async function requireAuth(req: AuthedRequest, res: Response, next: NextFunction) { try { const raw = req.header("authorization")?.replace(/^Bearer\s+/i, "").trim(); if (!raw?.startsWith("ap_")) return res.status(401).json({ error: "Your session has expired. Please log in again.", code: "SESSION_INVALID" }); const [rows] = await pool.execute<any[]>("SELECT u.id,u.phone,u.pending_phone AS pendingPhone,u.email,u.name,u.state,u.district,u.language FROM user_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>UTC_TIMESTAMP(3) AND u.is_active=1 AND u.is_deleted=0", [hash(raw)]); if (!rows[0]) return res.status(401).json({ error: "Your session has expired. Please log in again.", code: "SESSION_INVALID" }); req.account = rows[0]; await pool.execute("UPDATE user_sessions SET last_seen_at=UTC_TIMESTAMP(3) WHERE token_hash=?", [hash(raw)]); next(); } catch (e) { next(e); } }
+export function safeEqual(a: string, b: string) { const aa = Buffer.from(a), bb = Buffer.from(b); return aa.length === bb.length && timingSafeEqual(aa, bb); }

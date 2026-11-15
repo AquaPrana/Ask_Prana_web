@@ -1,8 +1,13 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { Session, User } from "@supabase/supabase-js";
 
-const SESSION_KEY = "ask-prana-app-session";
-const REGISTRATION_KEY = "ask-prana-registration";
+import { backendMode } from "../lib/backend-mode";
+
+// The Node backend keeps its own login, so a Supabase login is never sent to
+// Node (and the reverse). Supabase mode keeps the original names.
+const KEY_SUFFIX = backendMode() === "node" ? ":node" : "";
+const SESSION_KEY = `ask-prana-app-session${KEY_SUFFIX}`;
+const REGISTRATION_KEY = `ask-prana-registration${KEY_SUFFIX}`;
 
 export type AppAccount = {
   id: string;
