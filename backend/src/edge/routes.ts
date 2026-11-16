@@ -14,7 +14,7 @@ import { handler as askPranaTts } from "../functions/ask-prana-tts/index.js";
 import { handler as askPranaVoiceSession } from "../functions/ask-prana-voice-session/index.js";
 import { handler as googleAuth } from "../functions/google-auth/index.js";
 import { handler as msg91Auth } from "../functions/msg91-auth/index.js";
-import { requestContext } from "./request-context.js";
+import { CLIENT_IP_HEADER, requestContext } from "./request-context.js";
 import { readStoredObject, signedObjectPath, storedObjectExists, verifyStorageToken } from "./supabase-mysql.js";
 
 type FetchHandler = (req: Request) => Promise<Response>;
@@ -52,6 +52,10 @@ async function runFunction(handler: FetchHandler, req: ExpressRequest, res: Expr
     if (value === undefined || HOP_BY_HOP.has(name)) continue;
     headers.set(name, Array.isArray(value) ? value.join(", ") : value);
   }
+  // The caller's address as seen by Express ("trust proxy" handles Render's
+  // proxy). Always overwritten here, so a client cannot fake it; functions use
+  // it for per-address rate limits.
+  headers.set(CLIENT_IP_HEADER, req.ip || req.socket.remoteAddress || "unknown");
   const hasBody = req.method !== "GET" && req.method !== "HEAD" && Buffer.isBuffer(req.body) && req.body.length > 0;
   const request = new Request(`${requestBaseUrl(req)}${req.originalUrl}`, {
     method: req.method,

@@ -3,6 +3,42 @@
 // files = server disk, see src/edge). Keep in step with the original.
 import { Deno } from "../../edge/deno-env.js";
 import { createClient, type SupabaseClient } from "../../edge/supabase-mysql.js";
+import { CLIENT_IP_HEADER } from "../../edge/request-context.js";
+import { consumeRateLimit } from "../../rate-limit.js";
+
+// ---- Rate limits (Node only) -------------------------------------------------
+// Each OTP costs money (MSG91) and could be used to flood someone's phone, and
+// codes must not be guessable. Limits use 15-minute windows in MySQL
+// (request_rate_limits), so they hold across restarts.
+const OTP_LIMIT_WINDOW_MS = 15 * 60_000;
+const OTP_SENDS_PER_IDENTITY = 5; // codes sent to one phone/email
+const OTP_SENDS_PER_IP = 20; // codes requested from one internet address
+const OTP_CHECKS_PER_CODE = 8; // tries for one code (reqId)
+const OTP_CHECKS_PER_IP = 40; // code checks from one internet address
+
+function clientIp(req: Request): string {
+  return (req.headers.get(CLIENT_IP_HEADER) ?? "").trim() || "unknown";
+}
+
+/** True while under the limit. A limiter failure is logged and lets the request through. */
+async function underLimit(scope: string, subject: string, max: number): Promise<boolean> {
+  try {
+    return await consumeRateLimit(scope, subject, max, OTP_LIMIT_WINDOW_MS);
+  } catch (error) {
+    console.warn(`[msg91-auth] rate limit check failed (${scope}):`, error instanceof Error ? error.message : error);
+    return true;
+  }
+}
+
+/** Counts one OTP code check for this reqId and address; false once over either limit. */
+async function otpCheckAllowed(req: Request, reqId: string): Promise<boolean> {
+  const perCode = await underLimit("otp-check", reqId, OTP_CHECKS_PER_CODE);
+  const perIp = await underLimit("otp-check-ip", clientIp(req), OTP_CHECKS_PER_IP);
+  return perCode && perIp;
+}
+
+const TOO_MANY_CODE_REQUESTS = "Too many code requests. Please wait 15 minutes and try again.";
+const TOO_MANY_CODE_TRIES = "Too many attempts. Please wait 15 minutes, then request a new code.";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -675,7 +711,12 @@ export const handler = (async (req: Request): Promise<Response> => {
       const email = typeof input?.email === "string" ? canonicalEmail(input.email) : null;
       const identifier = phone ? phone.slice(1) : email;
       if (!identifier) return response({ success: false, error: "Please enter a valid email or mobile number." }, 400);
-      const retryId = typeof input?.reqId === "string" ? input.reqId.trim() : "";
+      const sendsOkForIp = await underLimit("otp-send-ip", clientIp(req), OTP_SENDS_PER_IP);
+      const sendsOkForIdentity = await underLimit("otp-send", identifier, OTP_SENDS_PER_IDENTITY);
+      if (!sendsOkForIp || !sendsOkForIdentity) {
+        return response({ success: false, error: TOO_MANY_CODE_REQUESTS, code: "rate_limited" }, 429);
+      }
+      const retryId =typeof input?.reqId === "string" ? input.reqId.trim() : "";
       // A resend may reuse a reqId only with the binding this server issued for
       // that same reqId and the same phone/email. Otherwise anyone could attach
       // their own reqId to another person's number. Without a matching binding
@@ -772,6 +813,10 @@ export const handler = (async (req: Request): Promise<Response> => {
         }, 400);
       }
       if (addsPhone || addsEmail) {
+        const proofReqId = typeof input?.reqId === "string" ? input.reqId.trim() : "";
+        if (proofReqId && !await otpCheckAllowed(req, proofReqId)) {
+          return response({ success: false, error: TOO_MANY_CODE_TRIES, code: "rate_limited" }, 429);
+        }
         const proven = await verifyChangeProof(input ?? {});
         const matches = addsPhone
           ? Boolean(proven?.phone && proven.phone === nextPhone)
@@ -823,6 +868,10 @@ export const handler = (async (req: Request): Promise<Response> => {
           success: false,
           error: isPhone ? "Please enter a valid mobile number." : "Please enter a valid email address.",
         }, 400);
+      }
+      const changeReqId = typeof input?.reqId === "string" ? input.reqId.trim() : "";
+      if (changeReqId && !await otpCheckAllowed(req, changeReqId)) {
+        return response({ success: false, error: TOO_MANY_CODE_TRIES, code: "rate_limited" }, 429);
       }
       const proven = await verifyChangeProof(input ?? {});
       const provenOk = isPhone ? proven?.phone === nextPhone : proven?.email === nextEmail;
@@ -979,6 +1028,9 @@ export const handler = (async (req: Request): Promise<Response> => {
     const accessToken = typeof input?.accessToken === "string" ? input.accessToken.trim() : "";
     let identity: VerifiedIdentity | null = null;
     if (/^[A-Za-z0-9_-]{8,128}$/.test(reqId) && /^\d{4,8}$/.test(otp)) {
+      if (!await otpCheckAllowed(req, reqId)) {
+        return response({ success: false, error: TOO_MANY_CODE_TRIES, code: "rate_limited" }, 429);
+      }
       const verified = await verifyOtpWithMsg91(reqId, otp);
       const recoverFromBind = verified.code === "already_verified" || verified.code === "verified_no_identifier";
       if (recoverFromBind) {
