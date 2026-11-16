@@ -47,6 +47,16 @@ function serviceSecret(): string {
   return (Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? Deno.env.get("SERVICE_ROLE_KEY") ?? "").trim();
 }
 
+/**
+ * Secret that signs registration tokens. It must match msg91-auth's secret,
+ * which verifies them. On Node SUPABASE_SERVICE_ROLE_KEY is only a public
+ * placeholder, so the server's REGISTRATION_SECRET (at least 32 chars) is used.
+ */
+function signingSecret(): string {
+  const secret = (Deno.env.get("REGISTRATION_SECRET") ?? "").trim();
+  return secret.length >= 32 ? secret : "";
+}
+
 function adminClient(): SupabaseClient | null {
   const supabaseUrl = Deno.env.get("SUPABASE_URL")?.trim() ?? "";
   const serviceKey = serviceSecret();
@@ -89,7 +99,7 @@ async function sha256Hex(value: string): Promise<string> {
 }
 
 async function hmacKey() {
-  const secret = await sha256Hex(serviceSecret());
+  const secret = await sha256Hex(signingSecret());
   return crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(secret),
@@ -203,7 +213,7 @@ export const handler = (async (req: Request): Promise<Response> => {
   if (action !== "sign-in") return response({ success: false, error: "Invalid sign-in request." }, 400);
 
   const admin = adminClient();
-  if (!admin || !serviceSecret()) return response({ success: false, error: "Authentication service is unavailable." }, 503);
+  if (!admin || !signingSecret()) return response({ success: false, error: "Authentication service is unavailable." }, 503);
 
   const idToken = typeof input?.idToken === "string" ? input.idToken.trim() : "";
   const nonce = typeof input?.nonce === "string" ? input.nonce.trim() : "";

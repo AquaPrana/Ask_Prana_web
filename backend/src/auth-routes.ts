@@ -40,7 +40,14 @@ export function mountAuth(app: Express) {
     if (action === "send-otp" || action === "retry-otp") {
       const id = identity(req.body); if (!id) return res.status(400).json({ success: false, error: "Please enter a valid email or mobile number." });
       if (!await consumeRateLimit("otp-send", identityValue(id), 5, 15 * 60_000)) return res.status(429).json({ success: false, error: "Please wait before requesting another code." });
-      const retry = typeof req.body?.reqId === "string" && /^[A-Za-z0-9_-]{8,128}$/.test(req.body.reqId);
+      // A resend may reuse a reqId only if this server already issued it for the
+      // same phone/email. Otherwise a fresh code is sent to this identity, so a
+      // reqId can never be re-bound to someone else's number.
+      let retry = typeof req.body?.reqId === "string" && /^[A-Za-z0-9_-]{8,128}$/.test(req.body.reqId);
+      if (retry) {
+        const [owned] = await pool.execute<any[]>("SELECT 1 FROM auth_challenges WHERE provider_request_id=? AND identity_value=? AND consumed_at IS NULL AND expires_at>UTC_TIMESTAMP(3) LIMIT 1", [String(req.body.reqId), identityValue(id)]);
+        retry = owned.length > 0;
+      }
       // MSG91 Widget accepts either a country-code-prefixed mobile number or email identifier.
       const identifier = id.phone ? id.phone.slice(1) : id.email!;
       const body: Record<string, string> = retry ? { reqId: String(req.body.reqId) } : { identifier };
