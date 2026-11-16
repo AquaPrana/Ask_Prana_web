@@ -76,6 +76,8 @@ function GoogleMark() {
   );
 }
 
+// Not shown yet: the Apple button is hidden until Sign in with Apple is built.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function AppleMark() {
   return (
     <Svg width={18} height={18} viewBox="0 0 24 24">
@@ -288,10 +290,9 @@ export default function PhoneLoginScreen() {
               <Text style={styles.providerText}>{googleBusy ? "Opening Google..." : "Continue with Google"}</Text>
             </Pressable>
             {googleNotice ? <Text style={styles.googleNotice}>{googleNotice}</Text> : null}
-            <Pressable style={({ pressed }) => [styles.providerButton, pressed && styles.pressed]} accessibilityRole="button">
-              <View style={styles.providerIcon}><AppleMark /></View>
-              <Text style={styles.providerText}>Continue with Apple</Text>
-            </Pressable>
+            {/* "Continue with Apple" is hidden until Sign in with Apple is built
+                (needs an Apple Developer Services ID and a backend check of
+                Apple's token). AppleMark above is kept for that button. */}
             <Pressable
               onPress={() => {
                 setErrorMessage(null);
