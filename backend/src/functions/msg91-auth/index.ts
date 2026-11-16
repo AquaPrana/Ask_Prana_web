@@ -64,12 +64,16 @@ function adminClient(): SupabaseClient | null {
   });
 }
 
+/**
+ * Secret that signs OTP bindings and registration tokens. On Node the
+ * SUPABASE_SERVICE_ROLE_KEY lookup only returns a fixed public placeholder, so
+ * signing must use the server's own REGISTRATION_SECRET (at least 32 chars).
+ * An empty result makes the handler refuse requests instead of signing with a
+ * guessable key.
+ */
 function serviceSecret(): string {
-  return (
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ??
-    Deno.env.get("SERVICE_ROLE_KEY") ??
-    ""
-  ).trim();
+  const secret = (Deno.env.get("REGISTRATION_SECRET") ?? "").trim();
+  return secret.length >= 32 ? secret : "";
 }
 
 /** Same rules as public.ask_prana_phone_canonical. */
@@ -607,6 +611,33 @@ async function bearerUser(admin: SupabaseClient, req: Request): Promise<UserRow 
   return user as UserRow;
 }
 
+/**
+ * Checks an OTP sent to a new phone/email during a profile change and returns
+ * the phone/email it proves, or null. The identity always comes from the
+ * server-signed otpBind (issued by send-otp for that exact reqId), never from
+ * the request, and MSG91 must accept the code.
+ */
+async function verifyChangeProof(input: { reqId?: unknown; otp?: unknown; otpBind?: unknown }): Promise<VerifiedIdentity | null> {
+  const reqId = typeof input.reqId === "string" ? input.reqId.trim() : "";
+  const otp = typeof input.otp === "string" ? input.otp.trim() : "";
+  const otpBind = typeof input.otpBind === "string" ? input.otpBind.trim() : "";
+  if (!/^[A-Za-z0-9_-]{8,128}$/.test(reqId) || !/^\d{4,8}$/.test(otp) || !otpBind) return null;
+  const bound = await readOtpBind(otpBind);
+  if (!bound || bound.reqId !== reqId) return null;
+  const verified = await verifyOtpWithMsg91(reqId, otp);
+  if (verified.identity) {
+    // MSG91 named who it verified: it must be the bound phone/email.
+    const sameIdentity =
+      (bound.phone && verified.identity.phone === bound.phone) ||
+      (bound.email && verified.identity.email === bound.email);
+    return sameIdentity ? { phone: bound.phone, email: bound.email } : null;
+  }
+  if (verified.code === "already_verified" || verified.code === "verified_no_identifier") {
+    return { phone: bound.phone, email: bound.email };
+  }
+  return null;
+}
+
 export const handler = (async (req: Request): Promise<Response> => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return response({ success: false, error: "Method not allowed." }, 405);
@@ -645,7 +676,18 @@ export const handler = (async (req: Request): Promise<Response> => {
       const identifier = phone ? phone.slice(1) : email;
       if (!identifier) return response({ success: false, error: "Please enter a valid email or mobile number." }, 400);
       const retryId = typeof input?.reqId === "string" ? input.reqId.trim() : "";
-      if (/^[A-Za-z0-9_-]{8,128}$/.test(retryId)) {
+      // A resend may reuse a reqId only with the binding this server issued for
+      // that same reqId and the same phone/email. Otherwise anyone could attach
+      // their own reqId to another person's number. Without a matching binding
+      // a fresh code is sent below, which is bound to this identity only.
+      const retryBind = typeof input?.otpBind === "string" ? await readOtpBind(input.otpBind.trim()) : null;
+      const retryAllowed = Boolean(
+        retryBind &&
+        retryBind.reqId === retryId &&
+        retryBind.phone === phone &&
+        retryBind.email === email,
+      );
+      if (retryAllowed && /^[A-Za-z0-9_-]{8,128}$/.test(retryId)) {
         const retried = await msg91Widget("/retryOtp", { reqId: retryId });
         if (isMsg91Success(retried)) {
           const otpBind = await signOtpBind(retryId, { phone, email });
@@ -714,6 +756,37 @@ export const handler = (async (req: Request): Promise<Response> => {
 
       const phoneChanged = canonicalPhone(user.phone) !== nextPhone && user.phone !== nextPhone;
       const emailChanged = canonicalEmail(user.email) !== nextEmail && (user.email ?? null) !== nextEmail;
+
+      // Adding or changing a phone/email links it to this account, so the user
+      // must prove they own it with an OTP sent to that new phone/email
+      // (send-otp first, then pass reqId + otp + otpBind here). Without this,
+      // someone could claim another person's number or email before they sign
+      // up and later receive their logins.
+      const addsPhone = Boolean(nextPhone && phoneChanged);
+      const addsEmail = Boolean(nextEmail && emailChanged);
+      if (addsPhone && addsEmail) {
+        return response({
+          success: false,
+          error: "Change your phone number and email one at a time, each with its own code.",
+          code: "verification_required",
+        }, 400);
+      }
+      if (addsPhone || addsEmail) {
+        const proven = await verifyChangeProof(input ?? {});
+        const matches = addsPhone
+          ? Boolean(proven?.phone && proven.phone === nextPhone)
+          : Boolean(proven?.email && proven.email === nextEmail);
+        if (!matches) {
+          return response({
+            success: false,
+            error: addsPhone
+              ? "Please verify your new mobile number with the code we send to it."
+              : "Please verify your new email address with the code we send to it.",
+            code: "verification_required",
+          }, 403);
+        }
+      }
+
       const phoneTaken = nextPhone && phoneChanged
         ? (await findUsers(admin, { phone: nextPhone, email: null })).some((row) => row.id !== user.id)
         : false;
@@ -734,6 +807,49 @@ export const handler = (async (req: Request): Promise<Response> => {
       if (conflict) return response({ success: false, error: conflict }, 409);
       if (error || !data) return response({ success: false, error: "Unable to save your profile. Please try again." }, 500);
       return response({ success: true, user: publicUser(data as UserRow) });
+    }
+
+    // Adds or changes the signed-in user's phone ("link-phone") or email
+    // ("link-email") after the user proves they own it: send-otp to the new
+    // phone/email first, then pass reqId + otp + otpBind here.
+    if (action === "link-phone" || action === "link-email") {
+      const user = await bearerUser(admin, req);
+      if (!user) return response({ success: false, error: "Your session has expired. Please log in again." }, 401);
+      const isPhone = action === "link-phone";
+      const nextPhone = isPhone && typeof input?.phone === "string" ? canonicalPhone(input.phone) : null;
+      const nextEmail = !isPhone && typeof input?.email === "string" ? canonicalEmail(input.email) : null;
+      if (isPhone ? !nextPhone : !nextEmail) {
+        return response({
+          success: false,
+          error: isPhone ? "Please enter a valid mobile number." : "Please enter a valid email address.",
+        }, 400);
+      }
+      const proven = await verifyChangeProof(input ?? {});
+      const provenOk = isPhone ? proven?.phone === nextPhone : proven?.email === nextEmail;
+      if (!provenOk) {
+        return response({
+          success: false,
+          error: "The code is wrong or has expired. Please request a new code.",
+          code: "otp_rejected",
+        }, 401);
+      }
+      const taken = (await findUsers(admin, { phone: nextPhone, email: nextEmail }))
+        .some((row) => row.id !== user.id);
+      if (taken) return response({ success: false, error: duplicateMessage(isPhone, !isPhone) }, 409);
+      const { data, error } = await admin
+        .from("users")
+        .update(isPhone ? { phone: nextPhone } : { email: nextEmail })
+        .eq("id", user.id)
+        .select(USER_SELECT)
+        .maybeSingle();
+      const conflict = constraintMessage(error);
+      if (conflict) return response({ success: false, error: conflict }, 409);
+      if (error || !data) return response({ success: false, error: "Unable to save the change. Please try again." }, 500);
+      return response({
+        success: true,
+        user: publicUser(data as UserRow),
+        ...(isPhone ? { phone_confirmed: true } : { email_confirmed: true }),
+      });
     }
 
     if (action === "update-avatar") {

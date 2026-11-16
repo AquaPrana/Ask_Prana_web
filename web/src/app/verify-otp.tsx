@@ -18,6 +18,7 @@ import {
   sendOTP,
   verifyOTP,
 } from "../services/auth";
+import { confirmIdentityChange, requestIdentityChangeCode } from "../services/identity-change";
 import { saveFarmerProfile } from "../services/local-profile";
 import { useProfile } from "../context/profile-context";
 import { useRouter, useLocalSearchParams } from "expo-router";
@@ -76,9 +77,18 @@ export default function VerifyOtpScreen() {
     phone?: string;
     identifier?: string;
     authMethod?: "email" | "phone";
+    // mode=change: a signed-in user is adding/changing their phone or email
+    // (kind) to `value`; Edit Profile already sent the code.
+    mode?: string;
+    kind?: string;
+    value?: string;
   }>();
-  const phone =
-    params.authMethod === "phone" && typeof params.identifier === "string"
+  const changeMode = params.mode === "change";
+  const changeKind: "phone" | "email" = params.kind === "email" ? "email" : "phone";
+  const changeValue = typeof params.value === "string" ? params.value : "";
+  const phone = changeMode
+    ? changeValue
+    : params.authMethod === "phone" && typeof params.identifier === "string"
       ? params.identifier
       : params.phone;
   const [otp, setOtp] = useState("");
@@ -95,9 +105,9 @@ export default function VerifyOtpScreen() {
 
   const isOtpValid = otp.length === 6;
   const isResendDisabled = resendSeconds > 0 || isResending;
-  const phoneDisplay = formatPhoneDisplay(
-    typeof phone === "string" ? phone : undefined,
-  );
+  const phoneDisplay = changeMode && changeKind === "email"
+    ? changeValue || "your email address"
+    : formatPhoneDisplay(typeof phone === "string" ? phone : undefined);
 
   const horizontalPadding = 20;
   const otpGap = 8;
@@ -164,6 +174,20 @@ export default function VerifyOtpScreen() {
 
     setIsResending(true);
     try {
+      if (changeMode) {
+        const { error: changeError } = await requestIdentityChangeCode(changeKind, phoneNumber);
+        if (changeError) {
+          alert(changeError);
+          return;
+        }
+        otpSentAtRef.current = Date.now();
+        setOtp("");
+        lastAutoVerifiedRef.current = "";
+        setResendSeconds(30);
+        alert("Code resent.");
+        requestAnimationFrame(() => otpInputRef.current?.focus());
+        return;
+      }
       const { error } = await sendOTP(phoneNumber);
       if (error) {
         alert(
@@ -199,6 +223,24 @@ export default function VerifyOtpScreen() {
     setIsVerifying(true);
 
     try {
+      if (changeMode) {
+        const { user: changed, error: changeError } = await confirmIdentityChange(changeKind, changeValue, otp);
+        if (changeError || !changed) {
+          alert(changeError ?? "Unable to verify the code. Please try again.");
+          return;
+        }
+        await applyProfileUpdate({
+          name: changed.name,
+          state: changed.state ?? "",
+          district: changed.district ?? "",
+          language: changed.language ?? "",
+          phone: changed.phone ?? "",
+        });
+        alert(changeKind === "phone" ? "Mobile number updated." : "Email updated.");
+        if (router.canGoBack()) router.back();
+        else router.replace("/edit-profile" as never);
+        return;
+      }
       const { data, error } = await verifyOTP(phone as string, otp);
 
       if (error) {
@@ -257,8 +299,9 @@ export default function VerifyOtpScreen() {
     // Login opens this screen with replace, so there is often
     // no history entry; go to login to change the number.
     if (router.canGoBack()) router.back();
-    else router.replace("/phone-login" as never);
+    else router.replace((changeMode ? "/edit-profile" : "/phone-login") as never);
   };
+  const changeTarget = changeKind === "email" ? "email address" : "mobile number";
 
   const form = (
     <>
@@ -266,7 +309,11 @@ export default function VerifyOtpScreen() {
       <Text style={styles.heading} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>
         Enter 6-digit OTP
       </Text>
-      <Text style={styles.sentTo}>Enter the code sent to your mobile number.</Text>
+      <Text style={styles.sentTo}>
+        {changeMode
+          ? `Enter the code sent to your new ${changeTarget} to confirm the change.`
+          : "Enter the code sent to your mobile number."}
+      </Text>
       <View style={styles.phoneLine}>
         <Text style={styles.phoneText}>{phoneDisplay}</Text>
         <Pressable onPress={goBack} accessibilityRole="button" accessibilityLabel="Change mobile number" hitSlop={8}>
@@ -362,7 +409,7 @@ export default function VerifyOtpScreen() {
 
       <Pressable onPress={goBack} style={styles.backLinkWrap} accessibilityRole="button">
         <Feather name="arrow-left" size={13} color={pc.fg("#217C73")} />
-        <Text style={styles.backLink}>Back to mobile number</Text>
+        <Text style={styles.backLink}>{changeMode ? "Back to profile" : "Back to mobile number"}</Text>
       </Pressable>
     </>
   );

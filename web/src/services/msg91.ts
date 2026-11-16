@@ -44,21 +44,28 @@ export async function sendMsg91Otp(
   phone: string,
   _platform: "web" | "mobile",
   reqId?: string,
-): Promise<{ reqId: string }> {
+  otpBind?: string,
+): Promise<{ reqId: string; otpBind?: string }> {
   if (!toMsg91Mobile(phone)) throw new Error("Please enter a valid 10-digit mobile number.");
+  // The server reuses reqId for a resend only with the otpBind it issued for
+  // this same phone; otherwise it sends a fresh code.
   return await requestAuth(
-    { action: "send-otp", phone, reqId },
+    { action: "send-otp", phone, reqId, otpBind },
     "MSG91 could not send the code.",
   );
 }
 
-export async function sendMsg91EmailOtp(email: string, reqId?: string): Promise<{ reqId: string; otpBind?: string }> {
+export async function sendMsg91EmailOtp(
+  email: string,
+  reqId?: string,
+  otpBind?: string,
+): Promise<{ reqId: string; otpBind?: string }> {
   const identifier = email.trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identifier)) {
     throw new Error("Please enter a valid email address.");
   }
   return await requestAuth(
-    { action: "send-otp", email: identifier, reqId },
+    { action: "send-otp", email: identifier, reqId, otpBind },
     "MSG91 could not send the code.",
   );
 }

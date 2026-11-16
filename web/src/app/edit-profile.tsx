@@ -43,6 +43,7 @@ import {
   resendEmailChangeVerification,
   updateCurrentUserProfile,
 } from "../services/profile";
+import { requestIdentityChangeCode } from "../services/identity-change";
 import { pc } from "../constants/prana-theme-mode";
 
 const INDIA_STATE_NAMES = INDIA_STATES.map((item) => item.name);
@@ -320,10 +321,22 @@ export default function EditProfileScreen() {
         return;
       }
       const appSession = await loadAppSession();
+      // A new mobile number or email is linked only after a code sent to it is
+      // verified (the server refuses it otherwise). Save the other details now
+      // with the current phone/email, then open the code screen.
+      const lastTen = (value: string) => value.replace(/\D/g, "").slice(-10);
+      const savedPhone = appSession?.user.phone ?? "";
+      const savedEmail = normalizeEmail(appSession?.user.email ?? "");
+      const changePhone = Boolean(appSession && phone.trim() && lastTen(phone) !== lastTen(savedPhone));
+      const changeEmail = Boolean(appSession && nextEmail && nextEmail !== savedEmail);
+      if (changePhone && changeEmail) {
+        setSaveError("Please change your mobile number and email one at a time.");
+        return;
+      }
       const { error } = await updateCurrentUserProfile({
         name: name.trim(),
-        phone: phone.trim(),
-        email: appSession ? nextEmail : undefined,
+        phone: changePhone ? savedPhone : phone.trim(),
+        email: appSession ? (changeEmail ? undefined : nextEmail) : undefined,
         state: state.trim(),
         district: district.trim(),
         language: language.trim() || "English",
@@ -351,6 +364,18 @@ export default function EditProfileScreen() {
         if (savedProfile.email) setEmail(savedProfile.email);
         setAvatarUrl(savedProfile.avatarUrl ?? null);
         setAvatarUpdatedAt(savedProfile.avatarUpdatedAt ?? null);
+      }
+
+      if (changePhone || changeEmail) {
+        const kind = changePhone ? "phone" : "email";
+        const value = changePhone ? phone.trim() : nextEmail;
+        const sent = await requestIdentityChangeCode(kind, value);
+        if (sent.error) {
+          setSaveError(`Your other details were saved. ${sent.error}`);
+          return;
+        }
+        router.push({ pathname: "/verify-otp", params: { mode: "change", kind, value } } as never);
+        return;
       }
 
       // Unchanged email (ignoring case/whitespace) sends no Auth request.
