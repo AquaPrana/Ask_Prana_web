@@ -738,6 +738,9 @@ export const handler = (async (req: Request): Promise<Response> => {
       const body = await msg91Widget("/sendOtp", { identifier });
       if (!isMsg91Success(body)) {
         const failure = otpFailure(body, "MSG91 could not send the code.");
+        // Log MSG91's own reply (type:code:status + message; no keys or OTPs)
+        // so host logs show why a send was refused.
+        console.warn("[msg91-auth] sendOtp rejected", msg91Meta(body), msg91Message(body).slice(0, 120));
         const status = failure.code === "missing_authkey" ? 503 : failure.code === "ip_blocked" ? 403 : 400;
         return response({ success: false, error: failure.error, code: failure.code }, status);
       }
