@@ -481,7 +481,9 @@ class StorageBucket {
       const { key } = safeObjectPath(this.bucket, objectPath);
       if (!await storedObjectExists(this.bucket, key)) return { data: null, error: { ...storageError("Object not found"), statusCode: "404" } };
       const download = options?.download ? `&download=${options.download === true ? "" : encodeURIComponent(options.download)}` : "";
-      return { data: { signedUrl: `${publicBaseUrl()}/storage/v1${signedObjectPath(this.bucket, key, expiresIn)}${download}` }, error: null };
+      // Links to private files last at most an hour; the app signs a fresh one when a file is reopened.
+      const seconds = Math.min(Math.max(Math.floor(Number(expiresIn) || 3600), 1), 3600);
+      return { data: { signedUrl: `${publicBaseUrl()}/storage/v1${signedObjectPath(this.bucket, key, seconds)}${download}` }, error: null };
     } catch (error) {
       return { data: null, error: storageError(error instanceof Error ? error.message : "Could not sign the file.") };
     }

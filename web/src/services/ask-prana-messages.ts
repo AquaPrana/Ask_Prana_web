@@ -9,6 +9,7 @@ import {
 } from "../lib/ask-prana-display-translation";
 import { getAskPranaFileUrl, getAskPranaFileUrls } from "../lib/ask-prana-files";
 import type { AskPranaSpeechLanguageCode } from "../lib/ask-prana-language";
+import { nodeApiUrl } from "../lib/backend-mode";
 import { supabase } from "../lib/supabase";
 import { requireAskPranaAuth } from "./ask-prana";
 
@@ -120,7 +121,9 @@ async function loadStoredTranslations(
 setAskPranaStoredTranslationLoader(loadStoredTranslations);
 
 function getPublicFileUrl(filePath: string | null | undefined) {
-  if (!filePath) {
+  // Node backend: chat files are private (signed, owner-only links), so there is
+  // no public link to fall back to.
+  if (!filePath || nodeApiUrl()) {
     return null;
   }
 

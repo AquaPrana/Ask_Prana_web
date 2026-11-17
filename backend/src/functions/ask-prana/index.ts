@@ -1348,7 +1348,52 @@ function storedFileLabel(value: unknown) {
   return label ? label.slice(0, 180) : null;
 }
 
-function storedFilePath(value: unknown) {
+/**
+ * Document uploads the app supports, keyed by file extension. The stored type is
+ * taken from here (not from the browser), and the file's first bytes must match.
+ */
+const DOCUMENT_UPLOAD_TYPES: Record<string, { mime: string; check: (bytes: Uint8Array) => boolean }> = {
+  pdf: { mime: "application/pdf", check: (b) => startsWithBytes(b, [0x25, 0x50, 0x44, 0x46]) }, // %PDF
+  docx: { mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", check: (b) => startsWithBytes(b, [0x50, 0x4b]) }, // ZIP
+  xlsx: { mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", check: (b) => startsWithBytes(b, [0x50, 0x4b]) }, // ZIP
+  xls: { mime: "application/vnd.ms-excel", check: (b) => startsWithBytes(b, [0xd0, 0xcf, 0x11, 0xe0]) }, // old Office
+  csv: { mime: "text/csv", check: looksLikePlainText },
+  txt: { mime: "text/plain", check: looksLikePlainText },
+};
+
+function startsWithBytes(bytes: Uint8Array, prefix: number[]): boolean {
+  return prefix.every((value, index) => bytes[index] === value);
+}
+
+/** Text files: no NUL bytes in the first 4 KB (binary or disguised files fail). */
+function looksLikePlainText(bytes: Uint8Array): boolean {
+  return !bytes.subarray(0, 4096).includes(0);
+}
+
+/** The safe stored type for an uploaded document, or null when it is not an allowed document. */
+function allowedDocumentType(fileName: string, bytes: Uint8Array): string | null {
+  const extension = fileName.toLowerCase().split(".").pop() ?? "";
+  const type = DOCUMENT_UPLOAD_TYPES[extension];
+  return type && type.check(bytes) ? type.mime : null;
+}
+
+/**
+ * True when a stored chat file belongs to this user. Every upload and generated
+ * document is written under images/<userId>/, documents/<userId>/ or
+ * audio/<userId>/, so the path itself proves ownership.
+ */
+function ownsChatFile(path: string, userId: string): boolean {
+  if (!userId || path.includes("..")) return false;
+  return ["images", "documents", "audio"].some((folder) => path.startsWith(`${folder}/${userId}/`));
+}
+
+/** A file path the client may save on its own message: valid, and the user's own file. */
+function storedFilePath(value: unknown, userId: string) {
+  const path = validStoredFilePath(value);
+  return path && ownsChatFile(path, userId) ? path : null;
+}
+
+function validStoredFilePath(value: unknown) {
   if (typeof value !== "string") return null;
   const path = value.trim();
   if (
@@ -1813,7 +1858,7 @@ async function handleConversations(
     const role = body.role === "assistant" ? "assistant" : "user";
     const content = typeof body.content === "string" ? body.content : "";
     const messageType = storedMessageType(body.messageType);
-    const filePath = storedFilePath(body.filePath);
+    const filePath = storedFilePath(body.filePath, userId);
     const fileName = storedFileLabel(body.fileName);
     const mimeType = storedFileLabel(body.mimeType);
     const createdAt = clientMessageCreatedAt(body.createdAt);
@@ -2341,6 +2386,8 @@ async function prepareAttachment(input: {
   supabase: SupabaseClient;
   apiKey: string;
   attachment: IncomingAttachment;
+  /** Logged-in user: only their own files may be read and sent to the AI. */
+  userId: string;
 }): Promise<PreparedAttachment> {
   const filePath =
     typeof input.attachment.filePath === "string"
@@ -2386,6 +2433,11 @@ async function prepareAttachment(input: {
 
   if (!filePath || isLocalDeviceUri(filePath)) {
     console.error("[ask-prana] invalid attachment path", { fileName });
+    return prepared;
+  }
+  // Never read another user's file, even if the client sends its path.
+  if (!ownsChatFile(filePath, input.userId)) {
+    console.warn("[ask-prana] attachment refused: not the user's file", { fileName });
     return prepared;
   }
 
@@ -2529,11 +2581,18 @@ async function handleUploadFile(
   }
   const requestedName = typeof body.fileName === "string" ? body.fileName.trim() : "";
   const safeName = (requestedName || `file-${Date.now()}`).replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 80);
-  const mimeType = folder === "images"
-    ? detectedImage!
-    : typeof body.mimeType === "string" && body.mimeType.trim()
-      ? body.mimeType.trim()
-      : "application/octet-stream";
+  let mimeType: string;
+  if (folder === "images") {
+    mimeType = detectedImage!;
+  } else {
+    // Documents: the type comes from a checked list, never from the browser, so
+    // an uploaded HTML/SVG/script can never be served as a web page.
+    const documentType = allowedDocumentType(safeName, bytes);
+    if (!documentType) {
+      return jsonResponse({ error: "Please choose a PDF, Word (DOCX), Excel (XLSX/XLS), CSV or TXT file." }, 400);
+    }
+    mimeType = documentType;
+  }
   const filePath = `${folder}/${userId}/${Date.now()}-${safeName}`;
   const uploadBuckets = ["ask-prana-files", "aquagpt-files"] as const;
   let storedBucket: (typeof uploadBuckets)[number] | null = null;
@@ -2838,6 +2897,7 @@ export const handler = (async (req: Request): Promise<Response> => {
           supabase,
           apiKey,
           attachment,
+          userId: authUser.id,
         }),
       );
     }

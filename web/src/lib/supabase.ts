@@ -547,7 +547,19 @@ async function authSafeFetch(
   input: RequestInfo | URL,
   init?: RequestInit,
 ): Promise<Response> {
-  const request = new Request(input, init);
+  let request = new Request(input, init);
+
+  // Node backend: chat files are private, so file-link requests must carry the
+  // Ask Prana login (the storage client would otherwise send only the anon key).
+  if (
+    nodeApiUrl() &&
+    requestUrl(input).includes("/storage/v1/object/sign/") &&
+    isAppSessionToken(currentSession?.access_token)
+  ) {
+    const headers = new Headers(request.headers);
+    headers.set("Authorization", `Bearer ${currentSession!.access_token}`);
+    request = new Request(request, { headers });
+  }
 
   let firstResponse: Response;
   try {

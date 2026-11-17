@@ -14,6 +14,9 @@ import { handler as askPranaTts } from "../functions/ask-prana-tts/index.js";
 import { handler as askPranaVoiceSession } from "../functions/ask-prana-voice-session/index.js";
 import { handler as googleAuth } from "../functions/google-auth/index.js";
 import { handler as msg91Auth } from "../functions/msg91-auth/index.js";
+import type { RowDataPacket } from "mysql2";
+import { pool } from "../db.js";
+import { hash } from "../security.js";
 import { CLIENT_IP_HEADER, requestContext } from "./request-context.js";
 import { readStoredObject, signedObjectPath, storedObjectExists, verifyStorageToken } from "./supabase-mysql.js";
 
@@ -29,8 +32,41 @@ const FUNCTIONS: Record<string, FetchHandler> = {
   "msg91-auth": msg91Auth,
 };
 
-/** Buckets the web app reads files from (both were public in Supabase). */
-const PUBLIC_BUCKETS = new Set(["ask-prana-files", "profile-photos", "aquagpt-files"]);
+/**
+ * File access rules:
+ * - Profile photos are shown as avatars, so they stay readable by their link.
+ * - Chat files (photos, PDFs, generated Excel/Word) are private: a download link
+ *   is only signed for the logged-in owner, and links last at most one hour.
+ */
+const PUBLIC_READ_BUCKETS = new Set(["profile-photos"]);
+const SIGNABLE_BUCKETS = new Set(["ask-prana-files", "profile-photos"]);
+const MAX_LINK_SECONDS = 60 * 60;
+
+function linkSeconds(requested: unknown): number {
+  const seconds = Math.floor(Number(requested) || MAX_LINK_SECONDS);
+  return Math.min(Math.max(seconds, 1), MAX_LINK_SECONDS);
+}
+
+/** The logged-in user for an "Authorization: Bearer ap_…" session, or null. */
+async function sessionUserId(req: ExpressRequest): Promise<string | null> {
+  const raw = (req.get("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
+  if (!raw.startsWith("ap_")) return null;
+  const [rows] = await pool.query<RowDataPacket[]>(
+    "SELECT s.user_id FROM user_sessions s JOIN users u ON u.id = s.user_id " +
+      "WHERE s.token_hash = ? AND s.revoked_at IS NULL AND s.expires_at > UTC_TIMESTAMP(3) AND u.is_deleted = 0 LIMIT 1",
+    [hash(raw)],
+  );
+  return rows[0]?.user_id ? String(rows[0].user_id) : null;
+}
+
+/** Chat files live under images/<userId>/ or documents/<userId>/; photos under <userId>/. */
+function ownsObject(bucket: string, key: string, userId: string): boolean {
+  if (bucket === "ask-prana-files") return key.startsWith(`images/${userId}/`) || key.startsWith(`documents/${userId}/`);
+  if (bucket === "profile-photos") return key.startsWith(`${userId}/`);
+  return false;
+}
+
+const signInRequired = { statusCode: "401", error: "Unauthorized", message: "Please log in to open this file." };
 
 /** Chat attachments arrive as base64 JSON (20 MB file ≈ 27 MB of text). */
 const MAX_BODY = "40mb";
@@ -96,12 +132,29 @@ function objectKey(raw: string): string {
   return raw.split("/").map((part) => decodeURIComponent(part)).join("/");
 }
 
+/**
+ * Types a browser may show inline. They cannot run scripts. Anything else
+ * (HTML, SVG, XML, JavaScript, unknown) is always sent as a download with a
+ * neutral type, so a stored file can never open as a web page on this API's
+ * address, including files saved before upload types were checked.
+ */
+const INLINE_SAFE_TYPES = new Set([
+  "image/jpeg", "image/png", "image/webp", "image/gif",
+  "application/pdf", "text/plain", "text/csv",
+]);
+
+function isInlineSafe(contentType: string): boolean {
+  const type = contentType.split(";")[0].trim().toLowerCase();
+  return INLINE_SAFE_TYPES.has(type) || (type.startsWith("audio/") && !type.includes("+xml"));
+}
+
 function sendObject(res: ExpressResponse, found: { bytes: Buffer; contentType: string }, key: string, download: unknown) {
-  res.setHeader("Content-Type", found.contentType);
+  const safe = isInlineSafe(found.contentType);
+  res.setHeader("Content-Type", safe ? found.contentType : "application/octet-stream");
   res.setHeader("Cache-Control", "private, max-age=3600");
   res.setHeader("X-Content-Type-Options", "nosniff");
-  if (typeof download === "string") {
-    const name = download || key.split("/").pop() || "file";
+  if (typeof download === "string" || !safe) {
+    const name = (typeof download === "string" && download) || key.split("/").pop() || "file";
     res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(name)}`);
   }
   res.end(found.bytes);
@@ -129,12 +182,15 @@ export function mountFunctionRoutes(app: Express) {
   // Many links at once: POST /storage/v1/object/sign/<bucket>  { expiresIn, paths }
   app.post(/^\/storage\/v1\/object\/sign\/([A-Za-z0-9_-]+)\/?$/, json, async (req, res) => {
     const bucket = String((req.params as Record<string, string>)[0]);
+    const userId = await sessionUserId(req);
+    if (!userId) return res.status(401).json(signInRequired);
     const paths: unknown[] = Array.isArray(req.body?.paths) ? req.body.paths : [];
-    const expiresIn = Number(req.body?.expiresIn) || 3600;
+    const expiresIn = linkSeconds(req.body?.expiresIn);
     const out = [];
     for (const item of paths.slice(0, 500)) {
       const key = String(item ?? "");
-      const exists = PUBLIC_BUCKETS.has(bucket) && key && await storedObjectExists(bucket, key);
+      // Someone else's file is reported as "not found", the same as a missing one.
+      const exists = SIGNABLE_BUCKETS.has(bucket) && key && ownsObject(bucket, key, userId) && await storedObjectExists(bucket, key);
       out.push(exists
         ? { path: key, signedURL: signedObjectPath(bucket, key, expiresIn), error: null }
         : { path: key, signedURL: null, error: "Object not found" });
@@ -147,10 +203,12 @@ export function mountFunctionRoutes(app: Express) {
     const params = req.params as Record<string, string>;
     const bucket = String(params[0]);
     const key = objectKey(String(params[1]));
-    if (!PUBLIC_BUCKETS.has(bucket) || !await storedObjectExists(bucket, key)) {
+    const userId = await sessionUserId(req);
+    if (!userId) return res.status(401).json(signInRequired);
+    if (!SIGNABLE_BUCKETS.has(bucket) || !ownsObject(bucket, key, userId) || !await storedObjectExists(bucket, key)) {
       return res.status(400).json({ statusCode: "404", error: "not_found", message: "Object not found" });
     }
-    res.json({ signedURL: signedObjectPath(bucket, key, Number(req.body?.expiresIn) || 3600) });
+    res.json({ signedURL: signedObjectPath(bucket, key, linkSeconds(req.body?.expiresIn)) });
   });
 
   // Open a signed link: GET /storage/v1/object/sign/<bucket>/<path>?token=…&download=
@@ -171,7 +229,7 @@ export function mountFunctionRoutes(app: Express) {
     const params = req.params as Record<string, string>;
     const bucket = String(params[0]);
     const key = objectKey(String(params[1]));
-    const found = PUBLIC_BUCKETS.has(bucket) ? await readStoredObject(bucket, key) : null;
+    const found = PUBLIC_READ_BUCKETS.has(bucket) ? await readStoredObject(bucket, key) : null;
     if (!found) return res.status(404).json({ statusCode: "404", error: "not_found", message: "Object not found" });
     sendObject(res, found, key, req.query.download);
   });
