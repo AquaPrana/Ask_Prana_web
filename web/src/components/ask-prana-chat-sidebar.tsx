@@ -560,7 +560,7 @@ export function AskPranaChatSidebar({
         <Text style={styles.sidebarLabel}>{t("askPrana.yourConversations")}</Text>
       </View>
       ) : (
-      <View style={styles.mobileTop}>
+      <View style={[styles.mobileTop, isMobileHistory && styles.mobileTopNoHeader]}>
         {isMobileHistory ? (
           <View style={styles.mobileHeading}>
             <Pressable
@@ -839,17 +839,21 @@ export function AskPranaChatSidebar({
           <View style={[styles.drawerRoot, drawerRootWeb]}>
             <Pressable style={styles.backdrop} onPress={onClose} />
             <View style={styles.mobileDrawer}>
-              <PranaHeader
-                variant="wave"
-                left={
-                  <PranaHeaderButton
-                    icon="message-square"
-                    onPress={onClose}
-                    label={t("askPrana.closeHistory")}
-                  />
-                }
-                right={<View style={{ width: 42 }} />}
-              />
+              {/* Phones: no wave header, so the list starts higher; the
+                  "← Chat" link at the top closes the history. Tablets keep it. */}
+              {isMobileHistory ? null : (
+                <PranaHeader
+                  variant="wave"
+                  left={
+                    <PranaHeaderButton
+                      icon="message-square"
+                      onPress={onClose}
+                      label={t("askPrana.closeHistory")}
+                    />
+                  }
+                  right={<View style={{ width: 42 }} />}
+                />
+              )}
               {content}
             </View>
             {floatingMenu}
@@ -1145,6 +1149,20 @@ const styles = StyleSheet.create({
     marginHorizontal: 9,
   },
   mobileTop: { paddingTop: 8 },
+  /**
+   * Phones have no wave header above the list: leave room under the status bar
+   * and paint a soft AskPrana teal band that fades into the page (light and dark).
+   * The negative margin stretches it edge to edge past mobileSidebar's padding.
+   */
+  mobileTopNoHeader: {
+    paddingTop: 24,
+    paddingBottom: 4,
+    marginHorizontal: -24,
+    paddingHorizontal: 24,
+    ...(Platform.OS === "web"
+      ? { backgroundImage: "linear-gradient(180deg, rgba(0,128,129,0.55) 0%, rgba(46,104,89,0.28) 55%, rgba(46,104,89,0) 100%)" }
+      : { backgroundColor: "rgba(0,128,129,0.18)" }),
+  } as object,
   mobileHeading: {
     width: "100%",
     flexDirection: "row",
